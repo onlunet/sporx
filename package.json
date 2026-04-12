@@ -1,0 +1,23 @@
+{
+  "name": "sporx-analytics-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run -ws build",
+    "dev": "npm run -w @sporx/public-web dev",
+    "dev:public": "npm run -w @sporx/public-web dev",
+    "dev:admin": "npm run -w @sporx/admin-web dev",
+    "dev:api": "npm run -w @sporx/api dev",
+    "dev:worker": "npm run -w @sporx/api worker:dev",
+    "test": "npm run -ws test",
+    "lint": "npm run -ws lint",
+    "typecheck": "npm run -ws typecheck"
+  },
+  "engines": {
+    "node": ">=20.11.1"
+  }
+}

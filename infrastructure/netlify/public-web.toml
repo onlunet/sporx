@@ -1,0 +1,8 @@
+﻿[build]
+  command = "npm ci --include-workspace-root --workspaces && npm run -w @sporx/public-web build"
+
+[build.environment]
+  NODE_VERSION = "20.11.1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

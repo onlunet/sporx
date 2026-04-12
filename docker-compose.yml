@@ -1,0 +1,121 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sporx
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        TARGET: api
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/sporx
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: change_me_access
+      JWT_REFRESH_SECRET: change_me_refresh
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 30d
+      FOOTBALL_DATA_API_KEY: ""
+      THE_SPORTS_DB_API_KEY: "3"
+      BALL_DONT_LIE_API_KEY: ""
+      API_FOOTBALL_API_KEY: ""
+      API_BASKETBALL_API_KEY: ""
+      API_NBA_API_KEY: ""
+      SPORTAPI_AI_API_KEY: ""
+      SERVICE_ROLE: api
+      BACKUP_MODE: disabled
+      BACKUP_READ_URL: ""
+      PROVIDER_HTTP_TIMEOUT_MS: 12000
+      PROVIDER_HTTP_RETRIES: 1
+      INGESTION_STALE_RUN_MINUTES: 15
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        TARGET: worker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/sporx
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: change_me_access
+      JWT_REFRESH_SECRET: change_me_refresh
+      FOOTBALL_DATA_API_KEY: ""
+      THE_SPORTS_DB_API_KEY: "3"
+      BALL_DONT_LIE_API_KEY: ""
+      API_FOOTBALL_API_KEY: ""
+      API_BASKETBALL_API_KEY: ""
+      API_NBA_API_KEY: ""
+      SPORTAPI_AI_API_KEY: ""
+      SERVICE_ROLE: worker
+      PROVIDER_HTTP_TIMEOUT_MS: 12000
+      PROVIDER_HTTP_RETRIES: 1
+      INGESTION_STALE_RUN_MINUTES: 15
+    depends_on:
+      - api
+
+  public-web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        TARGET: public-web
+    environment:
+      INTERNAL_API_URL: http://api:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/dashboard').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  admin-web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      args:
+        TARGET: admin-web
+    environment:
+      INTERNAL_API_URL: http://api:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      JWT_ACCESS_SECRET: change_me_access
+    depends_on:
+      - api
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3100/admin/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_data:

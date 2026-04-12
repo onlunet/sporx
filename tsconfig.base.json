@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "declaration": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@sporx/shared-types": ["packages/shared-types/src/index.ts"],
+      "@sporx/shared-config": ["packages/shared-config/src/index.ts"],
+      "@sporx/ui": ["packages/ui/src/index.tsx"],
+      "@sporx/api-contract": ["packages/api-contract/src/index.ts"],
+      "@sporx/api-contract/*": ["packages/api-contract/src/*"]
+    }
+  }
+}

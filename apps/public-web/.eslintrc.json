@@ -1,0 +1,21 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@sporx/api-contract",
+            "importNames": ["adminContract"],
+            "message": "Public app admin contract import edemez."
+          },
+          {
+            "name": "@sporx/api-contract/src/admin",
+            "message": "Public app admin namespace import edemez."
+          }
+        ]
+      }
+    ]
+  }
+}

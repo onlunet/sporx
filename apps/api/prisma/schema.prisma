@@ -1,0 +1,640 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IngestionStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+enum MatchStatus {
+  scheduled
+  live
+  finished
+  postponed
+  cancelled
+}
+
+model User {
+  id             String      @id @default(uuid())
+  email          String      @unique
+  passwordHash   String
+  isActive       Boolean     @default(true)
+  roleId         String
+  role           Role        @relation(fields: [roleId], references: [id])
+  refreshTokens  RefreshToken[]
+  auditLogs      AuditLog[]
+  apiLogs        ApiLog[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model Role {
+  id         String   @id @default(uuid())
+  name       String   @unique
+  users      User[]
+  createdAt  DateTime @default(now())
+}
+
+model Sport {
+  id                String    @id @default(uuid())
+  name              String    @unique
+  code              String    @unique
+  leagues           League[]
+  matches           Match[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model League {
+  id                String                @id @default(uuid())
+  sportId           String
+  name              String
+  code              String?
+  country           String?
+  dataSource        String?
+  dataQualityScore  Float?
+  importedAt        DateTime?
+  updatedByProcess  String?
+  sport             Sport                 @relation(fields: [sportId], references: [id])
+  seasons           Season[]
+  matches           Match[]
+  providerMappings  ProviderLeagueMapping[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([sportId, name])
+}
+
+model Season {
+  id                String    @id @default(uuid())
+  leagueId          String
+  yearLabel         String
+  startDate         DateTime?
+  endDate           DateTime?
+  dataSource        String?
+  dataQualityScore  Float?
+  importedAt        DateTime?
+  updatedByProcess  String?
+  league            League    @relation(fields: [leagueId], references: [id])
+  matches           Match[]
+  standings         Standing[]
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([leagueId, yearLabel])
+}
+
+model Team {
+  id                String                @id @default(uuid())
+  name              String
+  shortName         String?
+  country           String?
+  foundedYear       Int?
+  dataSource        String?
+  dataQualityScore  Float?
+  importedAt        DateTime?
+  updatedByProcess  String?
+  homeMatches       Match[]               @relation("HomeTeam")
+  awayMatches       Match[]               @relation("AwayTeam")
+  teamStats         TeamStat[]
+  players           Player[]
+  providerMappings  ProviderTeamMapping[]
+  standings         Standing[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([name, country])
+}
+
+model Player {
+  id                String     @id @default(uuid())
+  teamId            String?
+  fullName          String
+  position          String?
+  birthDate         DateTime?
+  nationality       String?
+  dataSource        String?
+  dataQualityScore  Float?
+  importedAt        DateTime?
+  updatedByProcess  String?
+  team              Team?      @relation(fields: [teamId], references: [id])
+  stats             PlayerStat[]
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+}
+
+model Match {
+  id                     String                 @id @default(uuid())
+  sportId                String
+  leagueId               String
+  seasonId               String
+  homeTeamId             String
+  awayTeamId             String
+  divisionCode           String?
+  matchDateTimeUTC       DateTime
+  status                 MatchStatus            @default(scheduled)
+  homeScore              Int?
+  awayScore              Int?
+  halfTimeHomeScore      Int?
+  halfTimeAwayScore      Int?
+  resultCode             String?
+  oddsHome               Float?
+  oddsDraw               Float?
+  oddsAway               Float?
+  maxOddsHome            Float?
+  maxOddsDraw            Float?
+  maxOddsAway            Float?
+  over25                 Float?
+  under25                Float?
+  maxOver25              Float?
+  maxUnder25             Float?
+  homeElo                Float?
+  awayElo                Float?
+  form3Home              Float?
+  form5Home              Float?
+  form3Away              Float?
+  form5Away              Float?
+  dataSource             String?
+  dataQualityScore       Float?
+  importedAt             DateTime?
+  updatedByProcess       String?
+  mappingConfidence      Float?
+  sport                  Sport                  @relation(fields: [sportId], references: [id])
+  league                 League                 @relation(fields: [leagueId], references: [id])
+  season                 Season                 @relation(fields: [seasonId], references: [id])
+  homeTeam               Team                   @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam               Team                   @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  events                 MatchEvent[]
+  teamStats              TeamStat[]
+  playerStats            PlayerStat[]
+  prediction             Prediction?
+  featureSnapshots       MatchFeatureSnapshot[]
+  providerMappings       ProviderMatchMapping[]
+  teamComparisonCache    TeamComparisonCache[]
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  @@index([leagueId, seasonId, matchDateTimeUTC])
+  @@index([status, matchDateTimeUTC])
+  @@index([homeTeamId, status, matchDateTimeUTC])
+  @@index([awayTeamId, status, matchDateTimeUTC])
+  @@unique([sportId, leagueId, seasonId, matchDateTimeUTC, homeTeamId, awayTeamId])
+}
+
+model MatchEvent {
+  id              String   @id @default(uuid())
+  matchId         String
+  minute          Int?
+  eventType       String
+  teamId          String?
+  playerId        String?
+  payload         Json?
+  dataSource      String?
+  importedAt      DateTime?
+  updatedByProcess String?
+  match           Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+}
+
+model TeamStat {
+  id             String   @id @default(uuid())
+  matchId        String
+  teamId         String
+  possession     Float?
+  shots          Int?
+  shotsOnTarget  Int?
+  fouls          Int?
+  corners        Int?
+  yellowCards    Int?
+  redCards       Int?
+  tempo          Float?
+  offenseScore   Float?
+  defenseScore   Float?
+  setPieceScore  Float?
+  transitionScore Float?
+  dataSource     String?
+  importedAt     DateTime?
+  match          Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  team           Team     @relation(fields: [teamId], references: [id])
+  createdAt      DateTime @default(now())
+
+  @@unique([matchId, teamId])
+}
+
+model PlayerStat {
+  id              String   @id @default(uuid())
+  matchId         String
+  playerId        String
+  teamId          String?
+  minutesPlayed   Int?
+  goals           Int?
+  assists         Int?
+  shots           Int?
+  passes          Int?
+  tackles         Int?
+  dataSource      String?
+  importedAt      DateTime?
+  match           Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player          Player   @relation(fields: [playerId], references: [id])
+  createdAt       DateTime @default(now())
+
+  @@unique([matchId, playerId])
+}
+
+model Standing {
+  id              String   @id @default(uuid())
+  seasonId        String
+  teamId          String
+  played          Int      @default(0)
+  won             Int      @default(0)
+  draw            Int      @default(0)
+  lost            Int      @default(0)
+  goalsFor        Int      @default(0)
+  goalsAgainst    Int      @default(0)
+  points          Int      @default(0)
+  rank            Int?
+  season          Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  team            Team     @relation(fields: [teamId], references: [id])
+  updatedAt       DateTime @updatedAt
+
+  @@unique([seasonId, teamId])
+}
+
+model Prediction {
+  id                         String                  @id @default(uuid())
+  matchId                    String                  @unique
+  modelVersionId             String?
+  probabilities              Json
+  expectedScore              Json
+  rawProbabilities           Json
+  calibratedProbabilities    Json
+  rawConfidenceScore         Float
+  calibratedConfidenceScore  Float
+  confidenceScore            Float
+  summary                    String
+  riskFlags                  Json
+  isRecommended              Boolean                 @default(false)
+  isLowConfidence            Boolean                 @default(false)
+  avoidReason                String?
+  dataSource                 String?
+  importedAt                 DateTime?
+  updatedByProcess           String?
+  match                      Match                   @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  explanation                PredictionExplanation?
+  failedAnalyses             FailedPredictionAnalysis[]
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
+
+  @@index([createdAt])
+  @@index([confidenceScore, isLowConfidence])
+}
+
+model PredictionExplanation {
+  id             String     @id @default(uuid())
+  predictionId   String     @unique
+  content        Json
+  prediction     Prediction @relation(fields: [predictionId], references: [id], onDelete: Cascade)
+  createdAt      DateTime   @default(now())
+}
+
+model FeatureSet {
+  id              String               @id @default(uuid())
+  name            String
+  version         String
+  definition      Json
+  active          Boolean              @default(true)
+  snapshots       MatchFeatureSnapshot[]
+  createdAt       DateTime             @default(now())
+
+  @@unique([name, version])
+}
+
+model MatchFeatureSnapshot {
+  id              String    @id @default(uuid())
+  matchId         String
+  featureSetId    String
+  features        Json
+  generatedAt     DateTime  @default(now())
+  match           Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  featureSet      FeatureSet @relation(fields: [featureSetId], references: [id])
+
+  @@unique([matchId, featureSetId])
+}
+
+model ModelVersion {
+  id                        String                        @id @default(uuid())
+  sportId                   String?
+  modelName                 String
+  version                   String
+  trainingWindow            String?
+  parameters                Json?
+  active                    Boolean                       @default(false)
+  backtests                 BacktestResult[]
+  calibrations              PredictionCalibration[]
+  performanceTimeseries     ModelPerformanceTimeseries[]
+  featureImportance         FeatureImportanceSnapshot[]
+  comparisonSnapshots       ModelComparisonSnapshot[]
+  createdAt                 DateTime                      @default(now())
+
+  @@unique([modelName, version])
+}
+
+model BacktestResult {
+  id             String      @id @default(uuid())
+  modelVersionId String
+  rangeStart     DateTime
+  rangeEnd       DateTime
+  metrics        Json
+  summary        String?
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+  createdAt      DateTime    @default(now())
+}
+
+model PredictionCalibration {
+  id             String      @id @default(uuid())
+  modelVersionId String
+  bucketReport   Json
+  brierScore     Float?
+  ece            Float?
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+  createdAt      DateTime    @default(now())
+}
+
+model ModelComparisonSnapshot {
+  id             String      @id @default(uuid())
+  modelVersionId String
+  comparedWith   Json
+  winnerModel    String?
+  details        Json
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+  createdAt      DateTime    @default(now())
+}
+
+model ModelPerformanceTimeseries {
+  id             String      @id @default(uuid())
+  modelVersionId String
+  measuredAt     DateTime
+  metrics        Json
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+
+  @@index([modelVersionId, measuredAt])
+}
+
+model FeatureImportanceSnapshot {
+  id             String      @id @default(uuid())
+  modelVersionId String
+  measuredAt     DateTime
+  values         Json
+  modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+}
+
+model FailedPredictionAnalysis {
+  id              String      @id @default(uuid())
+  predictionId    String
+  issueCategory   String
+  analysis        Json
+  actionItems     Json?
+  prediction      Prediction  @relation(fields: [predictionId], references: [id], onDelete: Cascade)
+  createdAt       DateTime    @default(now())
+}
+
+model ModelStrategy {
+  id              String    @id @default(uuid())
+  name            String
+  config          Json
+  isActive        Boolean   @default(false)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model FeatureLabSet {
+  id              String                 @id @default(uuid())
+  name            String
+  description     String?
+  experiments     FeatureLabExperiment[]
+  createdAt       DateTime               @default(now())
+}
+
+model FeatureLabExperiment {
+  id              String        @id @default(uuid())
+  featureLabSetId String
+  name            String
+  hypothesis      String
+  config          Json
+  result          Json?
+  status          String
+  featureLabSet   FeatureLabSet @relation(fields: [featureLabSetId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+model Provider {
+  id              String                 @id @default(uuid())
+  key             String                 @unique
+  name            String
+  baseUrl         String?
+  isActive        Boolean                @default(true)
+  configs         ProviderConfig[]
+  teamMappings    ProviderTeamMapping[]
+  leagueMappings  ProviderLeagueMapping[]
+  matchMappings   ProviderMatchMapping[]
+  jobs            IngestionJob[]
+  createdAt       DateTime               @default(now())
+}
+
+model ProviderConfig {
+  id              String   @id @default(uuid())
+  providerId      String
+  configKey       String
+  configValue     String
+  provider        Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  updatedAt       DateTime @updatedAt
+
+  @@unique([providerId, configKey])
+}
+
+model ProviderTeamMapping {
+  id                String   @id @default(uuid())
+  providerId        String
+  teamId            String
+  providerTeamKey   String
+  mappingConfidence Float?
+  provider          Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  team              Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, providerTeamKey])
+}
+
+model ProviderLeagueMapping {
+  id                 String   @id @default(uuid())
+  providerId         String
+  leagueId           String
+  providerLeagueKey  String
+  mappingConfidence  Float?
+  provider           Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  league             League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, providerLeagueKey])
+}
+
+model ProviderMatchMapping {
+  id                String   @id @default(uuid())
+  providerId        String
+  matchId           String
+  providerMatchKey  String
+  mappingConfidence Float?
+  provider          Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  match             Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, providerMatchKey])
+}
+
+model IngestionJob {
+  id              String            @id @default(uuid())
+  providerId      String?
+  jobType         String
+  cron            String?
+  active          Boolean           @default(true)
+  provider        Provider?         @relation(fields: [providerId], references: [id])
+  runs            IngestionJobRun[]
+  createdAt       DateTime          @default(now())
+}
+
+model IngestionJobRun {
+  id              String          @id @default(uuid())
+  ingestionJobId  String?
+  jobType         String
+  status          IngestionStatus @default(queued)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  recordsRead     Int             @default(0)
+  recordsWritten  Int             @default(0)
+  errors          Int             @default(0)
+  logs            Json?
+  ingestionJob    IngestionJob?   @relation(fields: [ingestionJobId], references: [id])
+  createdAt       DateTime        @default(now())
+
+  @@index([jobType, createdAt])
+  @@index([status, createdAt])
+}
+
+model IngestionCheckpoint {
+  id              String   @id @default(uuid())
+  providerKey     String
+  entityType      String
+  cursor          String
+  lastSyncedAt    DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@unique([providerKey, entityType])
+}
+
+model ExternalSourcePayload {
+  id               String   @id @default(uuid())
+  providerKey      String
+  entityType       String
+  entityExternalId String?
+  payload          Json
+  receivedAt       DateTime @default(now())
+}
+
+model ApiLog {
+  id              String   @id @default(uuid())
+  userId          String?
+  method          String
+  path            String
+  statusCode      Int
+  durationMs      Int
+  requestId       String?
+  createdAt       DateTime @default(now())
+  user            User?    @relation(fields: [userId], references: [id])
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  userId          String?
+  action          String
+  resourceType    String
+  resourceId      String?
+  diff            Json?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  user            User?    @relation(fields: [userId], references: [id])
+}
+
+model SystemSetting {
+  id              String   @id @default(uuid())
+  key             String   @unique
+  value           Json
+  description     String?
+  updatedAt       DateTime @updatedAt
+}
+
+model TeamComparisonCache {
+  id              String   @id @default(uuid())
+  matchId         String?
+  homeTeamId      String
+  awayTeamId      String
+  seasonId        String?
+  payload         Json
+  confidenceScore Float
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  match           Match?   @relation(fields: [matchId], references: [id])
+
+  @@index([homeTeamId, awayTeamId, seasonId])
+}
+
+model HistoricalImportRun {
+  id              String            @id @default(uuid())
+  sourceName      String
+  status          IngestionStatus   @default(queued)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  recordsRead     Int               @default(0)
+  recordsMerged   Int               @default(0)
+  conflicts       Int               @default(0)
+  summary         Json?
+  createdAt       DateTime          @default(now())
+}
+
+model BackupSyncRun {
+  id              String            @id @default(uuid())
+  mode            String
+  status          IngestionStatus   @default(queued)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  details         Json?
+  createdAt       DateTime          @default(now())
+}
+
+model EntityAlias {
+  id              String   @id @default(uuid())
+  entityType      String
+  entityId        String
+  alias           String
+  normalizedAlias String
+  confidence      Float?
+  createdAt       DateTime @default(now())
+
+  @@unique([entityType, normalizedAlias])
+}
