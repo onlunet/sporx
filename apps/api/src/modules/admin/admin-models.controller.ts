@@ -11,6 +11,93 @@ import { RolesGuard } from "../../common/guards/roles.guard";
 export class AdminModelsController {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeModelName(value: string | null | undefined) {
+    if (!value || value.trim().length === 0) {
+      return "prediction_pipeline";
+    }
+    return value.trim().replace(/[\s_-]+/g, " ");
+  }
+
+  private shortModelVersion(value: string | null | undefined) {
+    if (!value || value.trim().length === 0) {
+      return "unversioned";
+    }
+    const normalized = value.trim();
+    if (normalized.includes("-")) {
+      return normalized.split("-")[0];
+    }
+    return normalized.slice(0, 12);
+  }
+
+  private predictionFallbackRows(
+    countRows: Array<{ modelVersionId: string | null; _count: { _all: number } }>,
+    metaRows: Array<{ modelVersionId: string | null; updatedByProcess: string | null; dataSource: string | null; createdAt: Date }>
+  ) {
+    if (countRows.length === 0) {
+      return [];
+    }
+
+    const latestMetaByModelVersionId = new Map<string, { updatedByProcess: string | null; dataSource: string | null; createdAt: Date }>();
+    let latestUnversionedMeta: { updatedByProcess: string | null; dataSource: string | null; createdAt: Date } | null = null;
+
+    for (const row of metaRows) {
+      if (row.modelVersionId) {
+        if (!latestMetaByModelVersionId.has(row.modelVersionId)) {
+          latestMetaByModelVersionId.set(row.modelVersionId, {
+            updatedByProcess: row.updatedByProcess,
+            dataSource: row.dataSource,
+            createdAt: row.createdAt
+          });
+        }
+        continue;
+      }
+
+      if (!latestUnversionedMeta) {
+        latestUnversionedMeta = {
+          updatedByProcess: row.updatedByProcess,
+          dataSource: row.dataSource,
+          createdAt: row.createdAt
+        };
+      }
+    }
+
+    return countRows
+      .map((row) => {
+        if (row.modelVersionId) {
+          const meta = latestMetaByModelVersionId.get(row.modelVersionId) ?? null;
+          const modelName = this.normalizeModelName(meta?.updatedByProcess);
+          const version = this.shortModelVersion(row.modelVersionId);
+          return {
+            modelVersionId: row.modelVersionId,
+            modelName,
+            version,
+            modelLabel: `${modelName}:${version}`,
+            predictionCount: row._count._all,
+            updatedByProcess: meta?.updatedByProcess ?? null,
+            dataSource: meta?.dataSource ?? null,
+            createdAt: meta?.createdAt ?? new Date(0)
+          };
+        }
+
+        const meta = latestUnversionedMeta;
+        const modelName = this.normalizeModelName(meta?.updatedByProcess ?? "legacy_pipeline");
+        return {
+          modelVersionId: null,
+          modelName,
+          version: "unversioned",
+          modelLabel: `${modelName}:unversioned`,
+          predictionCount: row._count._all,
+          updatedByProcess: meta?.updatedByProcess ?? null,
+          dataSource: meta?.dataSource ?? null,
+          createdAt: meta?.createdAt ?? new Date(0)
+        };
+      })
+      .sort(
+        (left, right) =>
+          right.predictionCount - left.predictionCount || right.createdAt.getTime() - left.createdAt.getTime()
+      );
+  }
+
   private metricsFromJson(value: Prisma.JsonValue | null): { accuracy?: number; brier?: number; logLoss?: number } {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return {};
@@ -69,7 +156,8 @@ export class AdminModelsController {
 
   @Get()
   async modelsInventory() {
-    const [modelVersions, performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionCounts] = await Promise.all([
+    const [modelVersions, performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionCounts, predictionMetaRows] =
+      await Promise.all([
       this.prisma.modelVersion.findMany({
         orderBy: [{ active: "desc" }, { createdAt: "desc" }],
         select: {
@@ -100,11 +188,37 @@ export class AdminModelsController {
       this.prisma.prediction.groupBy({
         by: ["modelVersionId"],
         _count: { _all: true }
+      }),
+      this.prisma.prediction.findMany({
+        select: { modelVersionId: true, updatedByProcess: true, dataSource: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 20000
       })
     ]);
 
     if (modelVersions.length === 0) {
-      return [];
+      const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+      return fallbackRows.map((row, index) => ({
+        id: row.modelVersionId ? `fallback-${row.modelVersionId}` : "fallback-unversioned",
+        modelVersionId: row.modelVersionId,
+        modelName: row.modelName,
+        version: row.version,
+        modelLabel: row.modelLabel,
+        active: index === 0,
+        trainingWindow: "-",
+        predictionCount: row.predictionCount,
+        usageStatus: "Tahminde Kullaniliyor",
+        performancePointCount: 0,
+        calibrationCount: 0,
+        backtestCount: 0,
+        comparisonCount: 0,
+        accuracy: null,
+        brier: null,
+        logLoss: null,
+        lastMeasuredAt: null,
+        source: "prediction_fallback",
+        createdAt: row.createdAt
+      }));
     }
 
     const latestMetricsByModelId = new Map<
@@ -147,7 +261,7 @@ export class AdminModelsController {
     const comparisonCountByModelId = toCountMap(snapshotCounts);
     const predictionCountByModelId = toCountMap(predictionCounts);
 
-    return modelVersions.map((model) => {
+    const rows = modelVersions.map((model) => {
       const latest = latestMetricsByModelId.get(model.id);
       const predictionCount = predictionCountByModelId.get(model.id) ?? 0;
 
@@ -173,6 +287,39 @@ export class AdminModelsController {
         createdAt: model.createdAt
       };
     });
+
+    const knownModelIds = new Set(modelVersions.map((model) => model.id));
+    const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+    const orphanRows = fallbackRows
+      .filter((row) => row.modelVersionId && !knownModelIds.has(row.modelVersionId))
+      .map((row) => ({
+        id: `orphan-${row.modelVersionId}`,
+        modelVersionId: row.modelVersionId,
+        modelName: row.modelName,
+        version: row.version,
+        modelLabel: row.modelLabel,
+        active: false,
+        trainingWindow: "-",
+        predictionCount: row.predictionCount,
+        usageStatus: "Tahminde Kullaniliyor (Kayit eksik)",
+        performancePointCount: 0,
+        calibrationCount: 0,
+        backtestCount: 0,
+        comparisonCount: 0,
+        accuracy: null,
+        brier: null,
+        logLoss: null,
+        lastMeasuredAt: null,
+        source: "prediction_orphan",
+        createdAt: row.createdAt
+      }));
+
+    return [...rows, ...orphanRows].sort(
+      (left, right) =>
+        Number(right.active) - Number(left.active) ||
+        right.predictionCount - left.predictionCount ||
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    );
   }
 
   @Get("comparison")
@@ -191,7 +338,49 @@ export class AdminModelsController {
     ]);
 
     if (modelVersions.length === 0) {
-      return [];
+      const [predictionCounts, predictionMetaRows] = await Promise.all([
+        this.prisma.prediction.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.prediction.findMany({
+          select: { modelVersionId: true, updatedByProcess: true, dataSource: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 20000
+        })
+      ]);
+
+      const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+      if (fallbackRows.length === 0) {
+        return [];
+      }
+
+      const winnerModel = fallbackRows[0].modelLabel;
+      return fallbackRows.map((row, index) => ({
+        id: row.modelVersionId ? `fallback-${row.modelVersionId}` : "fallback-unversioned",
+        modelVersionId: row.modelVersionId,
+        modelName: row.modelName,
+        version: row.version,
+        modelLabel: row.modelLabel,
+        active: index === 0,
+        winnerModel,
+        comparedWith: fallbackRows
+          .filter((candidate) => candidate.modelLabel !== row.modelLabel)
+          .map((candidate) => ({
+            modelVersionId: candidate.modelVersionId,
+            modelName: candidate.modelName,
+            version: candidate.version,
+            modelLabel: candidate.modelLabel
+          })),
+        details: {
+          source: "prediction_fallback",
+          predictionCount: row.predictionCount,
+          updatedByProcess: row.updatedByProcess,
+          dataSource: row.dataSource
+        },
+        source: "prediction_fallback",
+        createdAt: row.createdAt
+      }));
     }
 
     const modelById = new Map(modelVersions.map((item) => [item.id, item]));
@@ -319,6 +508,42 @@ export class AdminModelsController {
   @Get("drift-summary")
   driftSummary() {
     return this.prisma.modelPerformanceTimeseries.findMany({ orderBy: { measuredAt: "desc" }, take: 20 });
+  }
+
+  @Get("market-performance")
+  async marketPerformance() {
+    const rows = await this.prisma.marketAnalysisSnapshot.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 5000
+    });
+
+    const grouped = new Map<
+      string,
+      { predictionType: string; sampleSize: number; gapTotal: number; contradictionTotal: number; consensusTotal: number }
+    >();
+
+    for (const row of rows) {
+      const group = grouped.get(row.predictionType) ?? {
+        predictionType: row.predictionType,
+        sampleSize: 0,
+        gapTotal: 0,
+        contradictionTotal: 0,
+        consensusTotal: 0
+      };
+      group.sampleSize += 1;
+      group.gapTotal += Math.abs(row.probabilityGap);
+      group.contradictionTotal += Math.max(0, row.contradictionScore ?? 0);
+      group.consensusTotal += Math.max(0, row.consensusScore ?? 0);
+      grouped.set(row.predictionType, group);
+    }
+
+    return [...grouped.values()].map((group) => ({
+      predictionType: group.predictionType,
+      sampleSize: group.sampleSize,
+      avgAbsProbabilityGap: Number((group.gapTotal / group.sampleSize).toFixed(4)),
+      avgContradictionScore: Number((group.contradictionTotal / group.sampleSize).toFixed(4)),
+      avgConsensusScore: Number((group.consensusTotal / group.sampleSize).toFixed(4))
+    }));
   }
 
   @Get("strategies")
