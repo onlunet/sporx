@@ -4,7 +4,7 @@
     "private":  true,
     "scripts":  {
                     "dev":  "ts-node src/main.ts",
-                    "build":  "nest build",
+                    "build":  "npm run prisma:generate && nest build",
                     "start":  "node dist/apps/api/src/main.js",
                     "worker:dev":  "ts-node src/worker.ts",
                     "worker:start":  "node dist/apps/api/src/worker.js",
@@ -13,7 +13,7 @@
                     "test":  "jest --runInBand --config jest.config.cjs",
                     "test:watch":  "jest --watch",
                     "test:e2e":  "jest --config test/jest-e2e.json",
-                    "prisma:generate":  "prisma generate",
+                    "prisma:generate":  "prisma generate --schema prisma/schema.prisma",
                     "prisma:migrate":  "prisma migrate dev",
                     "prisma:seed":  "ts-node prisma/seed.ts"
                 },
