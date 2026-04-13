@@ -61,7 +61,7 @@ export class MatchContextEnrichmentService {
       hash = (hash * 31 + token.charCodeAt(i)) % 100000;
     }
     const base = 1450 + (hash % 220);
-    return isHome ? base + 25 : base;
+    return base;
   }
 
   private formSeed(name: string, country: string) {
@@ -101,8 +101,8 @@ export class MatchContextEnrichmentService {
     const eloDelta = homeElo - awayElo;
     const formDelta = homeForm - awayForm;
 
-    const expectedHomeGoalsBase = Number(Math.max(0.35, 1.25 + eloDelta / 850 + formDelta * 0.2).toFixed(3));
-    const expectedAwayGoalsBase = Number(Math.max(0.3, 1.05 - eloDelta / 900 - formDelta * 0.16).toFixed(3));
+    const expectedHomeGoalsBase = Number(Math.max(0.35, 1.16 + eloDelta / 980 + formDelta * 0.16).toFixed(3));
+    const expectedAwayGoalsBase = Number(Math.max(0.35, 1.14 - eloDelta / 980 - formDelta * 0.14).toFixed(3));
 
     return { expectedHomeGoalsBase, expectedAwayGoalsBase };
   }

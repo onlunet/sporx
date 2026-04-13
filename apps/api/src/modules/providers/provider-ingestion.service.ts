@@ -518,7 +518,7 @@ export class ProviderIngestionService {
       hash = (hash * 31 + token.charCodeAt(i)) % 100000;
     }
     const base = 1450 + (hash % 220);
-    return isHome ? base + 25 : base;
+    return base;
   }
 
   private dedupeRiskFlags(
@@ -548,6 +548,66 @@ export class ProviderIngestionService {
 
   private toPercent(value: number) {
     return Math.round(value * 100);
+  }
+
+  private clamp(value: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  private normalizeOutcome(probabilities: { home: number; draw: number; away: number }) {
+    const safe = {
+      home: this.clamp(Number.isFinite(probabilities.home) ? probabilities.home : 0, 0, 1),
+      draw: this.clamp(Number.isFinite(probabilities.draw) ? probabilities.draw : 0, 0, 1),
+      away: this.clamp(Number.isFinite(probabilities.away) ? probabilities.away : 0, 0, 1)
+    };
+    const sum = safe.home + safe.draw + safe.away || 1;
+    return {
+      home: Number((safe.home / sum).toFixed(4)),
+      draw: Number((safe.draw / sum).toFixed(4)),
+      away: Number((safe.away / sum).toFixed(4))
+    };
+  }
+
+  private rebalanceOutcomeProbabilities(
+    probabilities: { home: number; draw: number; away: number },
+    homeElo: number,
+    awayElo: number,
+    expectedHomeGoals: number,
+    expectedAwayGoals: number
+  ) {
+    let outcome = this.normalizeOutcome(probabilities);
+    const eloGap = homeElo - awayElo;
+    const lambdaGap = expectedHomeGoals - expectedAwayGoals;
+    const currentEdge = outcome.home - outcome.away;
+    const expectedEdge = this.clamp(eloGap / 480 + lambdaGap * 0.22, -0.24, 0.24);
+
+    // If venue bias inflates the home edge beyond what Elo/lambda justify, shift some mass to away.
+    const edgeDrift = currentEdge - expectedEdge;
+    if (Math.abs(edgeDrift) > 0.02) {
+      const correction = this.clamp(edgeDrift * 0.42, -0.09, 0.09);
+      outcome = this.normalizeOutcome({
+        home: outcome.home - correction,
+        draw: outcome.draw,
+        away: outcome.away + correction
+      });
+    }
+
+    // In balanced games, increase draw mass slightly to avoid forced home/away winners.
+    const neutrality = this.clamp(
+      1 - Math.min(1, Math.abs(eloGap) / 140) - Math.min(1, Math.abs(lambdaGap) / 0.9),
+      0,
+      1
+    );
+    if (neutrality > 0) {
+      const drawBoost = this.clamp(0.06 * neutrality, 0, 0.045);
+      outcome = this.normalizeOutcome({
+        home: outcome.home - drawBoost * 0.5,
+        draw: outcome.draw + drawBoost,
+        away: outcome.away - drawBoost * 0.5
+      });
+    }
+
+    return outcome;
   }
 
   private contextNumber(context: Record<string, unknown> | null, key: string, fallback: number | null = null) {
@@ -872,10 +932,10 @@ export class ProviderIngestionService {
             });
           }
         }
-        const homeAttack = Math.max(0.85, homeElo / 1700);
-        const awayAttack = Math.max(0.82, awayElo / 1720);
-        const homeDefense = Math.max(0.75, awayElo / 1800);
-        const awayDefense = Math.max(0.75, homeElo / 1800);
+        const homeAttack = Math.max(0.78, Math.min(1.45, homeElo / 1680));
+        const awayAttack = Math.max(0.78, Math.min(1.45, awayElo / 1680));
+        const homeDefense = Math.max(0.72, Math.min(1.35, 2 - homeElo / 1800));
+        const awayDefense = Math.max(0.72, Math.min(1.35, 2 - awayElo / 1800));
 
         let rawProbabilities = this.predictionEngine.computeEloProbabilities({ homeElo, awayElo });
         let calibratedProbabilities = this.predictionEngine.calibrate(rawProbabilities, 0.97);
@@ -960,6 +1020,31 @@ export class ProviderIngestionService {
             });
           }
         }
+
+        const expectedHomeGoals =
+          typeof expectedScore.home === "number" && Number.isFinite(expectedScore.home)
+            ? expectedScore.home
+            : defaultExpectedScore.home;
+        const expectedAwayGoals =
+          typeof expectedScore.away === "number" && Number.isFinite(expectedScore.away)
+            ? expectedScore.away
+            : defaultExpectedScore.away;
+        rawProbabilities = this.rebalanceOutcomeProbabilities(
+          rawProbabilities,
+          homeElo,
+          awayElo,
+          expectedHomeGoals,
+          expectedAwayGoals
+        );
+        calibratedProbabilities = this.rebalanceOutcomeProbabilities(
+          calibratedProbabilities,
+          homeElo,
+          awayElo,
+          expectedHomeGoals,
+          expectedAwayGoals
+        );
+        rawConfidenceScore = this.predictionEngine.confidence(rawProbabilities);
+        calibratedConfidenceScore = this.predictionEngine.confidence(calibratedProbabilities);
 
         const kickoffHoursAway = (match.matchDateTimeUTC.getTime() - now.getTime()) / (60 * 60 * 1000);
         const isUpcomingKickoffWindow = kickoffHoursAway >= 0 && kickoffHoursAway <= 72;

@@ -330,9 +330,9 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
     normalizeOutcomeProbabilities(row.probabilities) ??
     normalizeOutcomeProbabilities(row.calibratedProbabilities) ??
     normalizeOutcomeProbabilities(row.rawProbabilities) ?? {
-      home: 0.45,
-      draw: 0.27,
-      away: 0.28
+      home: 0.34,
+      draw: 0.32,
+      away: 0.34
     };
 
   const expectedScore = normalizeExpectedScore(row.expectedScore);

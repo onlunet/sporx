@@ -122,8 +122,8 @@ export class AdvancedPredictionEngineService {
       lineupCertaintyScore: this.numeric(input.lineupCertaintyScore, 0.65),
       contextPressureScore: this.numeric(input.contextPressureScore, 0.5),
       leagueGoalEnvironment: this.numeric(input.leagueGoalEnvironment, 1),
-      homeAdvantageMultiplier: 1.08 + recencyWeight * 0.02,
-      awayPenaltyMultiplier: 0.94 + recencyWeight * 0.02,
+      homeAdvantageMultiplier: 1.01 + recencyWeight * 0.005,
+      awayPenaltyMultiplier: 0.995 + recencyWeight * 0.005,
       baselineAdjustedLambdaHome: input.baselineAdjustedLambdaHome,
       baselineAdjustedLambdaAway: input.baselineAdjustedLambdaAway
     });

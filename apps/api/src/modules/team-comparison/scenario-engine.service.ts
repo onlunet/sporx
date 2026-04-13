@@ -3,13 +3,13 @@ import { Injectable } from "@nestjs/common";
 @Injectable()
 export class ScenarioEngineService {
   private readonly axisLabels: Record<string, string> = {
-    offense: "Hücum",
+    offense: "HÃ¼cum",
     defense: "Savunma",
     tempo: "Tempo",
     setPiece: "Duran top",
-    transition: "Geçiş oyunu",
-    cohesion: "Takım uyumu",
-    overall: "Genel güç"
+    transition: "GeÃ§iÅŸ oyunu",
+    cohesion: "TakÄ±m uyumu",
+    overall: "Genel gÃ¼Ã§"
   };
 
   generate(axes: Array<{ key: string; advantage: "home" | "away" | "neutral" }>) {
@@ -18,13 +18,13 @@ export class ScenarioEngineService {
     const awayEdges = axes.filter((axis) => axis.advantage === "away").map((axis) => this.axisLabels[axis.key] ?? axis.key);
 
     if (homeEdges.length > 0) {
-      notes.push(`Ev sahibi üstünlük alanları: ${homeEdges.join(", ")}.`);
+      notes.push(`Ev sahibi Ã¼stÃ¼nlÃ¼k alanlarÄ±: ${homeEdges.join(", ")}.`);
     }
     if (awayEdges.length > 0) {
-      notes.push(`Deplasman üstünlük alanları: ${awayEdges.join(", ")}.`);
+      notes.push(`Deplasman Ã¼stÃ¼nlÃ¼k alanlarÄ±: ${awayEdges.join(", ")}.`);
     }
     if (notes.length === 0) {
-      notes.push("Temel metriklerde taraflar birbirine çok yakın; maç dengeli görünüyor.");
+      notes.push("Temel metriklerde taraflar birbirine Ã§ok yakÄ±n; maÃ§ dengeli gÃ¶rÃ¼nÃ¼yor.");
     }
 
     return notes;

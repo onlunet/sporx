@@ -63,11 +63,13 @@ function probabilitySummary(item: MatchPredictionItem) {
   return null;
 }
 
-function sortPredictions(items: MatchPredictionItem[]) {
+function sortPredictions(items: MatchPredictionItem[], scope: "upcoming" | "completed") {
   return items.slice().sort((a, b) => {
-    const byConfidence = (b.confidenceScore ?? -1) - (a.confidenceScore ?? -1);
-    if (byConfidence !== 0) return byConfidence;
-    return new Date(b.matchDateTimeUTC ?? 0).getTime() - new Date(a.matchDateTimeUTC ?? 0).getTime();
+    const aKickoff = new Date(a.matchDateTimeUTC ?? 0).getTime();
+    const bKickoff = new Date(b.matchDateTimeUTC ?? 0).getTime();
+    const dateDiff = scope === "upcoming" ? aKickoff - bKickoff : bKickoff - aKickoff;
+    if (dateDiff !== 0) return dateDiff;
+    return (b.confidenceScore ?? -1) - (a.confidenceScore ?? -1);
   });
 }
 
@@ -244,7 +246,7 @@ export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerP
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
   const query = usePredictionsByType(activeFilter);
   const items = useMemo(() => {
-    const sorted = sortPredictions(query.data ?? []);
+    const sorted = sortPredictions(query.data ?? [], scope);
     if (scope === "completed") {
       return sorted.filter((item) => isPredictionPlayed(item));
     }

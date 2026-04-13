@@ -16,13 +16,13 @@ type SummaryMeta = {
 @Injectable()
 export class ExplanationEngineService {
   private readonly axisLabels: Record<string, string> = {
-    offense: "hücum üretkenliği",
+    offense: "hÃ¼cum Ã¼retkenliÄŸi",
     defense: "savunma dengesi",
     tempo: "oyun temposu",
-    setPiece: "duran top etkinliği",
-    transition: "geçiş oyunu",
-    cohesion: "takım uyumu",
-    overall: "genel güç"
+    setPiece: "duran top etkinliÄŸi",
+    transition: "geÃ§iÅŸ oyunu",
+    cohesion: "takÄ±m uyumu",
+    overall: "genel gÃ¼Ã§"
   };
 
   summarize(axes: Axis[], confidenceScore: number, meta?: SummaryMeta) {
@@ -31,11 +31,11 @@ export class ExplanationEngineService {
     )[0];
 
     if (!strongAxis) {
-      return "Yeterli veri olmadığı için karşılaştırma güvenilir şekilde üretilemedi.";
+      return "Yeterli veri olmadÄ±ÄŸÄ± iÃ§in karÅŸÄ±laÅŸtÄ±rma gÃ¼venilir ÅŸekilde Ã¼retilemedi.";
     }
 
     const delta = Math.abs(strongAxis.homeValue - strongAxis.awayValue);
-    const deltaText = delta < 0.05 ? "çok sınırlı" : delta < 0.12 ? "orta" : "belirgin";
+    const deltaText = delta < 0.05 ? "Ã§ok sÄ±nÄ±rlÄ±" : delta < 0.12 ? "orta" : "belirgin";
     const edgeText =
       strongAxis.advantage === "home"
         ? "ev sahibi lehine"
@@ -45,13 +45,13 @@ export class ExplanationEngineService {
 
     const notes: string[] = [];
     if ((meta?.homeSampleSize ?? 0) < 4 || (meta?.awaySampleSize ?? 0) < 4) {
-      notes.push("örneklem düşük olduğu için sonuç temkinli yorumlanmalı");
+      notes.push("Ã¶rneklem dÃ¼ÅŸÃ¼k olduÄŸu iÃ§in sonuÃ§ temkinli yorumlanmalÄ±");
     }
     if (meta?.fallbackUsed) {
-      notes.push("sezon verisi yetersiz olduğu için geniş tarih aralığı kullanıldı");
+      notes.push("sezon verisi yetersiz olduÄŸu iÃ§in geniÅŸ tarih aralÄ±ÄŸÄ± kullanÄ±ldÄ±");
     }
 
     const cautionText = notes.length > 0 ? ` (${notes.join("; ")})` : "";
-    return `Karşılaşmada ana ayrışma ${this.axisLabels[strongAxis.key] ?? strongAxis.key} ekseninde ve ${edgeText}. Fark seviyesi ${deltaText}. Güven ${Math.round(confidenceScore * 100)}%.${cautionText}`;
+    return `KarÅŸÄ±laÅŸmada ana ayrÄ±ÅŸma ${this.axisLabels[strongAxis.key] ?? strongAxis.key} ekseninde ve ${edgeText}. Fark seviyesi ${deltaText}. GÃ¼ven ${Math.round(confidenceScore * 100)}%.${cautionText}`;
   }
 }

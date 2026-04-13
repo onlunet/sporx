@@ -73,8 +73,8 @@ export class DynamicLambdaService {
     const contextAway = this.clamp(1 - (contextPressure - 0.5) * 0.08, 0.9, 1.1);
 
     const goalEnvironment = this.clamp(this.asFinite(input.leagueGoalEnvironment, 1), 0.82, 1.22);
-    const homeAdvantageMultiplier = this.clamp(this.asFinite(input.homeAdvantageMultiplier, 1.08), 1, 1.18);
-    const awayPenaltyMultiplier = this.clamp(this.asFinite(input.awayPenaltyMultiplier, 0.95), 0.82, 1);
+    const homeAdvantageMultiplier = this.clamp(this.asFinite(input.homeAdvantageMultiplier, 1.01), 0.95, 1.08);
+    const awayPenaltyMultiplier = this.clamp(this.asFinite(input.awayPenaltyMultiplier, 0.995), 0.92, 1.06);
 
     const lambdaHome = this.clamp(
       baseHome *
@@ -126,4 +126,3 @@ export class DynamicLambdaService {
     };
   }
 }
-

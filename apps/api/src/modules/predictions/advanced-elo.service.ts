@@ -20,7 +20,7 @@ export type AdvancedEloResult = {
 
 @Injectable()
 export class AdvancedEloService {
-  private readonly homeAdvantage = 62;
+  private readonly homeAdvantage = 16;
   private readonly baseKFactor = 20;
 
   private clamp(value: number, min: number, max: number) {
@@ -65,4 +65,3 @@ export class AdvancedEloService {
     };
   }
 }
-

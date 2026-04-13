@@ -7,7 +7,7 @@ interface EloInput {
 
 @Injectable()
 export class PredictionEngineService {
-  private readonly kHomeAdvantage = 65;
+  private readonly kHomeAdvantage = 18;
   private readonly minDraw = 0.18;
   private readonly maxDraw = 0.3;
 
