@@ -29,4 +29,4 @@ COPY --from=builder /app/packages ./packages
 COPY package.json tsconfig.base.json .
 ARG TARGET=api
 ENV TARGET=${TARGET}
-CMD ["sh", "-c", "if [ \"$TARGET\" = \"api\" ]; then node apps/api/dist/apps/api/src/main.js; elif [ \"$TARGET\" = \"worker\" ]; then node apps/api/dist/apps/api/src/worker.js; elif [ \"$TARGET\" = \"public-web\" ]; then npm run -w @sporx/public-web start; else npm run -w @sporx/admin-web start; fi"]
+CMD ["sh", "-c", "if [ \"${RUN_PRISMA_DB_PUSH:-true}\" = \"true\" ] && { [ \"$TARGET\" = \"api\" ] || [ \"$TARGET\" = \"worker\" ]; }; then npx prisma db push --schema apps/api/prisma/schema.prisma; fi; if [ \"$TARGET\" = \"api\" ]; then node apps/api/dist/apps/api/src/main.js; elif [ \"$TARGET\" = \"worker\" ]; then node apps/api/dist/apps/api/src/worker.js; elif [ \"$TARGET\" = \"public-web\" ]; then npm run -w @sporx/public-web start; else npm run -w @sporx/admin-web start; fi"]
