@@ -33,6 +33,12 @@ export class OddsApiIoConnector {
     return resolved && resolved.length > 0 ? resolved : this.defaultBaseUrl;
   }
 
+  private buildUrl(path: string, baseUrl?: string) {
+    const normalizedBase = this.resolveBaseUrl(baseUrl).replace(/\/+$/, "");
+    const normalizedPath = path.replace(/^\/+/, "");
+    return new URL(`${normalizedBase}/${normalizedPath}`);
+  }
+
   private async request(url: string, context: string) {
     let lastError: Error | null = null;
 
@@ -63,13 +69,13 @@ export class OddsApiIoConnector {
   }
 
   async ping(apiKey: string, baseUrl?: string) {
-    const url = new URL("/sports", this.resolveBaseUrl(baseUrl));
+    const url = this.buildUrl("sports", baseUrl);
     const response = await this.request(this.withApiKey(url, apiKey), "odds_api_io ping");
     return { ok: response.ok, status: response.status };
   }
 
   async fetchEvents(apiKey: string, options: FetchEventsOptions, baseUrl?: string) {
-    const url = new URL("/events", this.resolveBaseUrl(baseUrl));
+    const url = this.buildUrl("events", baseUrl);
     url.searchParams.set("sport", options.sport);
     if (options.status) url.searchParams.set("status", options.status);
     if (options.from) url.searchParams.set("from", options.from);
@@ -86,7 +92,7 @@ export class OddsApiIoConnector {
   }
 
   async fetchLiveEvents(apiKey: string, sport: string, baseUrl?: string) {
-    const url = new URL("/events/live", this.resolveBaseUrl(baseUrl));
+    const url = this.buildUrl("events/live", baseUrl);
     url.searchParams.set("sport", sport);
     const response = await this.request(this.withApiKey(url, apiKey), "odds_api_io live events");
     if (!response.ok) {
@@ -96,7 +102,7 @@ export class OddsApiIoConnector {
   }
 
   async fetchOdds(apiKey: string, eventId: string, bookmakers: string, baseUrl?: string) {
-    const url = new URL("/odds", this.resolveBaseUrl(baseUrl));
+    const url = this.buildUrl("odds", baseUrl);
     url.searchParams.set("eventId", eventId);
     url.searchParams.set("bookmakers", bookmakers);
     const response = await this.request(this.withApiKey(url, apiKey), "odds_api_io odds");
@@ -107,7 +113,7 @@ export class OddsApiIoConnector {
   }
 
   async fetchMultiOdds(apiKey: string, eventIds: string[], bookmakers: string, baseUrl?: string) {
-    const url = new URL("/odds/multi", this.resolveBaseUrl(baseUrl));
+    const url = this.buildUrl("odds/multi", baseUrl);
     url.searchParams.set("eventIds", eventIds.join(","));
     url.searchParams.set("bookmakers", bookmakers);
     const response = await this.request(this.withApiKey(url, apiKey), "odds_api_io odds multi");
