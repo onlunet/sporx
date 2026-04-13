@@ -512,7 +512,15 @@ export class AdminModelsController {
 
   @Get("market-performance")
   async marketPerformance() {
-    const rows = await this.prisma.marketAnalysisSnapshot.findMany({
+    const marketAnalysisDelegate = (this.prisma as unknown as Record<string, unknown>)["marketAnalysisSnapshot"] as
+      | { findMany: (args: { orderBy: { createdAt: "desc" }; take: number }) => Promise<Array<Record<string, unknown>>> }
+      | undefined;
+
+    if (!marketAnalysisDelegate?.findMany) {
+      return [];
+    }
+
+    const rows = await marketAnalysisDelegate.findMany({
       orderBy: { createdAt: "desc" },
       take: 5000
     });
@@ -523,18 +531,23 @@ export class AdminModelsController {
     >();
 
     for (const row of rows) {
-      const group = grouped.get(row.predictionType) ?? {
-        predictionType: row.predictionType,
+      const predictionType = typeof row.predictionType === "string" ? row.predictionType : "unknown";
+      const probabilityGap = typeof row.probabilityGap === "number" ? row.probabilityGap : 0;
+      const contradictionScore = typeof row.contradictionScore === "number" ? row.contradictionScore : 0;
+      const consensusScore = typeof row.consensusScore === "number" ? row.consensusScore : 0;
+
+      const group = grouped.get(predictionType) ?? {
+        predictionType,
         sampleSize: 0,
         gapTotal: 0,
         contradictionTotal: 0,
         consensusTotal: 0
       };
       group.sampleSize += 1;
-      group.gapTotal += Math.abs(row.probabilityGap);
-      group.contradictionTotal += Math.max(0, row.contradictionScore ?? 0);
-      group.consensusTotal += Math.max(0, row.consensusScore ?? 0);
-      grouped.set(row.predictionType, group);
+      group.gapTotal += Math.abs(probabilityGap);
+      group.contradictionTotal += Math.max(0, contradictionScore);
+      group.consensusTotal += Math.max(0, consensusScore);
+      grouped.set(predictionType, group);
     }
 
     return [...grouped.values()].map((group) => ({
