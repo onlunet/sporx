@@ -10,6 +10,6 @@ coverage
 .cache
 .turbo
 prisma/dev.db
-logs/
+/logs/
 tmp-logs/
 apps/api/tmp-*.ts
