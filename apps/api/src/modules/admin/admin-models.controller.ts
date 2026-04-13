@@ -11,6 +11,279 @@ import { RolesGuard } from "../../common/guards/roles.guard";
 export class AdminModelsController {
   constructor(private readonly prisma: PrismaService) {}
 
+  private readonly baselineModelSeeds: Array<{
+    modelName: string;
+    version: string;
+    trainingWindow: string;
+    parameters: Prisma.InputJsonValue;
+    preferredActive: boolean;
+  }> = [
+    {
+      modelName: "elo_poisson",
+      version: "v1",
+      trainingWindow: "rolling_18m",
+      parameters: { usesElo: true, usesPoisson: true, usesCalibration: true },
+      preferredActive: false
+    },
+    {
+      modelName: "elo_poisson_dc",
+      version: "v2",
+      trainingWindow: "rolling_24m",
+      parameters: {
+        usesElo: true,
+        usesPoisson: true,
+        usesDixonColes: true,
+        usesDynamicLambda: true,
+        usesTimeDecay: true
+      },
+      preferredActive: true
+    },
+    {
+      modelName: "market_aware_blend",
+      version: "v1",
+      trainingWindow: "rolling_24m",
+      parameters: { usesCoreModel: true, usesMarketLayer: true, optionalOdds: true },
+      preferredActive: false
+    }
+  ];
+
+  private async bootstrapBaselineModelRegistry() {
+    for (const seed of this.baselineModelSeeds) {
+      await this.prisma.modelVersion.upsert({
+        where: {
+          modelName_version: {
+            modelName: seed.modelName,
+            version: seed.version
+          }
+        },
+        update: {},
+        create: {
+          modelName: seed.modelName,
+          version: seed.version,
+          trainingWindow: seed.trainingWindow,
+          parameters: seed.parameters,
+          active: seed.preferredActive
+        }
+      });
+    }
+  }
+
+  private async ensureSingleActiveModel() {
+    const models = await this.prisma.modelVersion.findMany({
+      select: { id: true, modelName: true, version: true, active: true, createdAt: true },
+      orderBy: { createdAt: "desc" }
+    });
+
+    if (models.length === 0) {
+      return null;
+    }
+
+    const active = models.find((item) => item.active);
+    if (active) {
+      return active.id;
+    }
+
+    const preferred = models.find((item) => item.modelName === "elo_poisson_dc" && item.version === "v2");
+    const chosen = preferred ?? models[0];
+
+    await this.prisma.$transaction([
+      this.prisma.modelVersion.updateMany({ data: { active: false } }),
+      this.prisma.modelVersion.update({ where: { id: chosen.id }, data: { active: true } })
+    ]);
+
+    return chosen.id;
+  }
+
+  private async backfillPredictionsWithoutModelVersion(activeModelId: string | null) {
+    if (!activeModelId) {
+      return;
+    }
+
+    const nullCount = await this.prisma.prediction.count({ where: { modelVersionId: null } });
+    if (nullCount === 0) {
+      return;
+    }
+
+    await this.prisma.prediction.updateMany({
+      where: { modelVersionId: null },
+      data: {
+        modelVersionId: activeModelId,
+        updatedByProcess: "model_registry_backfill"
+      }
+    });
+  }
+
+  private async ensureModelRegistry() {
+    await this.bootstrapBaselineModelRegistry();
+    const activeModelId = await this.ensureSingleActiveModel();
+    await this.backfillPredictionsWithoutModelVersion(activeModelId);
+  }
+
+  private normalizeConfidence(value: unknown): number {
+    const numeric = this.asNumber(value);
+    if (numeric === null) {
+      return 0.5;
+    }
+    if (numeric > 1) {
+      return this.clamp(numeric / 100);
+    }
+    return this.clamp(numeric);
+  }
+
+  private buildOperationalPerformanceRows(
+    rows: Array<{
+      id: string;
+      modelVersionId: string | null;
+      confidenceScore: number;
+      riskFlags: Prisma.JsonValue;
+      createdAt: Date;
+    }>
+  ) {
+    const bucket = new Map<
+      string,
+      {
+        modelVersionId: string;
+        measuredAt: Date;
+        count: number;
+        confidenceTotal: number;
+        riskyCount: number;
+      }
+    >();
+
+    for (const row of rows) {
+      if (!row.modelVersionId) {
+        continue;
+      }
+
+      const measuredAt = new Date(row.createdAt.toISOString().slice(0, 10));
+      const key = `${row.modelVersionId}|${measuredAt.toISOString()}`;
+      const current = bucket.get(key) ?? {
+        modelVersionId: row.modelVersionId,
+        measuredAt,
+        count: 0,
+        confidenceTotal: 0,
+        riskyCount: 0
+      };
+
+      const riskFlags = Array.isArray(row.riskFlags) ? row.riskFlags : [];
+      current.count += 1;
+      current.confidenceTotal += this.normalizeConfidence(row.confidenceScore);
+      current.riskyCount += riskFlags.length > 0 ? 1 : 0;
+      bucket.set(key, current);
+    }
+
+    return [...bucket.values()]
+      .map((item) => {
+        const avgConfidence = item.confidenceTotal / Math.max(1, item.count);
+        const riskRate = item.riskyCount / Math.max(1, item.count);
+        const proxyAccuracy = this.clamp(avgConfidence * 0.92 + (1 - riskRate) * 0.08, 0.35, 0.9);
+        const proxyBrier = this.clamp((1 - proxyAccuracy) * 0.72, 0.05, 0.55);
+        const proxyLogLoss = -Math.log(Math.max(1e-6, proxyAccuracy));
+
+        return {
+          id: `proxy-${item.modelVersionId}-${item.measuredAt.toISOString().slice(0, 10)}`,
+          modelVersionId: item.modelVersionId,
+          measuredAt: item.measuredAt,
+          metrics: {
+            accuracy: this.round(proxyAccuracy),
+            brier: this.round(proxyBrier),
+            logLoss: this.round(proxyLogLoss),
+            avgConfidence: this.round(avgConfidence),
+            riskRate: this.round(riskRate),
+            sampleSize: item.count,
+            isProxy: true,
+            proxyReason: "completed_match_result_missing"
+          }
+        };
+      })
+      .sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime());
+  }
+
+  private async modelVersionsForInventory() {
+    await this.ensureModelRegistry();
+    return this.prisma.modelVersion.findMany({
+      orderBy: [{ active: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        modelName: true,
+        version: true,
+        active: true,
+        trainingWindow: true,
+        createdAt: true
+      }
+    });
+  }
+
+  private async modelVersionsForComparison() {
+    await this.ensureModelRegistry();
+    return this.prisma.modelVersion.findMany({
+      orderBy: [{ active: "desc" }, { createdAt: "desc" }],
+      select: { id: true, modelName: true, version: true, active: true, createdAt: true }
+    });
+  }
+
+  private async ensureDefaultStrategies() {
+    const count = await this.prisma.modelStrategy.count();
+    if (count > 0) {
+      return;
+    }
+
+    await this.prisma.modelStrategy.createMany({
+      data: [
+        {
+          name: "core_model_only",
+          config: { coreWeight: 1, marketWeight: 0, confidencePenalty: 0.08 },
+          isActive: true,
+          notes: "Temel model agirlikli varsayilan strateji"
+        },
+        {
+          name: "adaptive_confidence",
+          config: { coreWeight: 0.9, marketWeight: 0.1, confidencePenalty: 0.12, dynamicRisk: true },
+          isActive: false,
+          notes: "Guven skoru ve risk sinyaline gore agirlik ayarlar"
+        },
+        {
+          name: "market_assisted",
+          config: { coreWeight: 0.82, marketWeight: 0.18, disagreementPenalty: 0.16 },
+          isActive: false,
+          notes: "Piyasa sinyallerini yardimci katman olarak kullanir"
+        }
+      ]
+    });
+  }
+
+  private async ensureDefaultEnsembleConfigs() {
+    const defaults: Array<{ key: string; value: Prisma.InputJsonValue; description: string }> = [
+      {
+        key: "ensemble.coreModelWeight",
+        value: { value: 0.82, min: 0.5, max: 0.95 },
+        description: "Temel model olasiliklarinin nihai karardaki agirligi"
+      },
+      {
+        key: "ensemble.marketWeight",
+        value: { value: 0.18, min: 0.05, max: 0.4 },
+        description: "Piyasa sinyali katkisi (opsiyonel odds katmani)"
+      },
+      {
+        key: "ensemble.disagreementPenaltyWeight",
+        value: { value: 0.16, min: 0, max: 0.4 },
+        description: "Model-piyasa ayrismasinda guven dusurme katsayisi"
+      }
+    ];
+
+    for (const entry of defaults) {
+      await this.prisma.systemSetting.upsert({
+        where: { key: entry.key },
+        update: {},
+        create: {
+          key: entry.key,
+          value: entry.value,
+          description: entry.description
+        }
+      });
+    }
+  }
+
   private normalizeModelName(value: string | null | undefined) {
     if (!value || value.trim().length === 0) {
       return "prediction_pipeline";
@@ -118,6 +391,346 @@ export class AdminModelsController {
     };
   }
 
+  private asObject(value: unknown): Record<string, unknown> | null {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  private asNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  private avg(values: number[]) {
+    if (values.length === 0) {
+      return null;
+    }
+    return values.reduce((sum, item) => sum + item, 0) / values.length;
+  }
+
+  private std(values: number[]) {
+    if (values.length <= 1) {
+      return 0;
+    }
+    const mean = this.avg(values) ?? 0;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    return Math.sqrt(variance);
+  }
+
+  private round(value: number, digits = 4) {
+    const factor = 10 ** digits;
+    return Math.round(value * factor) / factor;
+  }
+
+  private clamp(value: number, min = 0, max = 1) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  private parseOutcomeProbabilities(
+    calibratedProbabilities: Prisma.JsonValue,
+    rawProbabilities: Prisma.JsonValue
+  ): { home: number; draw: number; away: number } | null {
+    const calibrated = this.asObject(calibratedProbabilities);
+    const raw = this.asObject(rawProbabilities);
+    const candidate = calibrated ?? raw;
+    if (!candidate) {
+      return null;
+    }
+
+    const home = this.asNumber(candidate.home);
+    const draw = this.asNumber(candidate.draw);
+    const away = this.asNumber(candidate.away);
+    if (home === null || draw === null || away === null) {
+      return null;
+    }
+
+    const sum = home + draw + away;
+    if (!Number.isFinite(sum) || sum <= 0) {
+      return null;
+    }
+
+    return {
+      home: this.round(home / sum, 6),
+      draw: this.round(draw / sum, 6),
+      away: this.round(away / sum, 6)
+    };
+  }
+
+  private outcomeFromScore(homeScore: number | null, awayScore: number | null): "home" | "draw" | "away" | null {
+    if (homeScore === null || awayScore === null) {
+      return null;
+    }
+    if (homeScore > awayScore) {
+      return "home";
+    }
+    if (homeScore < awayScore) {
+      return "away";
+    }
+    return "draw";
+  }
+
+  private buildPerformanceRowsFromPredictions(
+    rows: Array<{
+      id: string;
+      modelVersionId: string | null;
+      calibratedProbabilities: Prisma.JsonValue;
+      rawProbabilities: Prisma.JsonValue;
+      confidenceScore: number;
+      riskFlags: Prisma.JsonValue;
+      match: { homeScore: number | null; awayScore: number | null; matchDateTimeUTC: Date };
+    }>
+  ) {
+    const bucket = new Map<
+      string,
+      {
+        modelVersionId: string;
+        measuredAt: Date;
+        count: number;
+        correct: number;
+        brier: number;
+        logLoss: number;
+        confidence: number;
+        riskRateCount: number;
+      }
+    >();
+
+    for (const row of rows) {
+      if (!row.modelVersionId) {
+        continue;
+      }
+      const probabilities = this.parseOutcomeProbabilities(row.calibratedProbabilities, row.rawProbabilities);
+      if (!probabilities) {
+        continue;
+      }
+
+      const actual = this.outcomeFromScore(row.match.homeScore, row.match.awayScore);
+      if (!actual) {
+        continue;
+      }
+
+      const measuredAt = new Date(row.match.matchDateTimeUTC.toISOString().slice(0, 10));
+      const key = `${row.modelVersionId}|${measuredAt.toISOString()}`;
+      const current = bucket.get(key) ?? {
+        modelVersionId: row.modelVersionId,
+        measuredAt,
+        count: 0,
+        correct: 0,
+        brier: 0,
+        logLoss: 0,
+        confidence: 0,
+        riskRateCount: 0
+      };
+
+      const predicted =
+        probabilities.home >= probabilities.draw && probabilities.home >= probabilities.away
+          ? "home"
+          : probabilities.draw >= probabilities.home && probabilities.draw >= probabilities.away
+            ? "draw"
+            : "away";
+      const pHome = probabilities.home;
+      const pDraw = probabilities.draw;
+      const pAway = probabilities.away;
+      const oHome = actual === "home" ? 1 : 0;
+      const oDraw = actual === "draw" ? 1 : 0;
+      const oAway = actual === "away" ? 1 : 0;
+      const pActual = actual === "home" ? pHome : actual === "draw" ? pDraw : pAway;
+      const brier = ((pHome - oHome) ** 2 + (pDraw - oDraw) ** 2 + (pAway - oAway) ** 2) / 3;
+      const logLoss = -Math.log(Math.max(1e-6, pActual));
+      const riskFlags = Array.isArray(row.riskFlags) ? row.riskFlags : [];
+
+      current.count += 1;
+      current.correct += predicted === actual ? 1 : 0;
+      current.brier += brier;
+      current.logLoss += logLoss;
+      current.confidence += Number.isFinite(row.confidenceScore) ? row.confidenceScore : 0;
+      current.riskRateCount += riskFlags.length > 0 ? 1 : 0;
+
+      bucket.set(key, current);
+    }
+
+    return [...bucket.values()]
+      .map((item) => ({
+        id: `synthetic-${item.modelVersionId}-${item.measuredAt.toISOString().slice(0, 10)}`,
+        modelVersionId: item.modelVersionId,
+        measuredAt: item.measuredAt,
+        metrics: {
+          accuracy: this.round(item.correct / item.count),
+          brier: this.round(item.brier / item.count),
+          logLoss: this.round(item.logLoss / item.count),
+          avgConfidence: this.round(item.confidence / item.count),
+          riskRate: this.round(item.riskRateCount / item.count),
+          sampleSize: item.count
+        }
+      }))
+      .sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime());
+  }
+
+  private buildDriftRowsFromPerformanceRows(
+    rows: Array<{ id: string; modelVersionId: string; measuredAt: Date; metrics: Record<string, unknown> }>
+  ) {
+    const byModel = new Map<string, Array<{ id: string; modelVersionId: string; measuredAt: Date; metrics: Record<string, unknown> }>>();
+    for (const row of rows) {
+      const list = byModel.get(row.modelVersionId) ?? [];
+      list.push(row);
+      byModel.set(row.modelVersionId, list);
+    }
+
+    const driftRows: Array<{ id: string; modelVersionId: string; measuredAt: Date; metrics: Record<string, unknown> }> = [];
+    for (const [modelVersionId, series] of byModel.entries()) {
+      const sorted = series.sort((left, right) => left.measuredAt.getTime() - right.measuredAt.getTime());
+      for (let index = 0; index < sorted.length; index += 1) {
+        const row = sorted[index];
+        const windowStart = Math.max(0, index - 6);
+        const baseline = sorted.slice(windowStart, index);
+        const baselineAccuracy = this.avg(
+          baseline.map((item) => this.asNumber(item.metrics.accuracy)).filter((value): value is number => value !== null)
+        );
+        const baselineBrier = this.avg(
+          baseline.map((item) => this.asNumber(item.metrics.brier)).filter((value): value is number => value !== null)
+        );
+        const baselineLogLoss = this.avg(
+          baseline.map((item) => this.asNumber(item.metrics.logLoss)).filter((value): value is number => value !== null)
+        );
+
+        const currentAccuracy = this.asNumber(row.metrics.accuracy) ?? 0;
+        const currentBrier = this.asNumber(row.metrics.brier) ?? 0;
+        const currentLogLoss = this.asNumber(row.metrics.logLoss) ?? 0;
+        const accuracyDelta = baselineAccuracy === null ? 0 : currentAccuracy - baselineAccuracy;
+        const brierDelta = baselineBrier === null ? 0 : currentBrier - baselineBrier;
+        const logLossDelta = baselineLogLoss === null ? 0 : currentLogLoss - baselineLogLoss;
+        const driftScore = this.round(
+          (Math.abs(accuracyDelta) + Math.abs(brierDelta) + Math.abs(logLossDelta)) / 3
+        );
+
+        driftRows.push({
+          id: `drift-${row.id}`,
+          modelVersionId,
+          measuredAt: row.measuredAt,
+          metrics: {
+            ...row.metrics,
+            driftScore,
+            accuracyDelta: this.round(accuracyDelta),
+            brierDelta: this.round(brierDelta),
+            logLossDelta: this.round(logLossDelta)
+          }
+        });
+      }
+    }
+
+    return driftRows.sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime());
+  }
+
+  private buildFeatureImportanceRowsFromPredictions(
+    modelVersions: Array<{ id: string; modelName: string; version: string }>,
+    predictionRows: Array<{
+      modelVersionId: string | null;
+      confidenceScore: number;
+      expectedScore: Prisma.JsonValue;
+      calibratedProbabilities: Prisma.JsonValue;
+      rawProbabilities: Prisma.JsonValue;
+      riskFlags: Prisma.JsonValue;
+      updatedAt: Date;
+    }>
+  ) {
+    const rowsByModel = new Map<string, typeof predictionRows>();
+    for (const row of predictionRows) {
+      if (!row.modelVersionId) {
+        continue;
+      }
+      const list = rowsByModel.get(row.modelVersionId) ?? [];
+      list.push(row);
+      rowsByModel.set(row.modelVersionId, list);
+    }
+
+    return modelVersions
+      .map((model, index) => {
+        const rows = rowsByModel.get(model.id) ?? [];
+        if (rows.length === 0) {
+          return {
+            id: `synthetic-fi-empty-${model.id}-${index}`,
+            modelVersionId: model.id,
+            measuredAt: new Date(),
+            values: {
+              eloSignal: 0,
+              goalDynamics: 0,
+              confidenceStability: 0,
+              riskImpact: 0,
+              sampleSize: 0,
+              note: "yeterli_tahmin_verisi_yok"
+            }
+          };
+        }
+
+        const totalGoals = rows
+          .map((row) => {
+            const expected = this.asObject(row.expectedScore);
+            const home = this.asNumber(expected?.home);
+            const away = this.asNumber(expected?.away);
+            if (home === null || away === null) {
+              return null;
+            }
+            return home + away;
+          })
+          .filter((value): value is number => value !== null);
+
+        const outcomeGap = rows
+          .map((row) => {
+            const probabilities = this.parseOutcomeProbabilities(row.calibratedProbabilities, row.rawProbabilities);
+            if (!probabilities) {
+              return null;
+            }
+            return Math.abs(probabilities.home - probabilities.away);
+          })
+          .filter((value): value is number => value !== null);
+
+        const confidenceSeries = rows
+          .map((row) => (Number.isFinite(row.confidenceScore) ? row.confidenceScore : null))
+          .filter((value): value is number => value !== null);
+        const riskRate =
+          rows.filter((row) => (Array.isArray(row.riskFlags) ? row.riskFlags.length > 0 : false)).length / rows.length;
+        const avgGoals = this.avg(totalGoals) ?? 2.2;
+        const avgGap = this.avg(outcomeGap) ?? 0.2;
+        const confidenceStability = this.clamp(1 - this.std(confidenceSeries) / 0.25);
+        const goalDynamics = this.clamp(avgGoals / 3.8);
+        const eloSignal = this.clamp(avgGap / 0.65);
+        const riskImpact = this.clamp(riskRate);
+
+        return {
+          id: `synthetic-fi-${model.id}-${index}`,
+          modelVersionId: model.id,
+          measuredAt: rows[0]?.updatedAt ?? new Date(),
+          values: {
+            eloSignal: this.round(eloSignal),
+            goalDynamics: this.round(goalDynamics),
+            confidenceStability: this.round(confidenceStability),
+            riskImpact: this.round(riskImpact),
+            sampleSize: rows.length
+          }
+        };
+      })
+      .sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime());
+  }
+
   private comparedWithFromJson(
     value: Prisma.JsonValue | null,
     modelById: Map<string, { id: string; modelName: string; version: string }>
@@ -156,19 +769,9 @@ export class AdminModelsController {
 
   @Get()
   async modelsInventory() {
-    const [modelVersions, performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionCounts, predictionMetaRows] =
+    const modelVersions = await this.modelVersionsForInventory();
+    const [performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionCounts, predictionMetaRows] =
       await Promise.all([
-      this.prisma.modelVersion.findMany({
-        orderBy: [{ active: "desc" }, { createdAt: "desc" }],
-        select: {
-          id: true,
-          modelName: true,
-          version: true,
-          active: true,
-          trainingWindow: true,
-          createdAt: true
-        }
-      }),
       this.prisma.modelPerformanceTimeseries.findMany({
         orderBy: { measuredAt: "desc" },
         select: { modelVersionId: true, measuredAt: true, metrics: true }
@@ -324,11 +927,8 @@ export class AdminModelsController {
 
   @Get("comparison")
   async comparison() {
-    const [modelVersions, snapshots, performanceRows] = await Promise.all([
-      this.prisma.modelVersion.findMany({
-        orderBy: [{ active: "desc" }, { createdAt: "desc" }],
-        select: { id: true, modelName: true, version: true, active: true, createdAt: true }
-      }),
+    const modelVersions = await this.modelVersionsForComparison();
+    const [snapshots, performanceRows] = await Promise.all([
       this.prisma.modelComparisonSnapshot.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
       this.prisma.modelPerformanceTimeseries.findMany({
         orderBy: { measuredAt: "desc" },
@@ -496,18 +1096,175 @@ export class AdminModelsController {
   }
 
   @Get("feature-importance")
-  featureImportance() {
-    return this.prisma.featureImportanceSnapshot.findMany({ orderBy: { measuredAt: "desc" }, take: 30 });
+  async featureImportance() {
+    await this.ensureModelRegistry();
+    const rows = await this.prisma.featureImportanceSnapshot.findMany({ orderBy: { measuredAt: "desc" }, take: 30 });
+    if (rows.length > 0) {
+      return rows;
+    }
+
+    const [modelVersions, predictionRows] = await Promise.all([
+      this.prisma.modelVersion.findMany({
+        select: { id: true, modelName: true, version: true },
+        orderBy: [{ active: "desc" }, { createdAt: "desc" }]
+      }),
+      this.prisma.prediction.findMany({
+        where: { modelVersionId: { not: null } },
+        select: {
+          modelVersionId: true,
+          confidenceScore: true,
+          expectedScore: true,
+          calibratedProbabilities: true,
+          rawProbabilities: true,
+          riskFlags: true,
+          updatedAt: true
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 12000
+      })
+    ]);
+
+    const syntheticRows = this.buildFeatureImportanceRowsFromPredictions(modelVersions, predictionRows);
+    if (syntheticRows.length > 0) {
+      return syntheticRows;
+    }
+
+    return modelVersions.map((model, index) => ({
+      id: `synthetic-fi-empty-${model.id}-${index}`,
+      modelVersionId: model.id,
+      measuredAt: new Date(),
+      values: {
+        eloSignal: 0,
+        goalDynamics: 0,
+        confidenceStability: 0,
+        riskImpact: 0,
+        sampleSize: 0,
+        note: "yeterli_tahmin_verisi_yok"
+      }
+    }));
   }
 
   @Get("performance-timeseries")
-  performance() {
-    return this.prisma.modelPerformanceTimeseries.findMany({ orderBy: { measuredAt: "desc" }, take: 200 });
+  async performance() {
+    await this.ensureModelRegistry();
+    const rows = await this.prisma.modelPerformanceTimeseries.findMany({ orderBy: { measuredAt: "desc" }, take: 200 });
+    if (rows.length > 0) {
+      return rows;
+    }
+
+    const syntheticBaseRows = await this.prisma.prediction.findMany({
+      where: {
+        modelVersionId: { not: null },
+        match: {
+          homeScore: { not: null },
+          awayScore: { not: null }
+        }
+      },
+      select: {
+        id: true,
+        modelVersionId: true,
+        calibratedProbabilities: true,
+        rawProbabilities: true,
+        confidenceScore: true,
+        riskFlags: true,
+        match: {
+          select: {
+            homeScore: true,
+            awayScore: true,
+            matchDateTimeUTC: true
+          }
+        }
+      },
+      orderBy: { match: { matchDateTimeUTC: "desc" } },
+      take: 30000
+    });
+
+    const syntheticRows = this.buildPerformanceRowsFromPredictions(syntheticBaseRows).slice(0, 200);
+    if (syntheticRows.length > 0) {
+      return syntheticRows;
+    }
+
+    const proxyBaseRows = await this.prisma.prediction.findMany({
+      where: { modelVersionId: { not: null } },
+      select: {
+        id: true,
+        modelVersionId: true,
+        confidenceScore: true,
+        riskFlags: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: "desc" },
+      take: 30000
+    });
+
+    return this.buildOperationalPerformanceRows(proxyBaseRows).slice(0, 200);
   }
 
   @Get("drift-summary")
-  driftSummary() {
-    return this.prisma.modelPerformanceTimeseries.findMany({ orderBy: { measuredAt: "desc" }, take: 20 });
+  async driftSummary() {
+    await this.ensureModelRegistry();
+    const rows = await this.prisma.modelPerformanceTimeseries.findMany({ orderBy: { measuredAt: "desc" }, take: 20 });
+    if (rows.length > 0) {
+      return rows;
+    }
+
+    const syntheticBaseRows = await this.prisma.prediction.findMany({
+      where: {
+        modelVersionId: { not: null },
+        match: {
+          homeScore: { not: null },
+          awayScore: { not: null }
+        }
+      },
+      select: {
+        id: true,
+        modelVersionId: true,
+        calibratedProbabilities: true,
+        rawProbabilities: true,
+        confidenceScore: true,
+        riskFlags: true,
+        match: {
+          select: {
+            homeScore: true,
+            awayScore: true,
+            matchDateTimeUTC: true
+          }
+        }
+      },
+      orderBy: { match: { matchDateTimeUTC: "desc" } },
+      take: 30000
+    });
+
+    let performanceRows = this.buildPerformanceRowsFromPredictions(syntheticBaseRows).map((row) => ({
+      id: row.id,
+      modelVersionId: row.modelVersionId,
+      measuredAt: row.measuredAt,
+      metrics: this.asObject(row.metrics) ?? {}
+    }));
+
+    if (performanceRows.length === 0) {
+      const proxyBaseRows = await this.prisma.prediction.findMany({
+        where: { modelVersionId: { not: null } },
+        select: {
+          id: true,
+          modelVersionId: true,
+          confidenceScore: true,
+          riskFlags: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 30000
+      });
+
+      performanceRows = this.buildOperationalPerformanceRows(proxyBaseRows).map((row) => ({
+        id: row.id,
+        modelVersionId: row.modelVersionId,
+        measuredAt: row.measuredAt,
+        metrics: this.asObject(row.metrics) ?? {}
+      }));
+    }
+
+    return this.buildDriftRowsFromPerformanceRows(performanceRows).slice(0, 20);
   }
 
   @Get("market-performance")
@@ -560,12 +1317,14 @@ export class AdminModelsController {
   }
 
   @Get("strategies")
-  strategies() {
+  async strategies() {
+    await this.ensureDefaultStrategies();
     return this.prisma.modelStrategy.findMany({ orderBy: { updatedAt: "desc" } });
   }
 
   @Post("strategies/auto-select")
   async autoSelect() {
+    await this.ensureDefaultStrategies();
     const latest = await this.prisma.modelStrategy.findFirst({ orderBy: { updatedAt: "desc" } });
     if (!latest) {
       return { selectedStrategyId: null };
@@ -582,7 +1341,8 @@ export class AdminModelsController {
   }
 
   @Get("ensemble-configs")
-  ensembleConfigs() {
+  async ensembleConfigs() {
+    await this.ensureDefaultEnsembleConfigs();
     return this.prisma.systemSetting.findMany({ where: { key: { contains: "ensemble" } } });
   }
 
