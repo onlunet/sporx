@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ADMIN_ACCESS_COOKIE_NAME, ADMIN_REFRESH_COOKIE_NAME, INTERNAL_API_URL } from "../../../../src/auth/admin-session";
+import { buildExternalUrl } from "../../../../src/server/request-url";
 
 export async function POST(request: NextRequest) {
   const refreshToken = request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)?.value;
@@ -17,7 +18,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const url = new URL("/admin/login", request.url);
+  const url = buildExternalUrl(request, "/admin/login");
   url.searchParams.set("loggedOut", "1");
 
   const redirect = NextResponse.redirect(url, { status: 303 });

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { INTERNAL_API_URL } from "../../../../../src/auth/admin-session";
+import { buildExternalUrl } from "../../../../../src/server/request-url";
 import { applySessionRefreshCookies, clearSessionCookies, resolveAdminSession } from "../../_lib/session";
 
 function safeNextPath(request: NextRequest, fallback: string) {
@@ -11,7 +12,7 @@ function safeNextPath(request: NextRequest, fallback: string) {
 }
 
 function redirectWithState(request: NextRequest, path: string, params: Record<string, string>) {
-  const url = new URL(path, request.url);
+  const url = buildExternalUrl(request, path);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
@@ -48,4 +49,3 @@ export async function POST(request: NextRequest) {
   applySessionRefreshCookies(response, request, session);
   return response;
 }
-

@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ADMIN_ACCESS_COOKIE_NAME,
   ADMIN_REFRESH_COOKIE_NAME,
-  isSecureRequest,
   refreshAdminTokens,
   validateAdminAccessToken
 } from "./src/auth/admin-session";
+import { buildExternalUrl, isSecureExternalRequest } from "./src/server/request-url";
 
 const LOGIN_PATH = "/admin/login";
 const DASHBOARD_PATH = "/admin/dashboard";
@@ -43,14 +43,14 @@ export async function middleware(request: NextRequest) {
   }
 
   const isLoginPage = request.nextUrl.pathname === LOGIN_PATH;
-  const secure = isSecureRequest(request.nextUrl.protocol);
+  const secure = isSecureExternalRequest(request);
   const accessToken = request.cookies.get(ADMIN_ACCESS_COOKIE_NAME)?.value;
   const refreshToken = request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)?.value;
   const auth = await validateAdminAccessToken(accessToken);
 
   if (auth.ok) {
     if (isLoginPage) {
-      return NextResponse.redirect(new URL(buildSafeAdminTarget(request), request.url));
+      return NextResponse.redirect(buildExternalUrl(request, buildSafeAdminTarget(request)));
     }
 
     const headers = new Headers(request.headers);
@@ -67,7 +67,9 @@ export async function middleware(request: NextRequest) {
 
   const refreshed = await refreshAdminTokens(refreshToken);
   if (refreshed) {
-    const destination = isLoginPage ? new URL(buildSafeAdminTarget(request), request.url) : new URL(request.nextUrl.pathname + request.nextUrl.search, request.url);
+    const destination = isLoginPage
+      ? buildExternalUrl(request, buildSafeAdminTarget(request))
+      : buildExternalUrl(request, `${request.nextUrl.pathname}${request.nextUrl.search}`);
     const response = NextResponse.redirect(destination);
     setSessionCookies(response, refreshed.accessToken, refreshed.refreshToken, secure);
     return response;
@@ -79,7 +81,7 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  const loginUrl = new URL(LOGIN_PATH, request.url);
+  const loginUrl = buildExternalUrl(request, LOGIN_PATH);
   loginUrl.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`);
   const response = NextResponse.redirect(loginUrl);
   clearSessionCookies(response);
@@ -89,4 +91,3 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: ["/admin/:path*"]
 };
-

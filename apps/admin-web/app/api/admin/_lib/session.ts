@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ADMIN_ACCESS_COOKIE_NAME,
   ADMIN_REFRESH_COOKIE_NAME,
-  isSecureRequest,
   refreshAdminTokens,
   validateAdminAccessToken
 } from "../../../../src/auth/admin-session";
+import { isSecureExternalRequest } from "../../../../src/server/request-url";
 
 export type AdminSessionState =
   | {
@@ -53,7 +53,7 @@ export function applySessionRefreshCookies(response: NextResponse, request: Next
     return;
   }
 
-  const secure = isSecureRequest(request.nextUrl.protocol);
+  const secure = isSecureExternalRequest(request);
   response.cookies.set(ADMIN_ACCESS_COOKIE_NAME, session.accessToken, {
     httpOnly: true,
     secure,

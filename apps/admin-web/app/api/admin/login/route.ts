@@ -4,8 +4,8 @@ import {
   ADMIN_ALLOWED_ROLES,
   ADMIN_REFRESH_COOKIE_NAME,
   INTERNAL_API_URL,
-  isSecureRequest
 } from "../../../../src/auth/admin-session";
+import { buildExternalUrl, isSecureExternalRequest } from "../../../../src/server/request-url";
 
 function sanitizeNextPath(value: string | null): string {
   if (!value || !value.startsWith("/admin") || value.startsWith("/admin/login")) {
@@ -15,7 +15,7 @@ function sanitizeNextPath(value: string | null): string {
 }
 
 function buildLoginRedirect(request: NextRequest, nextPath: string, errorCode: string) {
-  const url = new URL("/admin/login", request.url);
+  const url = buildExternalUrl(request, "/admin/login");
   url.searchParams.set("next", nextPath);
   url.searchParams.set("error", errorCode);
   return NextResponse.redirect(url, { status: 303 });
@@ -54,9 +54,9 @@ export async function POST(request: NextRequest) {
     return buildLoginRedirect(request, nextPath, "unauthorized_role");
   }
 
-  const destination = new URL(nextPath, request.url);
+  const destination = buildExternalUrl(request, nextPath);
   const redirect = NextResponse.redirect(destination, { status: 303 });
-  const secure = isSecureRequest(request.nextUrl.protocol);
+  const secure = isSecureExternalRequest(request);
 
   redirect.cookies.set(ADMIN_ACCESS_COOKIE_NAME, accessToken, {
     httpOnly: true,
