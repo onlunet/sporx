@@ -3,10 +3,13 @@ import { MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { expandPredictionMarkets } from "./prediction-markets.util";
+import { OddsService } from "../odds/odds.service";
 
 type ListPredictionsParams = {
   status?: string;
   predictionType?: string;
+  line?: number;
+  includeMarketAnalysis?: boolean;
 };
 
 const MATCH_STATUS_SET = new Set<MatchStatus>([
@@ -57,19 +60,34 @@ function parsePredictionType(input?: string): string | undefined {
   return PREDICTION_TYPE_SET.has(normalized) ? normalized : undefined;
 }
 
+function parseLine(input?: number) {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(input)) {
+    return undefined;
+  }
+  return Number(input.toFixed(2));
+}
+
 @Injectable()
 export class PredictionsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cache: CacheService
+    private readonly cache: CacheService,
+    private readonly oddsService: OddsService
   ) {}
 
   async list(params?: ListPredictionsParams) {
     const statuses = parseStatusFilter(params?.status);
     const predictionType = parsePredictionType(params?.predictionType);
+    const line = parseLine(params?.line);
+    const includeMarketAnalysis = params?.includeMarketAnalysis === true;
     const statusKey = statuses?.join("|") ?? "all";
     const typeKey = predictionType ?? "all";
-    const cacheKey = `predictions:list:v5:${statusKey}:${typeKey}`;
+    const lineKey = line === undefined ? "all" : String(line);
+    const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
+    const cacheKey = `predictions:list:v6:${statusKey}:${typeKey}:${lineKey}:${analysisKey}`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
@@ -112,8 +130,11 @@ export class PredictionsService {
       ? expanded.filter((item) => item.predictionType === predictionType)
       : expanded;
 
-    await this.cache.set(cacheKey, payload, 20, ["predictions"]);
-    return payload;
+    const lineFiltered = line === undefined ? payload : payload.filter((item) => item.line === line);
+    const enriched = await this.oddsService.attachMarketAnalysis(lineFiltered, includeMarketAnalysis, line);
+
+    await this.cache.set(cacheKey, enriched, 20, ["predictions", "market-analysis"]);
+    return enriched;
   }
 
   highConfidence() {

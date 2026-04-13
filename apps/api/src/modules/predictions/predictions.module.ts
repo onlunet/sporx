@@ -7,8 +7,10 @@ import { AdvancedEloService } from "./advanced-elo.service";
 import { DynamicLambdaService } from "./dynamic-lambda.service";
 import { DixonColesService } from "./dixon-coles.service";
 import { AdvancedPredictionEngineService } from "./advanced-prediction-engine.service";
+import { OddsModule } from "../odds/odds.module";
 
 @Module({
+  imports: [OddsModule],
   controllers: [PredictionsController],
   providers: [
     PredictionsService,

@@ -30,17 +30,42 @@ export class MatchesController {
   }
 
   @Get(":id/prediction")
-  prediction(@Param("id") id: string) {
-    return this.matchesService.prediction(id);
+  prediction(
+    @Param("id") id: string,
+    @Query("predictionType") predictionType?: string,
+    @Query("line") line?: string,
+    @Query("includeMarketAnalysis") includeMarketAnalysis?: string
+  ) {
+    const parsedLine = line === undefined ? undefined : Number(line);
+    const includeMarket = includeMarketAnalysis === "true" || includeMarketAnalysis === "1";
+    return this.matchesService.prediction(
+      id,
+      predictionType,
+      Number.isFinite(parsedLine) ? parsedLine : undefined,
+      includeMarket
+    );
   }
 
   @Get(":id/predictions")
-  predictions(@Param("id") id: string) {
-    return this.matchesService.predictions(id);
+  predictions(
+    @Param("id") id: string,
+    @Query("predictionType") predictionType?: string,
+    @Query("line") line?: string,
+    @Query("includeMarketAnalysis") includeMarketAnalysis?: string
+  ) {
+    const parsedLine = line === undefined ? undefined : Number(line);
+    const includeMarket = includeMarketAnalysis === "true" || includeMarketAnalysis === "1";
+    return this.matchesService.predictions(
+      id,
+      predictionType,
+      Number.isFinite(parsedLine) ? parsedLine : undefined,
+      includeMarket
+    );
   }
 
   @Get(":id/commentary")
-  commentary(@Param("id") id: string) {
-    return this.matchesService.commentary(id);
+  commentary(@Param("id") id: string, @Query("includeMarketAnalysis") includeMarketAnalysis?: string) {
+    const includeMarket = includeMarketAnalysis === "true" || includeMarketAnalysis === "1";
+    return this.matchesService.commentary(id, includeMarket);
   }
 }

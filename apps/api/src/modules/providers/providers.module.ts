@@ -11,9 +11,12 @@ import { PredictionsModule } from "../predictions/predictions.module";
 import { OpenMeteoConnector } from "./open-meteo.connector";
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
 import { SportApiConnector } from "./sport-api.connector";
+import { OddsApiIoConnector } from "./odds-api-io.connector";
+import { OddsIngestionService } from "./odds-ingestion.service";
+import { OddsModule } from "../odds/odds.module";
 
 @Module({
-  imports: [PredictionsModule],
+  imports: [PredictionsModule, OddsModule],
   providers: [
     ProvidersService,
     FootballDataConnector,
@@ -23,8 +26,10 @@ import { SportApiConnector } from "./sport-api.connector";
     ApiBasketballConnector,
     ApiNbaConnector,
     SportApiConnector,
+    OddsApiIoConnector,
     OpenMeteoConnector,
     MatchContextEnrichmentService,
+    OddsIngestionService,
     ProviderIngestionService
   ],
   exports: [
@@ -36,8 +41,10 @@ import { SportApiConnector } from "./sport-api.connector";
     ApiBasketballConnector,
     ApiNbaConnector,
     SportApiConnector,
+    OddsApiIoConnector,
     OpenMeteoConnector,
     MatchContextEnrichmentService,
+    OddsIngestionService,
     ProviderIngestionService
   ]
 })

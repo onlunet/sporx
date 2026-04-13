@@ -10,6 +10,7 @@ import { ApiBasketballConnector } from "./api-basketball.connector";
 import { ApiNbaConnector } from "./api-nba.connector";
 import { SportApiConnector } from "./sport-api.connector";
 import { ProvidersService } from "./providers.service";
+import { OddsIngestionService } from "./odds-ingestion.service";
 import { PredictionEngineService } from "../predictions/prediction-engine.service";
 import { AdvancedPredictionEngineService } from "../predictions/advanced-prediction-engine.service";
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
@@ -98,6 +99,7 @@ export class ProviderIngestionService {
     private readonly apiBasketballConnector: ApiBasketballConnector,
     private readonly apiNbaConnector: ApiNbaConnector,
     private readonly sportApiConnector: SportApiConnector,
+    private readonly oddsIngestionService: OddsIngestionService,
     private readonly predictionEngine: PredictionEngineService,
     private readonly advancedPredictionEngine: AdvancedPredictionEngineService,
     private readonly matchContextEnrichment: MatchContextEnrichmentService
@@ -110,6 +112,10 @@ export class ProviderIngestionService {
       "syncStandings",
       "syncLeagues",
       "syncTeams",
+      "syncOddsPreMatch",
+      "syncOddsLive",
+      "syncOddsClosing",
+      "generateMarketAnalysis",
       ...ENRICHMENT_JOB_TYPES
     ].includes(jobType);
   }
@@ -475,6 +481,9 @@ export class ProviderIngestionService {
           results.push(await this.syncApiNba(provider, runId, jobType));
         } else if (provider.key === "sportapi_ai") {
           results.push(await this.syncSportApi(provider, runId, jobType));
+        } else if (provider.key === "odds_api_io") {
+          const settings = await this.providersService.getProviderRuntimeSettings(provider.key);
+          results.push(await this.oddsIngestionService.sync(provider, settings, runId, jobType));
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "unknown provider ingestion error";

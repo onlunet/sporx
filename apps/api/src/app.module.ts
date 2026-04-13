@@ -29,6 +29,7 @@ import { StrategyModule } from "./modules/strategy/strategy.module";
 import { LogsModule } from "./modules/logs/logs.module";
 import { SystemModule } from "./modules/system/system.module";
 import { HealthModule } from "./modules/health/health.module";
+import { OddsModule } from "./modules/odds/odds.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { CacheModule } from "./cache/cache.module";
 
@@ -69,7 +70,8 @@ import { CacheModule } from "./cache/cache.module";
     StrategyModule,
     LogsModule,
     SystemModule,
-    HealthModule
+    HealthModule,
+    OddsModule
   ]
 })
 export class AppModule {}

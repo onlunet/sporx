@@ -9,6 +9,10 @@ type JobType =
   | "syncStandings"
   | "generatePredictions"
   | "providerHealthCheck"
+  | "syncOddsPreMatch"
+  | "syncOddsLive"
+  | "syncOddsClosing"
+  | "generateMarketAnalysis"
   | "resolveProviderAliases"
   | "enrichTeamProfiles"
   | "enrichMatchDetails";
@@ -18,6 +22,10 @@ const JOB_TYPES: JobType[] = [
   "syncStandings",
   "generatePredictions",
   "providerHealthCheck",
+  "syncOddsPreMatch",
+  "syncOddsLive",
+  "syncOddsClosing",
+  "generateMarketAnalysis",
   "resolveProviderAliases",
   "enrichTeamProfiles",
   "enrichMatchDetails"
@@ -93,6 +101,10 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       await this.ensureRecentRun("syncStandings", standingsMinutes, reason === "startup");
       await this.ensureRecentRun("generatePredictions", syncEveryMinutes, reason === "startup");
       await this.ensureRecentRun("providerHealthCheck", 30, reason === "startup");
+      await this.ensureRecentRun("syncOddsPreMatch", 30, reason === "startup");
+      await this.ensureRecentRun("syncOddsLive", 5, reason === "startup");
+      await this.ensureRecentRun("syncOddsClosing", 20, reason === "startup");
+      await this.ensureRecentRun("generateMarketAnalysis", 20, reason === "startup");
       await this.ensureRecentRun("resolveProviderAliases", aliasSyncMinutes, reason === "startup");
       await this.ensureRecentRun("enrichTeamProfiles", teamProfileMinutes, reason === "startup");
       await this.ensureRecentRun("enrichMatchDetails", detailMinutes, reason === "startup");

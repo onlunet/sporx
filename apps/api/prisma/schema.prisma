@@ -188,6 +188,9 @@ model Match {
   prediction             Prediction?
   featureSnapshots       MatchFeatureSnapshot[]
   providerMappings       ProviderMatchMapping[]
+  oddsSnapshots          OddsSnapshot[]
+  oddsMappings           MatchOddsMapping[]
+  marketAnalysisSnapshots MarketAnalysisSnapshot[]
   teamComparisonCache    TeamComparisonCache[]
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
@@ -457,6 +460,8 @@ model Provider {
   teamMappings    ProviderTeamMapping[]
   leagueMappings  ProviderLeagueMapping[]
   matchMappings   ProviderMatchMapping[]
+  oddsSnapshots   OddsSnapshot[]
+  oddsMappings    MatchOddsMapping[]
   jobs            IngestionJob[]
   createdAt       DateTime               @default(now())
 }
@@ -506,6 +511,64 @@ model ProviderMatchMapping {
   match             Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
 
   @@unique([providerId, providerMatchKey])
+}
+
+model MatchOddsMapping {
+  id               String   @id @default(uuid())
+  providerId       String
+  matchId          String
+  providerMatchKey String
+  mappingConfidence Float?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  provider         Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  match            Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, providerMatchKey])
+  @@unique([providerId, matchId])
+}
+
+model OddsSnapshot {
+  id                 String   @id @default(uuid())
+  matchId            String
+  providerId         String
+  bookmaker          String
+  marketType         String
+  selectionKey       String
+  line               Float?
+  oddsValue          Float
+  impliedProbability Float
+  fairProbability    Float?
+  capturedAt         DateTime
+  isOpening          Boolean  @default(false)
+  isClosingCandidate Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  match              Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  provider           Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, marketType, line, capturedAt])
+  @@index([providerId, capturedAt])
+  @@index([marketType, selectionKey, line])
+}
+
+model MarketAnalysisSnapshot {
+  id                       String   @id @default(uuid())
+  matchId                  String
+  predictionType           String
+  marketLine               Float?
+  modelProbability         Float
+  marketImpliedProbability Float
+  fairMarketProbability    Float?
+  probabilityGap           Float
+  movementDirection        String?
+  volatilityScore          Float?
+  consensusScore           Float?
+  contradictionScore       Float?
+  createdAt                DateTime @default(now())
+  match                    Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, predictionType, marketLine, createdAt])
+  @@index([predictionType, marketLine, createdAt])
 }
 
 model IngestionJob {

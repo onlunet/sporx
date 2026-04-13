@@ -7,6 +7,7 @@ import { ApiFootballConnector } from "./api-football.connector";
 import { ApiBasketballConnector } from "./api-basketball.connector";
 import { ApiNbaConnector } from "./api-nba.connector";
 import { SportApiConnector } from "./sport-api.connector";
+import { OddsApiIoConnector } from "./odds-api-io.connector";
 
 type ProviderPlan = "free" | "paid" | "local";
 
@@ -49,6 +50,10 @@ type ProviderRuntimeSettings = {
   standingsLeagueIds?: string[];
   matchDetailsMaxMatches?: number;
   enrichmentEnabled?: boolean;
+  oddsSport?: string;
+  oddsBookmakers?: string;
+  oddsLeague?: string;
+  oddsLimit?: number;
 };
 
 const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
@@ -165,6 +170,23 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     }
   },
   {
+    key: "odds_api_io",
+    name: "Odds-API.io",
+    plan: "paid",
+    supportsSports: ["football", "basketball"],
+    defaultEnabled: false,
+    requiresApiKey: true,
+    defaultBaseUrl: "https://api.odds-api.io/v3",
+    description: "Piyasa oran ve hareket verisi sağlayıcısı.",
+    website: "https://odds-api.io/",
+    defaultConfigs: {
+      oddsSport: "football",
+      oddsBookmakers: "Bet365,Unibet,SingBet",
+      oddsLimit: "60",
+      dailyLimit: "1000"
+    }
+  },
+  {
     key: "historical_csv",
     name: "Historical CSV",
     plan: "local",
@@ -186,7 +208,8 @@ export class ProvidersService {
     private readonly apiFootballConnector: ApiFootballConnector,
     private readonly apiBasketballConnector: ApiBasketballConnector,
     private readonly apiNbaConnector: ApiNbaConnector,
-    private readonly sportApiConnector: SportApiConnector
+    private readonly sportApiConnector: SportApiConnector,
+    private readonly oddsApiIoConnector: OddsApiIoConnector
   ) {}
 
   private providerMeta(key: string) {
@@ -260,6 +283,9 @@ export class ProvidersService {
     }
     if (providerKey === "sportapi_ai") {
       return process.env.SPORTAPI_AI_API_KEY;
+    }
+    if (providerKey === "odds_api_io") {
+      return process.env.ODDS_API_IO_API_KEY;
     }
     return undefined;
   }
@@ -340,7 +366,11 @@ export class ProvidersService {
       syncDaysAhead: this.toInt(configs.syncDaysAhead),
       standingsLeagueIds: this.toStringList(configs.standingsLeagueIds),
       matchDetailsMaxMatches: this.toInt(configs.matchDetailsMaxMatches),
-      enrichmentEnabled: this.toBool(configs.enrichmentEnabled)
+      enrichmentEnabled: this.toBool(configs.enrichmentEnabled),
+      oddsSport: configs.oddsSport,
+      oddsBookmakers: configs.oddsBookmakers,
+      oddsLeague: configs.oddsLeague,
+      oddsLimit: this.toInt(configs.oddsLimit)
     };
   }
 
@@ -541,6 +571,8 @@ export class ProvidersService {
           health = await this.apiNbaConnector.ping(apiKey, provider.baseUrl ?? undefined);
         } else if (provider.key === "sportapi_ai") {
           health = await this.sportApiConnector.ping(apiKey, provider.baseUrl ?? undefined);
+        } else if (provider.key === "odds_api_io") {
+          health = await this.oddsApiIoConnector.ping(apiKey, provider.baseUrl ?? undefined);
         }
 
         const latencyMs = Date.now() - startedAt;

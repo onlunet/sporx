@@ -63,7 +63,9 @@ export class IngestionQueueService {
           this.cache.invalidateTag("predictions"),
           this.cache.invalidateTag("standings"),
           this.cache.invalidateTag("dashboard"),
-          this.cache.invalidateTag("compare")
+          this.cache.invalidateTag("compare"),
+          this.cache.invalidateTag("odds"),
+          this.cache.invalidateTag("market-analysis")
         ]);
       },
       { connection: { url }, concurrency: 4 }

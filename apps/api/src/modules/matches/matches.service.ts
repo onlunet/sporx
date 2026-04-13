@@ -3,6 +3,7 @@ import { MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { expandPredictionMarkets } from "../predictions/prediction-markets.util";
+import { OddsService } from "../odds/odds.service";
 
 type ListMatchesParams = {
   status?: string;
@@ -48,7 +49,8 @@ function normalizeTake(take?: number): number {
 export class MatchesService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cache: CacheService
+    private readonly cache: CacheService,
+    private readonly oddsService: OddsService
   ) {}
 
   async list(params?: ListMatchesParams) {
@@ -103,7 +105,7 @@ export class MatchesService {
     return this.prisma.teamStat.findMany({ where: { matchId: id }, include: { team: true } });
   }
 
-  async prediction(id: string) {
+  async prediction(id: string, predictionType?: string, line?: number, includeMarketAnalysis = false) {
     const prediction = await this.prisma.prediction.findUnique({
       where: { matchId: id },
       include: {
@@ -144,10 +146,20 @@ export class MatchesService {
       }
     });
 
-    return expanded.find((item) => item.predictionType === "fullTimeResult") ?? expanded[0] ?? null;
+    const lineNormalized = line !== undefined && Number.isFinite(line) ? Number(line.toFixed(2)) : undefined;
+    const filteredByType = predictionType
+      ? expanded.filter((item) => item.predictionType === predictionType)
+      : expanded;
+    const filtered = lineNormalized === undefined ? filteredByType : filteredByType.filter((item) => item.line === lineNormalized);
+    const enriched = await this.oddsService.attachMarketAnalysis(filtered, includeMarketAnalysis, lineNormalized);
+
+    if (predictionType) {
+      return enriched[0] ?? null;
+    }
+    return enriched.find((item) => item.predictionType === "fullTimeResult") ?? enriched[0] ?? null;
   }
 
-  async predictions(id: string) {
+  async predictions(id: string, predictionType?: string, line?: number, includeMarketAnalysis = false) {
     const prediction = await this.prisma.prediction.findUnique({
       where: { matchId: id },
       include: {
@@ -164,7 +176,7 @@ export class MatchesService {
       return [];
     }
 
-    return expandPredictionMarkets({
+    const expanded = expandPredictionMarkets({
       matchId: prediction.matchId,
       modelVersionId: prediction.modelVersionId,
       probabilities: prediction.probabilities,
@@ -187,10 +199,17 @@ export class MatchesService {
         halfTimeAwayScore: prediction.match.halfTimeAwayScore
       }
     });
+
+    const lineNormalized = line !== undefined && Number.isFinite(line) ? Number(line.toFixed(2)) : undefined;
+    const filteredByType = predictionType
+      ? expanded.filter((item) => item.predictionType === predictionType)
+      : expanded;
+    const filtered = lineNormalized === undefined ? filteredByType : filteredByType.filter((item) => item.line === lineNormalized);
+    return this.oddsService.attachMarketAnalysis(filtered, includeMarketAnalysis, lineNormalized);
   }
 
-  async commentary(id: string) {
-    const prediction = await this.predictions(id);
+  async commentary(id: string, includeMarketAnalysis = false) {
+    const prediction = await this.predictions(id, undefined, undefined, includeMarketAnalysis);
     const primary =
       prediction.find((item) => item.predictionType === "fullTimeResult") ??
       prediction.find((item) => item.predictionType === "bothTeamsToScore") ??
