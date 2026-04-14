@@ -5,6 +5,7 @@ import { ApiResponseInterceptor } from "./common/interceptors/api-response.inter
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { CacheService } from "./cache/cache.service";
 import { createRateLimitMiddleware } from "./common/middleware/rate-limit.middleware";
+import { IngestionQueueService } from "./modules/ingestion/ingestion-queue.service";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -37,9 +38,14 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ApiResponseInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
 
+  const embedWorkerInApi = (process.env.EMBED_WORKER_IN_API ?? "true").toLowerCase() === "true";
+  if (embedWorkerInApi) {
+    const ingestionQueue = app.get(IngestionQueueService);
+    await ingestionQueue.startWorker();
+  }
+
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port);
 }
 
 bootstrap();
-

@@ -9,6 +9,7 @@ import { ProviderIngestionService } from "../providers/provider-ingestion.servic
 @Injectable()
 export class IngestionQueueService {
   private readonly logger = new Logger(IngestionQueueService.name);
+  private workerStarted = false;
 
   constructor(
     @InjectQueue("ingestion") private readonly ingestionQueue: Queue,
@@ -30,6 +31,11 @@ export class IngestionQueueService {
   }
 
   async startWorker() {
+    if (this.workerStarted) {
+      return;
+    }
+    this.workerStarted = true;
+
     const url = process.env.REDIS_URL ?? "redis://localhost:6379";
     const worker = new Worker(
       "ingestion",
