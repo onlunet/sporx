@@ -18,8 +18,7 @@ export function resolveBrowserApiBase(configuredApiUrl?: string) {
   return normalized;
 }
 
-export function resolveServerApiBase(internalApiUrl?: string, publicApiUrl?: string) {
-  const selected = internalApiUrl ?? publicApiUrl ?? "http://localhost:4000";
+export function resolveServerApiBase(internalApiUrl?: string, apiUrl?: string, publicApiUrl?: string) {
+  const selected = internalApiUrl ?? apiUrl ?? publicApiUrl ?? "http://localhost:4000";
   return trimTrailingSlash(selected);
 }
-

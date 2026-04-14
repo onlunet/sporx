@@ -20,7 +20,7 @@ Her site için GitHub repo aynı kalır, sadece build command farklı olur.
 ## 3) Ortam Değişkenleri
 
 ### public-web (Netlify)
-- `NEXT_PUBLIC_API_URL=https://<api-domain>`
+- `NEXT_PUBLIC_API_URL=` (boş bırak; mixed-content riskini önler)
 - `INTERNAL_API_URL=https://<api-domain>`
 - `NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>`

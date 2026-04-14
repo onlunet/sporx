@@ -71,3 +71,8 @@ Script kontrol eder:
 - DB hedefi (host/port/db)
 - kritik env anahtarları
 - API/Public/Admin temel HTTP erişimi
+
+## HTTPS API ayarı (public-web)
+Mixed-content hatasını önlemek için production ortamında:
+- `INTERNAL_API_URL=https://<api-domain>`
+- `NEXT_PUBLIC_API_URL=` (boş bırak)

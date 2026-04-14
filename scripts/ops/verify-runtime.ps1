@@ -99,6 +99,7 @@ $envMap = Parse-EnvFile -Path $EnvFile
 $resolvedApiBaseUrl = if ([string]::IsNullOrWhiteSpace($ApiBaseUrl)) { Resolve-Setting -EnvMap $envMap -Key "API_URL" -Fallback "http://localhost:4000" } else { $ApiBaseUrl }
 $resolvedPublicWebUrl = if ([string]::IsNullOrWhiteSpace($PublicWebUrl)) { Resolve-Setting -EnvMap $envMap -Key "PUBLIC_WEB_URL" -Fallback "http://localhost:3000" } else { $PublicWebUrl }
 $resolvedAdminWebUrl = if ([string]::IsNullOrWhiteSpace($AdminWebUrl)) { Resolve-Setting -EnvMap $envMap -Key "ADMIN_WEB_URL" -Fallback "http://localhost:3100" } else { $AdminWebUrl }
+$resolvedNextPublicApiUrl = Resolve-Setting -EnvMap $envMap -Key "NEXT_PUBLIC_API_URL"
 $databaseUrl = Resolve-Setting -EnvMap $envMap -Key "DATABASE_URL"
 
 Write-Section "Runtime"
@@ -108,6 +109,10 @@ Write-Host "API: $resolvedApiBaseUrl"
 Write-Host "Public: $resolvedPublicWebUrl"
 Write-Host "Admin: $resolvedAdminWebUrl"
 Write-Host "Database: $(Parse-DatabaseSummary -DatabaseUrl $databaseUrl)"
+
+if ($resolvedPublicWebUrl.StartsWith("https://") -and $resolvedNextPublicApiUrl.StartsWith("http://")) {
+  Write-Host "WARNING: NEXT_PUBLIC_API_URL is http while PUBLIC_WEB_URL is https (mixed-content risk)."
+}
 
 Write-Section "Env Keys"
 $commonKeys = @(
