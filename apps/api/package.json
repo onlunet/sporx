@@ -5,9 +5,9 @@
     "scripts":  {
                     "dev":  "ts-node src/main.ts",
                     "build":  "npm run prisma:generate && nest build",
-                    "start":  "node scripts/start-with-db-push.js dist/apps/api/src/main.js",
+                    "start":  "node dist/apps/api/src/main.js",
                     "worker:dev":  "ts-node src/worker.ts",
-                    "worker:start":  "node scripts/start-with-db-push.js dist/apps/api/src/worker.js",
+                    "worker:start":  "node dist/apps/api/src/worker.js",
                     "lint":  "echo \"No lint for api (flat config pending)\"",
                     "typecheck":  "tsc --noEmit",
                     "test":  "jest --runInBand --config jest.config.cjs",
