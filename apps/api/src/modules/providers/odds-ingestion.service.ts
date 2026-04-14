@@ -131,8 +131,19 @@ export class OddsIngestionService {
       return new Map<string, string>();
     }
 
-    const minDate = new Date(Math.min(...events.map((item) => item.date.getTime())) - 12 * 60 * 60 * 1000);
-    const maxDate = new Date(Math.max(...events.map((item) => item.date.getTime())) + 12 * 60 * 60 * 1000);
+    let minTs = Number.POSITIVE_INFINITY;
+    let maxTs = Number.NEGATIVE_INFINITY;
+    for (const event of events) {
+      const ts = event.date.getTime();
+      if (ts < minTs) {
+        minTs = ts;
+      }
+      if (ts > maxTs) {
+        maxTs = ts;
+      }
+    }
+    const minDate = new Date(minTs - 12 * 60 * 60 * 1000);
+    const maxDate = new Date(maxTs + 12 * 60 * 60 * 1000);
 
     const existingMappings = await this.prisma.matchOddsMapping.findMany({
       where: {
@@ -190,25 +201,55 @@ export class OddsIngestionService {
         continue;
       }
 
-      await this.prisma.matchOddsMapping.upsert({
-        where: {
-          providerId_providerMatchKey: {
+      try {
+        await this.prisma.matchOddsMapping.upsert({
+          where: {
+            providerId_providerMatchKey: {
+              providerId,
+              providerMatchKey: event.id
+            }
+          },
+          update: {
+            matchId: matched.matchId,
+            mappingConfidence: 0.9
+          },
+          create: {
+            id: randomUUID(),
+            providerId,
+            providerMatchKey: event.id,
+            matchId: matched.matchId,
+            mappingConfidence: 0.9
+          }
+        });
+      } catch {
+        const existing = await this.prisma.matchOddsMapping.findFirst({
+          where: {
             providerId,
             providerMatchKey: event.id
-          }
-        },
-        update: {
-          matchId: matched.matchId,
-          mappingConfidence: 0.9
-        },
-        create: {
-          id: randomUUID(),
-          providerId,
-          providerMatchKey: event.id,
-          matchId: matched.matchId,
-          mappingConfidence: 0.9
+          },
+          select: { id: true }
+        });
+
+        if (existing) {
+          await this.prisma.matchOddsMapping.update({
+            where: { id: existing.id },
+            data: {
+              matchId: matched.matchId,
+              mappingConfidence: 0.9
+            }
+          });
+        } else {
+          await this.prisma.matchOddsMapping.create({
+            data: {
+              id: randomUUID(),
+              providerId,
+              providerMatchKey: event.id,
+              matchId: matched.matchId,
+              mappingConfidence: 0.9
+            }
+          });
         }
-      });
+      }
 
       mappingByProviderKey.set(event.id, matched.matchId);
     }
@@ -261,7 +302,7 @@ export class OddsIngestionService {
     const durationMs = Date.now() - startedAt;
     await this.logApiCall(`provider/${provider.key}/events`, 200, durationMs);
 
-    const events = this.extractEvents(eventsRaw);
+    const events = this.extractEvents(eventsRaw).slice(0, 500);
     if (events.length === 0) {
       return {
         recordsRead: 0,
@@ -573,31 +614,47 @@ export class OddsIngestionService {
       };
     }
 
-    if (jobType === "generateMarketAnalysis") {
-      const summary = await this.generateMarketAnalysisSnapshots();
-      await this.createPayload(provider.key, "market_analysis", {
-        runId,
-        jobType,
-        ...summary
-      } as Prisma.InputJsonValue);
+    try {
+      if (jobType === "generateMarketAnalysis") {
+        const summary = await this.generateMarketAnalysisSnapshots();
+        await this.createPayload(provider.key, "market_analysis", {
+          runId,
+          jobType,
+          ...summary
+        } as Prisma.InputJsonValue);
+        return {
+          providerKey: provider.key,
+          recordsRead: summary.recordsRead,
+          recordsWritten: summary.recordsWritten,
+          errors: summary.errors,
+          details: { mode: "generateMarketAnalysis" }
+        };
+      }
+
+      const summary = await this.buildOddsSnapshots(provider, settings, jobType);
+      await this.generateMarketAnalysisSnapshots();
+
       return {
         providerKey: provider.key,
         recordsRead: summary.recordsRead,
         recordsWritten: summary.recordsWritten,
         errors: summary.errors,
-        details: { mode: "generateMarketAnalysis" }
+        details: summary.details
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown odds sync error";
+      await this.logApiCall(`provider/${provider.key}/sync`, 500, 0);
+      return {
+        providerKey: provider.key,
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 1,
+        details: {
+          message,
+          runId,
+          jobType
+        }
       };
     }
-
-    const summary = await this.buildOddsSnapshots(provider, settings, jobType);
-    await this.generateMarketAnalysisSnapshots();
-
-    return {
-      providerKey: provider.key,
-      recordsRead: summary.recordsRead,
-      recordsWritten: summary.recordsWritten,
-      errors: summary.errors,
-      details: summary.details
-    };
   }
 }
