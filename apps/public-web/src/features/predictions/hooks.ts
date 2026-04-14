@@ -4,8 +4,9 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MatchPredictionItem, PredictionType, MatchCommentary } from "./types";
 import { filterPredictionsByType, normalizePredictionItem, normalizePredictionList } from "./normalize";
+import { resolveBrowserApiBase } from "../../lib/api-base-url";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 type Envelope<T> = {
   success: boolean;

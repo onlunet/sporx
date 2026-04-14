@@ -5,8 +5,9 @@ import { useQuery } from '@tanstack/react-query';
 import { MatchPredictionItem, normalizePredictionList } from '../../features/predictions';
 import { LiveMatchCard, LiveStats } from './';
 import { Radio, RefreshCw, Zap } from 'lucide-react';
+import { resolveBrowserApiBase } from '../../lib/api-base-url';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+const API_URL = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
 
 type Envelope<T> = {
   success: boolean;
