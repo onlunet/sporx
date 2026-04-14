@@ -30,6 +30,67 @@ export class IngestionQueueService {
     });
   }
 
+  private async processRun(runId: string, jobType: string) {
+    const claim = await this.prisma.ingestionJobRun.updateMany({
+      where: { id: runId, status: "queued" },
+      data: { status: "running", startedAt: new Date() }
+    });
+
+    if (claim.count === 0) {
+      return false;
+    }
+
+    try {
+      const result = await this.providerIngestionService.sync(jobType, runId);
+
+      await this.prisma.ingestionJobRun.update({
+        where: { id: runId },
+        data: {
+          status: "succeeded",
+          finishedAt: new Date(),
+          recordsRead: result.recordsRead,
+          recordsWritten: result.recordsWritten,
+          errors: result.errors,
+          logs: result.logs as Prisma.InputJsonValue
+        }
+      });
+
+      await Promise.all([
+        this.cache.invalidateTag("matches"),
+        this.cache.invalidateTag("predictions"),
+        this.cache.invalidateTag("standings"),
+        this.cache.invalidateTag("dashboard"),
+        this.cache.invalidateTag("compare"),
+        this.cache.invalidateTag("odds"),
+        this.cache.invalidateTag("market-analysis")
+      ]);
+      return true;
+    } catch (error) {
+      this.logger.error(`Ingestion processRun failed for ${runId}`, error instanceof Error ? error.stack : undefined);
+      await this.prisma.ingestionJobRun.update({
+        where: { id: runId },
+        data: {
+          status: "failed",
+          finishedAt: new Date(),
+          errors: 1,
+          logs: { message: error instanceof Error ? error.message : "Unknown worker error" }
+        }
+      });
+      return false;
+    }
+  }
+
+  runInlineFallback(runId: string, jobType: string) {
+    setImmediate(() => {
+      this.processRun(runId, jobType).catch((error) => {
+        this.logger.error(
+          `Inline fallback failed for ${runId}`,
+          error instanceof Error ? error.stack : undefined
+        );
+      });
+    });
+  }
+
   async startWorker() {
     if (this.workerStarted) {
       return;
@@ -44,35 +105,7 @@ export class IngestionQueueService {
         if (!runId) {
           return;
         }
-
-        await this.prisma.ingestionJobRun.update({
-          where: { id: runId },
-          data: { status: "running", startedAt: new Date() }
-        });
-
-        const result = await this.providerIngestionService.sync(String(job.name), runId);
-
-        await this.prisma.ingestionJobRun.update({
-          where: { id: runId },
-          data: {
-            status: "succeeded",
-            finishedAt: new Date(),
-            recordsRead: result.recordsRead,
-            recordsWritten: result.recordsWritten,
-            errors: result.errors,
-            logs: result.logs as Prisma.InputJsonValue
-          }
-        });
-
-        await Promise.all([
-          this.cache.invalidateTag("matches"),
-          this.cache.invalidateTag("predictions"),
-          this.cache.invalidateTag("standings"),
-          this.cache.invalidateTag("dashboard"),
-          this.cache.invalidateTag("compare"),
-          this.cache.invalidateTag("odds"),
-          this.cache.invalidateTag("market-analysis")
-        ]);
+        await this.processRun(runId, String(job.name));
       },
       { connection: { url }, concurrency: 4 }
     );

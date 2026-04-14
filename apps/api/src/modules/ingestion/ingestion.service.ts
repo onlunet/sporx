@@ -43,6 +43,7 @@ export class IngestionService {
     });
 
     await this.queue.enqueue(jobType, { runId: run.id, jobType });
+    this.queue.runInlineFallback(run.id, jobType);
 
     return {
       id: run.id,
