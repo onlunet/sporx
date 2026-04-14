@@ -15,23 +15,33 @@ export class AnalyticsService {
     if (cached) {
       return cached;
     }
+    try {
+      const [matchCount, predictionCount, lowConfidenceCount, failedCount] = await Promise.all([
+        this.prisma.match.count(),
+        this.prisma.prediction.count(),
+        this.prisma.prediction.count({ where: { isLowConfidence: true } }),
+        this.prisma.failedPredictionAnalysis.count()
+      ]);
 
-    const [matchCount, predictionCount, lowConfidenceCount, failedCount] = await Promise.all([
-      this.prisma.match.count(),
-      this.prisma.prediction.count(),
-      this.prisma.prediction.count({ where: { isLowConfidence: true } }),
-      this.prisma.failedPredictionAnalysis.count()
-    ]);
+      const data = {
+        matchCount,
+        predictionCount,
+        lowConfidenceCount,
+        failedCount,
+        generatedAt: new Date().toISOString()
+      };
 
-    const data = {
-      matchCount,
-      predictionCount,
-      lowConfidenceCount,
-      failedCount,
-      generatedAt: new Date().toISOString()
-    };
-
-    await this.cache.set(cacheKey, data, 60, ["dashboard"]);
-    return data;
+      await this.cache.set(cacheKey, data, 60, ["dashboard"]);
+      return data;
+    } catch {
+      return {
+        matchCount: 0,
+        predictionCount: 0,
+        lowConfidenceCount: 0,
+        failedCount: 0,
+        generatedAt: new Date().toISOString(),
+        degraded: true
+      };
+    }
   }
 }

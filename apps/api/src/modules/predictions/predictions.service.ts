@@ -9,6 +9,7 @@ type ListPredictionsParams = {
   status?: string;
   predictionType?: string;
   line?: number;
+  take?: number;
   includeMarketAnalysis?: boolean;
 };
 
@@ -70,6 +71,14 @@ function parseLine(input?: number) {
   return Number(input.toFixed(2));
 }
 
+function parseTake(input: number | undefined, hasExplicitStatus: boolean) {
+  const defaultTake = hasExplicitStatus ? 250 : 120;
+  if (input === undefined || !Number.isFinite(input)) {
+    return defaultTake;
+  }
+  return Math.max(1, Math.min(500, Math.trunc(input)));
+}
+
 @Injectable()
 export class PredictionsService {
   constructor(
@@ -80,24 +89,27 @@ export class PredictionsService {
 
   async list(params?: ListPredictionsParams) {
     const statuses = parseStatusFilter(params?.status);
+    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
     const predictionType = parsePredictionType(params?.predictionType);
     const line = parseLine(params?.line);
+    const take = parseTake(params?.take, statuses !== undefined);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
-    const statusKey = statuses?.join("|") ?? "all";
+    const statusKey = effectiveStatuses.join("|");
     const typeKey = predictionType ?? "all";
     const lineKey = line === undefined ? "all" : String(line);
+    const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v6:${statusKey}:${typeKey}:${lineKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v7:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
     }
 
     const data = await this.prisma.prediction.findMany({
-      where: statuses ? { match: { status: { in: statuses } } } : undefined,
-      orderBy: [{ match: { matchDateTimeUTC: "desc" } }, { createdAt: "desc" }],
+      where: { match: { status: { in: effectiveStatuses } } },
+      orderBy: { createdAt: "desc" },
       include: { match: { include: { homeTeam: true, awayTeam: true } } },
-      take: 500
+      take
     });
 
     const expanded = data.flatMap((item) => {
@@ -147,6 +159,11 @@ export class PredictionsService {
       : expanded;
 
     const lineFiltered = line === undefined ? payload : payload.filter((item) => item.line === line);
+    lineFiltered.sort((left, right) => {
+      const leftTs = left.matchDateTimeUTC ? Date.parse(left.matchDateTimeUTC) : 0;
+      const rightTs = right.matchDateTimeUTC ? Date.parse(right.matchDateTimeUTC) : 0;
+      return rightTs - leftTs;
+    });
     const enriched = await this.oddsService
       .attachMarketAnalysis(lineFiltered, includeMarketAnalysis, line)
       .catch(() => lineFiltered);

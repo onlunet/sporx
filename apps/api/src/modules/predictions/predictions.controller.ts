@@ -10,14 +10,17 @@ export class PredictionsController {
     @Query("status") status?: string,
     @Query("predictionType") predictionType?: string,
     @Query("line") line?: string,
+    @Query("take") take?: string,
     @Query("includeMarketAnalysis") includeMarketAnalysis?: string
   ) {
     const parsedLine = line === undefined ? undefined : Number(line);
+    const parsedTake = take === undefined ? undefined : Number(take);
     const includeMarket = includeMarketAnalysis === "true" || includeMarketAnalysis === "1";
     return this.predictionsService.list({
       status,
       predictionType,
       line: Number.isFinite(parsedLine) ? parsedLine : undefined,
+      take: Number.isFinite(parsedTake) ? parsedTake : undefined,
       includeMarketAnalysis: includeMarket
     });
   }
