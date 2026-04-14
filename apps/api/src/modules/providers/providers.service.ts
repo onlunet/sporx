@@ -45,6 +45,7 @@ type ProviderRuntimeSettings = {
   soccerRoundStart?: number;
   nbaLeague?: string;
   dailyLimit?: number;
+  hourlyLimit?: number;
   syncDaysBack?: number;
   syncDaysAhead?: number;
   standingsLeagueIds?: string[];
@@ -183,6 +184,7 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
       oddsSport: "football",
       oddsBookmakers: "Bet365,Unibet,SingBet",
       oddsLimit: "60",
+      hourlyLimit: "100",
       dailyLimit: "1000"
     }
   },
@@ -362,6 +364,7 @@ export class ProvidersService {
       soccerRoundStart: this.toInt(configs.soccerRoundStart),
       nbaLeague: configs.nbaLeague,
       dailyLimit: this.toInt(configs.dailyLimit),
+      hourlyLimit: this.toInt(configs.hourlyLimit),
       syncDaysBack: this.toInt(configs.syncDaysBack),
       syncDaysAhead: this.toInt(configs.syncDaysAhead),
       standingsLeagueIds: this.toStringList(configs.standingsLeagueIds),

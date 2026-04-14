@@ -23,6 +23,7 @@ type ProviderRuntimeSettings = {
   apiKey?: string;
   baseUrl?: string;
   dailyLimit?: number;
+  hourlyLimit?: number;
   oddsSport?: string;
   oddsBookmakers?: string;
   oddsLeague?: string;
@@ -278,9 +279,25 @@ export class OddsIngestionService {
     const sport = settings.oddsSport?.trim() || "football";
     const bookmakers = settings.oddsBookmakers?.trim() || "Bet365,Unibet,SingBet";
     const limit = Math.max(1, Math.min(settings.oddsLimit ?? 60, 100));
+    const hourlyLimit = Math.max(1, settings.hourlyLimit ?? 100);
     const now = new Date();
     const sixHoursLater = new Date(now.getTime() + 6 * 60 * 60 * 1000);
     const fortyEightHoursLater = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+
+    const preflightQuota = await this.hourlyQuotaGate(provider.key, 1, hourlyLimit);
+    if (!preflightQuota.allowed) {
+      return {
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 0,
+        details: {
+          message: "Odds hourly limit aşıldı. Bu run güvenli şekilde atlandı.",
+          hourlyLimit,
+          usedLastHour: preflightQuota.used,
+          remaining: preflightQuota.remaining
+        }
+      };
+    }
 
     const startedAt = Date.now();
     const eventsRaw =
@@ -328,6 +345,11 @@ export class OddsIngestionService {
       chunks.push(matchedEventIds.slice(index, index + 10));
     }
 
+    const chunkQuota = await this.hourlyQuotaGate(provider.key, chunks.length, hourlyLimit);
+    const allowedChunkCalls = Math.max(0, Math.min(chunks.length, chunkQuota.remaining));
+    const effectiveChunks = chunks.slice(0, allowedChunkCalls);
+    const skippedChunks = Math.max(0, chunks.length - effectiveChunks.length);
+
     const normalizedEntries: Array<{
       matchId: string;
       bookmaker: string;
@@ -342,7 +364,7 @@ export class OddsIngestionService {
       isClosingCandidate: boolean;
     }> = [];
 
-    for (const chunk of chunks) {
+    for (const chunk of effectiveChunks) {
       const oddsStartedAt = Date.now();
       const oddsEvents = await this.connector.fetchMultiOdds(
         settings.apiKey,
@@ -430,7 +452,9 @@ export class OddsIngestionService {
       bookmakers,
       eventCount: events.length,
       matchedEventCount: matchedEventIds.length,
-      snapshotCount: normalizedEntries.length
+      snapshotCount: normalizedEntries.length,
+      hourlyLimit,
+      skippedChunks
     } as Prisma.InputJsonValue);
 
     await this.cache.invalidateTag("market-analysis");
@@ -442,8 +466,34 @@ export class OddsIngestionService {
         sport,
         bookmakers,
         matchedEventCount: matchedEventIds.length,
-        snapshotCount: normalizedEntries.length
+        snapshotCount: normalizedEntries.length,
+        hourlyLimit,
+        skippedChunks
       }
+    };
+  }
+
+  private async hourlyUsage(providerKey: string) {
+    const hourStart = new Date(Date.now() - 60 * 60 * 1000);
+    return this.prisma.apiLog.count({
+      where: {
+        createdAt: { gte: hourStart },
+        OR: [
+          { path: { startsWith: `provider/${providerKey}/events` } },
+          { path: { startsWith: `provider/${providerKey}/odds` } }
+        ]
+      }
+    });
+  }
+
+  private async hourlyQuotaGate(providerKey: string, requestedCalls: number, hourlyLimit: number) {
+    const used = await this.hourlyUsage(providerKey);
+    const remaining = Math.max(0, hourlyLimit - used);
+    return {
+      allowed: remaining >= requestedCalls,
+      used,
+      remaining,
+      limit: hourlyLimit
     };
   }
 
