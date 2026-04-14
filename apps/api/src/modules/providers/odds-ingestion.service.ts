@@ -1,10 +1,12 @@
 import { Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { Prisma, Provider } from "@prisma/client";
 import { CacheService } from "../../cache/cache.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { MarketComparisonService } from "../odds/market-comparison.service";
 import { OddsFeatureService } from "../odds/odds-feature.service";
 import { OddsNormalizationService } from "../odds/odds-normalization.service";
+import { OddsSchemaBootstrapService } from "../odds/odds-schema-bootstrap.service";
 import { NormalizedMarketType } from "../odds/odds-types";
 import { expandPredictionMarkets } from "../predictions/prediction-markets.util";
 import { OddsApiIoConnector } from "./odds-api-io.connector";
@@ -49,7 +51,8 @@ export class OddsIngestionService {
     private readonly connector: OddsApiIoConnector,
     private readonly normalization: OddsNormalizationService,
     private readonly featureService: OddsFeatureService,
-    private readonly marketComparisonService: MarketComparisonService
+    private readonly marketComparisonService: MarketComparisonService,
+    private readonly oddsSchemaBootstrapService: OddsSchemaBootstrapService
   ) {}
 
   supports(jobType: string) {
@@ -199,6 +202,7 @@ export class OddsIngestionService {
           mappingConfidence: 0.9
         },
         create: {
+          id: randomUUID(),
           providerId,
           providerMatchKey: event.id,
           matchId: matched.matchId,
@@ -362,6 +366,7 @@ export class OddsIngestionService {
     if (normalizedEntries.length > 0) {
       await this.prisma.oddsSnapshot.createMany({
         data: normalizedEntries.map((entry) => ({
+          id: randomUUID(),
           matchId: entry.matchId,
           providerId: provider.id,
           bookmaker: entry.bookmaker,
@@ -520,6 +525,7 @@ export class OddsIngestionService {
 
       const comparison = this.marketComparisonService.compare(modelProbability, summary);
       toCreate.push({
+        id: randomUUID(),
         matchId: row.item.matchId,
         predictionType: row.item.predictionType,
         marketLine: row.item.line ?? null,
@@ -552,6 +558,21 @@ export class OddsIngestionService {
     runId: string,
     jobType: string
   ): Promise<ProviderSyncResult> {
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return {
+        providerKey: provider.key,
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 1,
+        details: {
+          message: "Odds schema bootstrap başarısız olduğu için job atlandı.",
+          jobType,
+          runId
+        }
+      };
+    }
+
     if (jobType === "generateMarketAnalysis") {
       const summary = await this.generateMarketAnalysisSnapshots();
       await this.createPayload(provider.key, "market_analysis", {

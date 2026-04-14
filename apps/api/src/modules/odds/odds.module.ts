@@ -8,6 +8,7 @@ import { MarketComparisonService } from "./market-comparison.service";
 import { MarketSignalsService } from "./market-signals.service";
 import { OddsFeatureService } from "./odds-feature.service";
 import { OddsNormalizationService } from "./odds-normalization.service";
+import { OddsSchemaBootstrapService } from "./odds-schema-bootstrap.service";
 import { OddsService } from "./odds.service";
 
 @Module({
@@ -15,6 +16,7 @@ import { OddsService } from "./odds.service";
   controllers: [AdminOddsController],
   providers: [
     OddsService,
+    OddsSchemaBootstrapService,
     OddsNormalizationService,
     OddsFeatureService,
     MarketComparisonService,
@@ -24,6 +26,7 @@ import { OddsService } from "./odds.service";
   ],
   exports: [
     OddsService,
+    OddsSchemaBootstrapService,
     OddsNormalizationService,
     OddsFeatureService,
     MarketComparisonService,

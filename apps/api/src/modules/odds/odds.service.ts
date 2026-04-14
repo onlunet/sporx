@@ -5,6 +5,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { ExpandedPredictionItem } from "../predictions/prediction-markets.util";
 import { MarketAwarePredictionService } from "./market-aware-prediction.service";
 import { MarketSignalsService } from "./market-signals.service";
+import { OddsSchemaBootstrapService } from "./odds-schema-bootstrap.service";
 
 type AnalysisMapValue = {
   modelProbability: number;
@@ -39,7 +40,8 @@ export class OddsService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly marketSignalsService: MarketSignalsService,
-    private readonly marketAwarePredictionService: MarketAwarePredictionService
+    private readonly marketAwarePredictionService: MarketAwarePredictionService,
+    private readonly oddsSchemaBootstrapService: OddsSchemaBootstrapService
   ) {}
 
   private round2(value: number | null | undefined) {
@@ -112,6 +114,11 @@ export class OddsService {
 
     if (lineFilter !== undefined) {
       where.marketLine = lineFilter;
+    }
+
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return new Map();
     }
 
     const rows = await this.prisma.marketAnalysisSnapshot.findMany({
@@ -271,6 +278,11 @@ export class OddsService {
   }
 
   async listSnapshots(params: SnapshotsQuery) {
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return [];
+    }
+
     const take = Math.max(1, Math.min(500, params.limit ?? 200));
     return this.prisma.oddsSnapshot.findMany({
       where: {
@@ -284,6 +296,11 @@ export class OddsService {
   }
 
   async listMarketAnalysis(params: AnalysisQuery) {
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return [];
+    }
+
     const take = Math.max(1, Math.min(500, params.limit ?? 200));
     return this.prisma.marketAnalysisSnapshot.findMany({
       where: {
@@ -297,6 +314,11 @@ export class OddsService {
   }
 
   async listDisagreements(threshold = 0.12, limit = 200) {
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return [];
+    }
+
     return this.prisma.marketAnalysisSnapshot.findMany({
       where: {
         contradictionScore: { gte: threshold }
@@ -307,6 +329,11 @@ export class OddsService {
   }
 
   async marketPerformance() {
+    const oddsSchemaReady = await this.oddsSchemaBootstrapService.ensureReady();
+    if (!oddsSchemaReady) {
+      return [];
+    }
+
     const cacheKey = "odds:market-performance:v1";
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
