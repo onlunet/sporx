@@ -20,6 +20,7 @@ const FILTERS: Array<{ value: FilterOption; label: string; icon: typeof Brain }>
   { value: "all", label: "Tüm Tahminler", icon: Target },
   { value: "fullTimeResult", label: "Maç Sonucu", icon: TrendingUp },
   { value: "firstHalfResult", label: "İlk Yarı", icon: Clock },
+  { value: "halfTimeFullTime", label: "İY/MS", icon: Clock },
   { value: "bothTeamsToScore", label: "KG Var/Yok", icon: ShieldAlert },
   { value: "totalGoalsOverUnder", label: "Alt/Üst", icon: BarChart3 },
   { value: "correctScore", label: "Doğru Skor", icon: Target },
@@ -82,22 +83,34 @@ function predictionListKey(item: MatchPredictionItem, index: number) {
 
 function isPredictionPlayed(item: MatchPredictionItem) {
   const rawStatus = (item.matchStatus ?? "").toLowerCase();
+  const normalizedStatus = rawStatus.replaceAll("-", "_").replaceAll(" ", "_");
   const hasScore = item.homeScore !== null && item.homeScore !== undefined && item.awayScore !== null && item.awayScore !== undefined;
   const kickoff = item.matchDateTimeUTC ? new Date(item.matchDateTimeUTC).getTime() : undefined;
   const now = Date.now();
   const isNearOrPast = kickoff !== undefined && Number.isFinite(kickoff) && kickoff <= now + 2 * 60 * 60 * 1000;
-  const isStalePast = kickoff !== undefined && Number.isFinite(kickoff) && kickoff <= now - 3 * 60 * 60 * 1000;
 
-  if (rawStatus === "live") {
+  if (normalizedStatus === "live" || normalizedStatus === "in_play" || normalizedStatus === "paused") {
     return false;
   }
-  if (rawStatus === "finished") {
+  if (
+    normalizedStatus === "finished" ||
+    normalizedStatus === "ft" ||
+    normalizedStatus === "full_time" ||
+    normalizedStatus === "after_extra_time" ||
+    normalizedStatus === "after_penalties"
+  ) {
     return true;
   }
-  if (rawStatus === "scheduled" && kickoff !== undefined && Number.isFinite(kickoff) && kickoff > now + 2 * 60 * 60 * 1000) {
+  if (normalizedStatus === "scheduled" && kickoff !== undefined && Number.isFinite(kickoff) && kickoff > now + 2 * 60 * 60 * 1000) {
     return false;
   }
-  return Boolean(item.isPlayed || (hasScore && isNearOrPast) || isStalePast);
+  if (item.isPlayed === true) {
+    return true;
+  }
+  if (hasScore && isNearOrPast) {
+    return true;
+  }
+  return false;
 }
 
 function resolveMatchState(item: MatchPredictionItem) {
@@ -244,16 +257,14 @@ type PredictionsExplorerProps = {
 
 export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
-  const query = usePredictionsByType(activeFilter);
+  const requestedStatus = scope === "completed" ? "finished" : "scheduled";
+  const query = usePredictionsByType(activeFilter, requestedStatus);
   const items = useMemo(() => {
     const sorted = sortPredictions(query.data ?? [], scope);
     if (scope === "completed") {
       return sorted.filter((item) => isPredictionPlayed(item));
     }
-    return sorted.filter((item) => {
-      const status = (item.matchStatus ?? "").toLowerCase();
-      return !isPredictionPlayed(item) && status !== "live" && status !== "postponed" && status !== "cancelled";
-    });
+    return sorted.filter((item) => !isPredictionPlayed(item));
   }, [query.data, scope]);
 
   return (

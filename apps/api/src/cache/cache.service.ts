@@ -13,7 +13,16 @@ return 0
 
   async get<T>(key: string): Promise<T | null> {
     const value = await this.redis.get(key);
-    return value ? (JSON.parse(value) as T) : null;
+    if (!value) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      await this.redis.del(key);
+      return null;
+    }
   }
 
   async set(key: string, value: unknown, ttlSeconds: number, tags: string[] = []) {
@@ -62,4 +71,3 @@ return 0
     await this.redis.quit();
   }
 }
-

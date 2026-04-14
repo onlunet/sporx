@@ -59,3 +59,15 @@ App-specific env templates:
 ## Backup readiness
 - `BACKUP_MODE=disabled|readonly`
 - `BACKUP_READ_URL` for future Supabase read-only fallback.
+
+## Runtime verification
+Tek komutta ortam doğrulaması:
+- Local:
+  - `npm run ops:verify`
+- Production profile:
+  - `npm run ops:verify:prod`
+
+Script kontrol eder:
+- DB hedefi (host/port/db)
+- kritik env anahtarları
+- API/Public/Admin temel HTTP erişimi

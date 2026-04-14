@@ -4,8 +4,12 @@ import { Providers } from "../src/lib/providers";
 import { PublicSidebar } from "../src/components/public-sidebar";
 
 export const metadata: Metadata = {
-  title: "SPORX | AI Spor Analitiği",
-  description: "Yapay zeka destekli spor tahmin ve analitik platformu"
+  title: "SPORX | AI Spor Analitigi",
+  description: "Yapay zeka destekli spor tahmin ve analitik platformu",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -17,9 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {/* Ambient Glow Effects */}
             <div className="fixed left-0 top-0 h-96 w-96 rounded-full bg-neon-cyan/5 blur-[120px] pointer-events-none" />
             <div className="fixed right-0 bottom-0 h-96 w-96 rounded-full bg-neon-purple/5 blur-[120px] pointer-events-none" />
-            
+
             <PublicSidebar />
-            
+
             <main className="flex-1 p-6 lg:p-8 relative z-10">
               <div className="mx-auto max-w-7xl">
                 {children}

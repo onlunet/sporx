@@ -19,6 +19,7 @@ const envSchema = z.object({
   SUPABASE_DB_POOLER_URL: z.string().optional().default(""),
   SUPABASE_DB_DIRECT_URL: z.string().optional().default(""),
   FOOTBALL_DATA_API_KEY: z.string().optional().default(""),
+  ODDS_API_IO_API_KEY: z.string().optional().default(""),
   SERVICE_ROLE: z.enum(["api", "worker"]).default("api"),
   API_URL: z.string().default("http://localhost:4000"),
   PUBLIC_WEB_URL: z.string().default("http://localhost:3000"),

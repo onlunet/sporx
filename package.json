@@ -13,6 +13,8 @@
     "dev:admin": "npm run -w @sporx/admin-web dev",
     "dev:api": "npm run -w @sporx/api dev",
     "dev:worker": "npm run -w @sporx/api worker:dev",
+    "ops:verify": "powershell -ExecutionPolicy Bypass -File scripts/ops/verify-runtime.ps1",
+    "ops:verify:prod": "powershell -ExecutionPolicy Bypass -File scripts/ops/verify-runtime.ps1 -Mode production",
     "test": "npm run -ws test",
     "lint": "npm run -ws lint",
     "typecheck": "npm run -ws typecheck"

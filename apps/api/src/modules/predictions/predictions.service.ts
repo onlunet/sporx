@@ -100,38 +100,56 @@ export class PredictionsService {
       take: 500
     });
 
-    const expanded = data.flatMap((item) =>
-      expandPredictionMarkets({
-        matchId: item.matchId,
-        modelVersionId: item.modelVersionId,
-        probabilities: item.probabilities,
-        calibratedProbabilities: item.calibratedProbabilities,
-        rawProbabilities: item.rawProbabilities,
-        expectedScore: item.expectedScore,
-        confidenceScore: item.confidenceScore,
-        summary: item.summary,
-        riskFlags: item.riskFlags,
-        avoidReason: item.avoidReason,
-        updatedAt: item.updatedAt,
-        match: {
-          homeTeam: { name: item.match.homeTeam.name },
-          awayTeam: { name: item.match.awayTeam.name },
-          matchDateTimeUTC: item.match.matchDateTimeUTC,
-          status: item.match.status,
-          homeScore: item.match.homeScore,
-          awayScore: item.match.awayScore,
-          halfTimeHomeScore: item.match.halfTimeHomeScore,
-          halfTimeAwayScore: item.match.halfTimeAwayScore
-        }
-      })
-    );
+    const expanded = data.flatMap((item) => {
+      const safeUpdatedAt =
+        item.updatedAt instanceof Date && Number.isFinite(item.updatedAt.getTime()) ? item.updatedAt : new Date();
+      const matchDateTime =
+        item.match.matchDateTimeUTC instanceof Date && Number.isFinite(item.match.matchDateTimeUTC.getTime())
+          ? item.match.matchDateTimeUTC
+          : new Date(safeUpdatedAt.getTime() + 2 * 60 * 60 * 1000);
+
+      // Defensive guard for partially broken data rows in production.
+      if (!item.match?.homeTeam?.name || !item.match?.awayTeam?.name) {
+        return [];
+      }
+
+      try {
+        return expandPredictionMarkets({
+          matchId: item.matchId,
+          modelVersionId: item.modelVersionId,
+          probabilities: item.probabilities,
+          calibratedProbabilities: item.calibratedProbabilities,
+          rawProbabilities: item.rawProbabilities,
+          expectedScore: item.expectedScore,
+          confidenceScore: item.confidenceScore,
+          summary: item.summary,
+          riskFlags: item.riskFlags,
+          avoidReason: item.avoidReason,
+          updatedAt: safeUpdatedAt,
+          match: {
+            homeTeam: { name: item.match.homeTeam.name },
+            awayTeam: { name: item.match.awayTeam.name },
+            matchDateTimeUTC: matchDateTime,
+            status: item.match.status,
+            homeScore: item.match.homeScore,
+            awayScore: item.match.awayScore,
+            halfTimeHomeScore: item.match.halfTimeHomeScore,
+            halfTimeAwayScore: item.match.halfTimeAwayScore
+          }
+        });
+      } catch {
+        return [];
+      }
+    });
 
     const payload = predictionType
       ? expanded.filter((item) => item.predictionType === predictionType)
       : expanded;
 
     const lineFiltered = line === undefined ? payload : payload.filter((item) => item.line === line);
-    const enriched = await this.oddsService.attachMarketAnalysis(lineFiltered, includeMarketAnalysis, line);
+    const enriched = await this.oddsService
+      .attachMarketAnalysis(lineFiltered, includeMarketAnalysis, line)
+      .catch(() => lineFiltered);
 
     await this.cache.set(cacheKey, enriched, 20, ["predictions", "market-analysis"]);
     return enriched;
