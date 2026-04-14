@@ -79,6 +79,17 @@ function parseTake(input: number | undefined, hasExplicitStatus: boolean) {
   return Math.max(1, Math.min(500, Math.trunc(input)));
 }
 
+async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return await Promise.race<T>([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`query_timeout_${timeoutMs}`));
+      }, timeoutMs);
+    })
+  ]);
+}
+
 @Injectable()
 export class PredictionsService {
   constructor(
@@ -105,12 +116,63 @@ export class PredictionsService {
       return cached;
     }
 
-    const data = await this.prisma.prediction.findMany({
-      where: { match: { status: { in: effectiveStatuses } } },
-      orderBy: { createdAt: "desc" },
-      include: { match: { include: { homeTeam: true, awayTeam: true } } },
-      take
-    });
+    let data:
+      | Array<{
+          matchId: string;
+          modelVersionId: string | null;
+          probabilities: unknown;
+          calibratedProbabilities: unknown;
+          rawProbabilities: unknown;
+          expectedScore: unknown;
+          confidenceScore: number;
+          summary: string;
+          riskFlags: unknown;
+          avoidReason: string | null;
+          updatedAt: Date;
+          createdAt: Date;
+          match: {
+            status: MatchStatus;
+            matchDateTimeUTC: Date;
+            homeScore: number | null;
+            awayScore: number | null;
+            halfTimeHomeScore: number | null;
+            halfTimeAwayScore: number | null;
+            homeTeam: { name: string };
+            awayTeam: { name: string };
+          };
+        }>
+      | [] = [];
+
+    try {
+      const relevantMatches = await queryWithTimeout(
+        this.prisma.match.findMany({
+          where: { status: { in: effectiveStatuses } },
+          select: { id: true },
+          orderBy: { matchDateTimeUTC: "desc" },
+          take: Math.max(take, 80)
+        }),
+        8000
+      );
+
+      if (relevantMatches.length === 0) {
+        await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);
+        return [];
+      }
+
+      const matchIds = relevantMatches.map((item) => item.id);
+      data = await queryWithTimeout(
+        this.prisma.prediction.findMany({
+          where: { matchId: { in: matchIds } },
+          orderBy: { createdAt: "desc" },
+          include: { match: { include: { homeTeam: true, awayTeam: true } } },
+          take: Math.max(take * 3, 120)
+        }),
+        12000
+      );
+    } catch {
+      await this.cache.set(cacheKey, [], 10, ["predictions", "market-analysis"]);
+      return [];
+    }
 
     const expanded = data.flatMap((item) => {
       const safeUpdatedAt =
