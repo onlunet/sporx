@@ -286,10 +286,10 @@ export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerP
             Maç <span className="gradient-text">Tahminleri</span>
           </h1>
           
-                    <p className="text-slate-400 max-w-xl">
+          <p className="text-slate-400 max-w-xl">
             {scope === "completed"
-              ? "Sonuclanan maclar icin uretilen tahminlerin detay listesi."
-              : "Yapay zeka destekli analizler ve henuz oynanmamis mac tahminleri."}
+              ? "Sonuçlanan maçlar için üretilen tahminlerin detay listesi."
+              : "Yapay zeka destekli analizler ve henüz oynanmamış maç tahminleri."}
           </p>
           {scope === "upcoming" && (
             <div className="mt-3">
@@ -297,7 +297,7 @@ export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerP
                 href="/predictions/completed"
                 className="inline-flex items-center gap-2 rounded-lg border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-2 text-xs font-medium text-neon-cyan hover:bg-neon-cyan/20"
               >
-                Sonuclanan tahmin analizine git
+                Sonuçlanan tahmin analizine git
               </Link>
             </div>
           )}
@@ -388,12 +388,12 @@ export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerP
             <Target className="w-10 h-10 text-slate-500" />
           </div>
           <h3 className="text-xl font-display font-semibold text-white mb-2">
-            {scope === "completed" ? "Sonuclanan Tahmin Bulunamadi" : "Oynanmamis Tahmin Bulunamadi"}
+            {scope === "completed" ? "Sonuçlanan Tahmin Bulunamadı" : "Oynanmamış Tahmin Bulunamadı"}
           </h3>
           <p className="text-slate-400">
             {scope === "completed"
-              ? "Secili kriterlere uygun sonuclanmis tahmin bulunmuyor."
-              : "Su an oynanmamis maca ait tahmin yok. Sonuclanan tahminler sayfasini inceleyebilirsiniz."}
+              ? "Seçili kriterlere uygun sonuçlanmış tahmin bulunmuyor."
+              : "Şu an oynanmamış maça ait tahmin yok. Sonuçlanan tahminler sayfasını inceleyebilirsiniz."}
           </p>
         </div>
       )}
