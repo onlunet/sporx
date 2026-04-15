@@ -1299,44 +1299,49 @@ export class ProviderIngestionService {
 
   private async normalizeStaleMatchStatuses(runId: string) {
     const staleBefore = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    try {
+      const [scheduledNormalized, finishedWithoutScoreNormalized] = await Promise.all([
+        this.prisma.match.updateMany({
+          where: {
+            status: MatchStatus.scheduled,
+            matchDateTimeUTC: { lt: staleBefore },
+            homeScore: null,
+            awayScore: null
+          },
+          data: {
+            status: MatchStatus.postponed,
+            updatedByProcess: "status_normalizer"
+          }
+        }),
+        this.prisma.match.updateMany({
+          where: {
+            status: MatchStatus.finished,
+            matchDateTimeUTC: { lt: staleBefore },
+            OR: [{ homeScore: null }, { awayScore: null }]
+          },
+          data: {
+            status: MatchStatus.postponed,
+            updatedByProcess: "status_normalizer"
+          }
+        })
+      ]);
 
-    const [scheduledNormalized, finishedWithoutScoreNormalized] = await Promise.all([
-      this.prisma.match.updateMany({
-        where: {
-          status: MatchStatus.scheduled,
-          matchDateTimeUTC: { lt: staleBefore },
-          homeScore: null,
-          awayScore: null
-        },
-        data: {
-          status: MatchStatus.postponed,
-          updatedByProcess: "status_normalizer"
-        }
-      }),
-      this.prisma.match.updateMany({
-        where: {
-          status: MatchStatus.finished,
-          matchDateTimeUTC: { lt: staleBefore },
-          OR: [{ homeScore: null }, { awayScore: null }]
-        },
-        data: {
-          status: MatchStatus.postponed,
-          updatedByProcess: "status_normalizer"
-        }
-      })
-    ]);
+      const totalNormalized = scheduledNormalized.count + finishedWithoutScoreNormalized.count;
+      if (totalNormalized <= 0) {
+        return;
+      }
 
-    const totalNormalized = scheduledNormalized.count + finishedWithoutScoreNormalized.count;
-    if (totalNormalized <= 0) {
-      return;
+      await this.createExternalPayload("internal", runId, "match_status_normalization", {
+        staleBefore: staleBefore.toISOString(),
+        scheduledToPostponed: scheduledNormalized.count,
+        finishedWithoutScoreToPostponed: finishedWithoutScoreNormalized.count,
+        totalNormalized
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Stale match status normalization skipped: ${error instanceof Error ? error.message : "unknown error"}`
+      );
     }
-
-    await this.createExternalPayload("internal", runId, "match_status_normalization", {
-      staleBefore: staleBefore.toISOString(),
-      scheduledToPostponed: scheduledNormalized.count,
-      finishedWithoutScoreToPostponed: finishedWithoutScoreNormalized.count,
-      totalNormalized
-    });
   }
 
   private async getCheckpoint(providerKey: string, entityType: string) {
