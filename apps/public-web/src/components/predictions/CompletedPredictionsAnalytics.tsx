@@ -118,7 +118,11 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
     return sortRows((fallbackQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
   }, [fallbackQuery.data, finishedQuery.data]);
 
-  const report = useMemo(() => buildPredictionPerformanceReport(playedItems), [playedItems]);
+  const evaluatedItems = useMemo(
+    () => playedItems.filter((item) => evaluatePredictionResult(item) !== null),
+    [playedItems]
+  );
+  const report = useMemo(() => buildPredictionPerformanceReport(evaluatedItems), [evaluatedItems]);
   const isLoading = finishedQuery.isLoading || fallbackQuery.isLoading;
   const isError = finishedQuery.isError && fallbackQuery.isError && playedItems.length === 0;
 
@@ -263,7 +267,7 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
               </tr>
             </thead>
             <tbody>
-              {playedItems.slice(0, 120).map((item, index) => {
+              {evaluatedItems.slice(0, 120).map((item, index) => {
                 const verdict = verdictLabel(item);
                 const key = `${item.matchId}-${item.predictionType}-${item.marketKey ?? "market"}-${item.line ?? "na"}-${index}`;
                 return (
@@ -283,7 +287,7 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
                   </tr>
                 );
               })}
-              {playedItems.length === 0 && (
+              {evaluatedItems.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-3 text-slate-400">
                     Sonuçlanmış tahmin bulunamadı.
