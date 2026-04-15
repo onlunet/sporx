@@ -165,6 +165,7 @@ export class PredictionsService {
             halfTimeAwayScore: number | null;
             homeTeam: { name: string };
             awayTeam: { name: string };
+            league: { id: string; name: string; code: string | null } | null;
           };
         }>
       | [] = [];
@@ -221,7 +222,7 @@ export class PredictionsService {
         this.prisma.prediction.findMany({
           where: { matchId: { in: matchIds } },
           orderBy: { createdAt: "desc" },
-          include: { match: { include: { sport: true, homeTeam: true, awayTeam: true } } },
+          include: { match: { include: { sport: true, homeTeam: true, awayTeam: true, league: true } } },
           take: Math.max(take * 2, 100)
         }),
         12000
@@ -264,6 +265,13 @@ export class PredictionsService {
           match: {
             homeTeam: { name: item.match.homeTeam.name },
             awayTeam: { name: item.match.awayTeam.name },
+            league: item.match.league
+              ? {
+                  id: item.match.league.id,
+                  name: item.match.league.name,
+                  code: item.match.league.code
+                }
+              : undefined,
             matchDateTimeUTC: matchDateTime,
             status: item.match.status,
             homeScore: item.match.homeScore,
@@ -322,7 +330,8 @@ export class PredictionsService {
           include: {
             sport: true,
             homeTeam: true,
-            awayTeam: true
+            awayTeam: true,
+            league: true
           }
         }
       }
@@ -347,6 +356,13 @@ export class PredictionsService {
       match: {
         homeTeam: { name: row.match.homeTeam.name },
         awayTeam: { name: row.match.awayTeam.name },
+        league: row.match.league
+          ? {
+              id: row.match.league.id,
+              name: row.match.league.name,
+              code: row.match.league.code
+            }
+          : undefined,
         matchDateTimeUTC: row.match.matchDateTimeUTC,
         status: row.match.status,
         homeScore: row.match.homeScore,

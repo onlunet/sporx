@@ -11,6 +11,9 @@ export type ApiRiskFlag = {
 export type ExpandedPredictionItem = {
   matchId: string;
   modelVersionId?: string | null;
+  leagueId?: string;
+  leagueName?: string;
+  leagueCode?: string;
   predictionType:
     | "fullTimeResult"
     | "firstHalfResult"
@@ -66,6 +69,7 @@ export type PredictionRowInput = {
   match?: {
     homeTeam?: { name: string };
     awayTeam?: { name: string };
+    league?: { id: string; name: string; code?: string | null };
     matchDateTimeUTC?: Date;
     status?: string;
     homeScore?: number | null;
@@ -402,6 +406,9 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
     halfTimeHomeScore: row.match?.halfTimeHomeScore ?? null,
     halfTimeAwayScore: row.match?.halfTimeAwayScore ?? null,
     isPlayed: effectiveStatus === "finished" || playedByScoreAndTime,
+    leagueId: row.match?.league?.id,
+    leagueName: row.match?.league?.name,
+    leagueCode: row.match?.league?.code ?? undefined,
     homeTeam: row.match?.homeTeam?.name,
     awayTeam: row.match?.awayTeam?.name,
     matchDateTimeUTC: row.match?.matchDateTimeUTC?.toISOString()

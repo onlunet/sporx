@@ -41,6 +41,7 @@ const sportGroups: Array<{
       { href: "/football/matches", label: "Maclar", icon: Swords },
       { href: "/football/predictions", label: "Tahminler", icon: BrainCircuit },
       { href: "/football/predictions/completed", label: "Sonuclar", icon: BarChart3 },
+      { href: "/football/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
       { href: "/football/live", label: "Canli", icon: Radio }
     ]
   },
@@ -52,6 +53,7 @@ const sportGroups: Array<{
       { href: "/basketball/matches", label: "Maclar", icon: Swords },
       { href: "/basketball/predictions", label: "Tahminler", icon: BrainCircuit },
       { href: "/basketball/predictions/completed", label: "Sonuclar", icon: BarChart3 },
+      { href: "/basketball/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
       { href: "/basketball/live", label: "Canli", icon: Radio }
     ]
   }

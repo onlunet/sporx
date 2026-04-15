@@ -223,6 +223,9 @@ export function expandBasketballPredictionMarkets(row: PredictionRowInput): Expa
     halfTimeHomeScore: row.match?.halfTimeHomeScore ?? null,
     halfTimeAwayScore: row.match?.halfTimeAwayScore ?? null,
     isPlayed: status === "finished",
+    leagueId: row.match?.league?.id,
+    leagueName: row.match?.league?.name,
+    leagueCode: row.match?.league?.code ?? undefined,
     homeTeam: row.match?.homeTeam?.name,
     awayTeam: row.match?.awayTeam?.name,
     matchDateTimeUTC: kickoff

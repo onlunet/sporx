@@ -58,6 +58,9 @@ export type MatchCommentary = {
 export type MatchPredictionItem = {
   matchId: string;
   modelVersionId?: string | null;
+  leagueId?: string;
+  leagueName?: string;
+  leagueCode?: string;
   predictionType: PredictionType;
   marketKey?: string;
   selectionLabel?: string;

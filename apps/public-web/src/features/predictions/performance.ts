@@ -27,6 +27,35 @@ export type PredictionPerformanceReport = {
   byModel: PredictionAccuracyStats[];
 };
 
+export type LeaguePredictionTypePerformance = PredictionAccuracyStats;
+
+export type LeaguePerformanceRow = {
+  leagueKey: string;
+  leagueLabel: string;
+  evaluated: number;
+  correct: number;
+  failed: number;
+  successRate: number;
+  uniqueMatchCount: number;
+  topTypeLabel: string;
+  topTypeAccuracy: number;
+  byType: LeaguePredictionTypePerformance[];
+};
+
+export type LeaguePredictionPerformanceSummary = {
+  leagueCount: number;
+  evaluatedPredictions: number;
+  correctPredictions: number;
+  failedPredictions: number;
+  successRate: number;
+  uniqueMatchCount: number;
+};
+
+export type LeaguePredictionPerformanceReport = {
+  summary: LeaguePredictionPerformanceSummary;
+  leagues: LeaguePerformanceRow[];
+};
+
 function pickTopProbability(probabilities: Record<string, number> | undefined, candidates: string[]): string | null {
   if (!probabilities) {
     return null;
@@ -232,16 +261,36 @@ function engineLabel(type: PredictionType): string {
   return map[type];
 }
 
-export function buildPredictionPerformanceReport(items: MatchPredictionItem[]): PredictionPerformanceReport {
-  const playedItems = items.filter((item) => {
-    if (isCompletedMatchStatus(item.matchStatus)) {
-      return true;
+function isPredictionConsideredPlayed(item: MatchPredictionItem): boolean {
+  if (isCompletedMatchStatus(item.matchStatus)) {
+    return true;
+  }
+  if (isLiveMatchStatus(item.matchStatus)) {
+    return false;
+  }
+  return item.isPlayed === true;
+}
+
+function sortStatsByAccuracy<T extends PredictionAccuracyStats>(rows: T[]): T[] {
+  return rows.sort((left, right) => {
+    if (right.accuracy !== left.accuracy) {
+      return right.accuracy - left.accuracy;
     }
-    if (isLiveMatchStatus(item.matchStatus)) {
-      return false;
+    if (right.evaluated !== left.evaluated) {
+      return right.evaluated - left.evaluated;
     }
-    return item.isPlayed === true;
+    return left.label.localeCompare(right.label, "tr");
   });
+}
+
+function resolveLeagueIdentity(item: MatchPredictionItem): { key: string; label: string } {
+  const key = item.leagueId ?? item.leagueCode ?? item.leagueName ?? "unknown_league";
+  const label = item.leagueName ?? item.leagueCode ?? "Bilinmeyen Lig";
+  return { key, label };
+}
+
+export function buildPredictionPerformanceReport(items: MatchPredictionItem[]): PredictionPerformanceReport {
+  const playedItems = items.filter((item) => isPredictionConsideredPlayed(item));
   const evaluations = playedItems.map((item) => ({
     item,
     result: evaluatePrediction(item)
@@ -291,5 +340,87 @@ export function buildPredictionPerformanceReport(items: MatchPredictionItem[]): 
     byType: byTypeRows,
     byEngine: byEngineRows,
     byModel: byModelRows
+  };
+}
+
+export function buildLeaguePredictionPerformanceReport(items: MatchPredictionItem[]): LeaguePredictionPerformanceReport {
+  const playedItems = items.filter((item) => isPredictionConsideredPlayed(item));
+  const leagueMap = new Map<
+    string,
+    {
+      label: string;
+      results: Array<{ item: MatchPredictionItem; result: boolean | null }>;
+      uniqueMatchIds: Set<string>;
+    }
+  >();
+
+  for (const item of playedItems) {
+    const { key, label } = resolveLeagueIdentity(item);
+    const result = evaluatePrediction(item);
+    const existing = leagueMap.get(key) ?? { label, results: [], uniqueMatchIds: new Set<string>() };
+    existing.results.push({ item, result });
+    existing.uniqueMatchIds.add(item.matchId);
+    leagueMap.set(key, existing);
+  }
+
+  const leagues: LeaguePerformanceRow[] = [];
+  for (const [leagueKey, leagueData] of leagueMap.entries()) {
+    const typeMap = new Map<PredictionType, Array<boolean | null>>();
+    const evaluatedResults = leagueData.results
+      .map((entry) => entry.result)
+      .filter((value): value is boolean => value !== null);
+    const correct = evaluatedResults.filter((value) => value).length;
+    const failed = evaluatedResults.length - correct;
+
+    for (const entry of leagueData.results) {
+      const values = typeMap.get(entry.item.predictionType) ?? [];
+      values.push(entry.result);
+      typeMap.set(entry.item.predictionType, values);
+    }
+
+    const byType = sortStatsByAccuracy(
+      Array.from(typeMap.entries()).map(([type, values]) => toStats(type, predictionTypeLabel(type), values))
+    );
+    const topType = byType[0];
+
+    leagues.push({
+      leagueKey,
+      leagueLabel: leagueData.label,
+      evaluated: evaluatedResults.length,
+      correct,
+      failed,
+      successRate: evaluatedResults.length > 0 ? roundPercentage(correct / evaluatedResults.length) : 0,
+      uniqueMatchCount: leagueData.uniqueMatchIds.size,
+      topTypeLabel: topType?.label ?? "Degerlendirilebilir tur yok",
+      topTypeAccuracy: topType?.accuracy ?? 0,
+      byType
+    });
+  }
+
+  const totalEvaluated = leagues.reduce((acc, league) => acc + league.evaluated, 0);
+  const totalCorrect = leagues.reduce((acc, league) => acc + league.correct, 0);
+  const totalFailed = leagues.reduce((acc, league) => acc + league.failed, 0);
+  const totalUniqueMatches = leagues.reduce((acc, league) => acc + league.uniqueMatchCount, 0);
+
+  const sortedLeagues = leagues.sort((left, right) => {
+    if (right.successRate !== left.successRate) {
+      return right.successRate - left.successRate;
+    }
+    if (right.evaluated !== left.evaluated) {
+      return right.evaluated - left.evaluated;
+    }
+    return left.leagueLabel.localeCompare(right.leagueLabel, "tr");
+  });
+
+  return {
+    summary: {
+      leagueCount: sortedLeagues.length,
+      evaluatedPredictions: totalEvaluated,
+      correctPredictions: totalCorrect,
+      failedPredictions: totalFailed,
+      successRate: totalEvaluated > 0 ? roundPercentage(totalCorrect / totalEvaluated) : 0,
+      uniqueMatchCount: totalUniqueMatches
+    },
+    leagues: sortedLeagues
   };
 }

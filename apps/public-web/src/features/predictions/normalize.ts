@@ -303,6 +303,10 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
 
   const predictionType = resolvePredictionType(record, fallbackType);
   const expectedScoreRecord = asRecord(record.expectedScore);
+  const leagueRecord = asRecord(record.league);
+  const leagueId = asString(record.leagueId) ?? asString(leagueRecord?.id);
+  const leagueName = asString(record.leagueName) ?? asString(leagueRecord?.name);
+  const leagueCode = asString(record.leagueCode) ?? asString(leagueRecord?.code);
   const expectedScore =
     expectedScoreRecord && (asNumber(expectedScoreRecord.home) !== undefined || asNumber(expectedScoreRecord.away) !== undefined)
       ? {
@@ -365,6 +369,9 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
   return {
     matchId,
     modelVersionId: asString(record.modelVersionId) ?? null,
+    leagueId,
+    leagueName,
+    leagueCode,
     predictionType,
     marketKey: asString(record.marketKey),
     selectionLabel: asString(record.selectionLabel),

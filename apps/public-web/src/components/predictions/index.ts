@@ -15,3 +15,4 @@ export * from "./PredictionRiskBadges";
 export * from "./MatchPredictionExperience";
 export * from "./PredictionsExplorer";
 export * from "./CompletedPredictionsAnalytics";
+export * from "./LeaguePredictionPerformance";
