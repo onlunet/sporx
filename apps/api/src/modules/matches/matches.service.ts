@@ -79,9 +79,9 @@ export class MatchesService {
           status: MatchStatus;
           homeScore: number | null;
           awayScore: number | null;
-          league: { name: string };
-          homeTeam: { name: string };
-          awayTeam: { name: string };
+          homeTeamId: string;
+          awayTeamId: string;
+          leagueId: string;
         }>
       | [] = [];
 
@@ -90,7 +90,16 @@ export class MatchesService {
         this.prisma.match.findMany({
           where: statuses ? { status: { in: statuses } } : undefined,
           orderBy: { matchDateTimeUTC: "desc" },
-          include: { homeTeam: true, awayTeam: true, league: true },
+          select: {
+            id: true,
+            matchDateTimeUTC: true,
+            status: true,
+            homeScore: true,
+            awayScore: true,
+            homeTeamId: true,
+            awayTeamId: true,
+            leagueId: true
+          },
           take
         }),
         9000
@@ -100,12 +109,37 @@ export class MatchesService {
       return [];
     }
 
+    const teamIds = Array.from(
+      new Set(matches.flatMap((match) => [match.homeTeamId, match.awayTeamId]).filter((teamId) => teamId.length > 0))
+    );
+    const leagueIds = Array.from(new Set(matches.map((match) => match.leagueId).filter((leagueId) => leagueId.length > 0)));
+
+    const [teams, leagues] = await Promise.all([
+      queryWithTimeout(
+        this.prisma.team.findMany({
+          where: { id: { in: teamIds } },
+          select: { id: true, name: true }
+        }),
+        6000
+      ).catch(() => [] as Array<{ id: string; name: string }>),
+      queryWithTimeout(
+        this.prisma.league.findMany({
+          where: { id: { in: leagueIds } },
+          select: { id: true, name: true }
+        }),
+        6000
+      ).catch(() => [] as Array<{ id: string; name: string }>)
+    ]);
+
+    const teamNameById = new Map(teams.map((team) => [team.id, team.name]));
+    const leagueNameById = new Map(leagues.map((league) => [league.id, league.name]));
+
     const data = matches.map((match) => ({
       id: match.id,
       kickoffAt: match.matchDateTimeUTC.toISOString(),
-      leagueName: match.league.name,
-      homeTeam: match.homeTeam.name,
-      awayTeam: match.awayTeam.name,
+      leagueName: leagueNameById.get(match.leagueId) ?? "Unknown League",
+      homeTeam: teamNameById.get(match.homeTeamId) ?? "Unknown Home Team",
+      awayTeam: teamNameById.get(match.awayTeamId) ?? "Unknown Away Team",
       status: match.status,
       score: { home: match.homeScore, away: match.awayScore }
     }));

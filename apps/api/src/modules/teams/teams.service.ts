@@ -30,19 +30,6 @@ export class TeamsService {
       return cached;
     }
 
-    let teams: Awaited<ReturnType<TeamIdentityService["listCanonicalTeams"]>> = [];
-    try {
-      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 8000);
-    } catch {
-      await this.cache.set(cacheKey, [], 20, ["teams"]);
-      return [];
-    }
-
-    if (!normalizedQuery) {
-      await this.cache.set(cacheKey, teams, 90, ["teams"]);
-      return teams;
-    }
-
     const normalizeText = (value: string) =>
       value
         .toLocaleLowerCase("tr-TR")
@@ -50,12 +37,40 @@ export class TeamsService {
         .replace(/[\u0300-\u036f]/g, "")
         .trim();
 
-    const needle = normalizeText(normalizedQuery);
-    const filtered = teams.filter((team) =>
-      [team.name, team.shortName ?? "", team.country ?? ""]
-        .map((item) => normalizeText(item))
-        .some((item) => item.includes(needle))
-    );
+    const applyQueryFilter = <T extends { name: string; shortName: string | null; country: string | null }>(items: T[]) => {
+      if (!normalizedQuery) {
+        return items;
+      }
+      const needle = normalizeText(normalizedQuery);
+      return items.filter((team) =>
+        [team.name, team.shortName ?? "", team.country ?? ""]
+          .map((item) => normalizeText(item))
+          .some((item) => item.includes(needle))
+      );
+    };
+
+    let teams: Array<{ id: string; name: string; shortName: string | null; country: string | null }> = [];
+    try {
+      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 8000);
+    } catch {
+      try {
+        const fallback = await queryWithTimeout(
+          this.prisma.team.findMany({
+            orderBy: [{ name: "asc" }, { id: "asc" }],
+            take: safeTake
+          }),
+          9000
+        );
+        const filteredFallback = applyQueryFilter(fallback);
+        await this.cache.set(cacheKey, filteredFallback, 45, ["teams"]);
+        return filteredFallback;
+      } catch {
+        await this.cache.set(cacheKey, [], 20, ["teams"]);
+        return [];
+      }
+    }
+
+    const filtered = applyQueryFilter(teams);
     await this.cache.set(cacheKey, filtered, 90, ["teams"]);
     return filtered;
   }
