@@ -6,7 +6,12 @@ export class TeamComparisonController {
   constructor(private readonly teamComparisonService: TeamComparisonService) {}
 
   @Get("teams")
-  compare(@Query("homeTeamId") homeTeamId: string, @Query("awayTeamId") awayTeamId: string, @Query("seasonId") seasonId?: string) {
-    return this.teamComparisonService.compareTeams(homeTeamId, awayTeamId, seasonId);
+  compare(
+    @Query("homeTeamId") homeTeamId: string,
+    @Query("awayTeamId") awayTeamId: string,
+    @Query("seasonId") seasonId?: string,
+    @Query("sport") sport?: string
+  ) {
+    return this.teamComparisonService.compareTeams(homeTeamId, awayTeamId, seasonId, sport);
   }
 }

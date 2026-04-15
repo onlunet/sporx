@@ -8,6 +8,9 @@ import { DynamicLambdaService } from "./dynamic-lambda.service";
 import { DixonColesService } from "./dixon-coles.service";
 import { AdvancedPredictionEngineService } from "./advanced-prediction-engine.service";
 import { OddsModule } from "../odds/odds.module";
+import { FootballPredictionStrategy } from "./sport-strategies/football-prediction.strategy";
+import { BasketballPredictionStrategy } from "./sport-strategies/basketball-prediction.strategy";
+import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
 
 @Module({
   imports: [OddsModule],
@@ -19,7 +22,10 @@ import { OddsModule } from "../odds/odds.module";
     AdvancedEloService,
     DynamicLambdaService,
     DixonColesService,
-    AdvancedPredictionEngineService
+    AdvancedPredictionEngineService,
+    FootballPredictionStrategy,
+    BasketballPredictionStrategy,
+    PredictionSportStrategyRegistry
   ],
   exports: [
     PredictionsService,
@@ -28,7 +34,8 @@ import { OddsModule } from "../odds/odds.module";
     AdvancedEloService,
     DynamicLambdaService,
     DixonColesService,
-    AdvancedPredictionEngineService
+    AdvancedPredictionEngineService,
+    PredictionSportStrategyRegistry
   ]
 })
 export class PredictionsModule {}

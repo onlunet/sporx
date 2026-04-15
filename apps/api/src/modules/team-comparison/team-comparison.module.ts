@@ -9,6 +9,9 @@ import { ScenarioEngineService } from "./scenario-engine.service";
 import { ExplanationEngineService } from "./explanation-engine.service";
 import { ComparisonConfidenceService } from "./comparison-confidence.service";
 import { TeamsModule } from "../teams/teams.module";
+import { FootballComparisonStrategy } from "./sport-strategies/football-comparison.strategy";
+import { BasketballComparisonStrategy } from "./sport-strategies/basketball-comparison.strategy";
+import { TeamComparisonStrategyRegistry } from "./sport-strategies/team-comparison-strategy.registry";
 
 @Module({
   imports: [TeamsModule],
@@ -21,7 +24,10 @@ import { TeamsModule } from "../teams/teams.module";
     ComparisonEngineService,
     ScenarioEngineService,
     ExplanationEngineService,
-    ComparisonConfidenceService
+    ComparisonConfidenceService,
+    FootballComparisonStrategy,
+    BasketballComparisonStrategy,
+    TeamComparisonStrategyRegistry
   ],
   exports: [TeamComparisonService]
 })

@@ -2,8 +2,8 @@ import { Injectable } from "@nestjs/common";
 import { MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
-import { expandPredictionMarkets } from "./prediction-markets.util";
 import { OddsService } from "../odds/odds.service";
+import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
 
 type ListPredictionsParams = {
   status?: string;
@@ -110,7 +110,8 @@ export class PredictionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
-    private readonly oddsService: OddsService
+    private readonly oddsService: OddsService,
+    private readonly predictionStrategyRegistry: PredictionSportStrategyRegistry
   ) {}
 
   async list(params?: ListPredictionsParams) {
@@ -149,6 +150,7 @@ export class PredictionsService {
           updatedAt: Date;
           createdAt: Date;
           match: {
+            sport: { code: string };
             status: MatchStatus;
             matchDateTimeUTC: Date;
             homeScore: number | null;
@@ -213,7 +215,7 @@ export class PredictionsService {
         this.prisma.prediction.findMany({
           where: { matchId: { in: matchIds } },
           orderBy: { createdAt: "desc" },
-          include: { match: { include: { homeTeam: true, awayTeam: true } } },
+          include: { match: { include: { sport: true, homeTeam: true, awayTeam: true } } },
           take: Math.max(take * 2, 100)
         }),
         12000
@@ -241,7 +243,7 @@ export class PredictionsService {
       }
 
       try {
-        return expandPredictionMarkets({
+        return this.predictionStrategyRegistry.forSport(item.match.sport?.code).expand({
           matchId: item.matchId,
           modelVersionId: item.modelVersionId,
           probabilities: item.probabilities,
