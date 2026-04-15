@@ -23,6 +23,9 @@ function buildUpstreamCandidates() {
     const normalized = trimTrailingSlash(raw.trim());
     if (normalized.length > 0) {
       unique.add(normalized);
+      if (normalized.startsWith("https://")) {
+        unique.add(`http://${normalized.slice("https://".length)}`);
+      }
     }
   }
 
