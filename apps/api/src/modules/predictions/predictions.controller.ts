@@ -8,6 +8,7 @@ export class PredictionsController {
   @Get()
   list(
     @Query("status") status?: string,
+    @Query("sport") sport?: string,
     @Query("predictionType") predictionType?: string,
     @Query("line") line?: string,
     @Query("take") take?: string,
@@ -18,6 +19,7 @@ export class PredictionsController {
     const includeMarket = includeMarketAnalysis === "true" || includeMarketAnalysis === "1";
     return this.predictionsService.list({
       status,
+      sport,
       predictionType,
       line: Number.isFinite(parsedLine) ? parsedLine : undefined,
       take: Number.isFinite(parsedTake) ? parsedTake : undefined,

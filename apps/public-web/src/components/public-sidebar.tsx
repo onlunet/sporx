@@ -14,12 +14,14 @@ import {
   Radio,
   BookOpen,
   User,
-  Zap
+  Zap,
+  Dumbbell
 } from "lucide-react";
 
 const links = [
   { href: "/dashboard", label: "Panel", icon: LayoutDashboard },
   { href: "/matches", label: "Maçlar", icon: Swords },
+  { href: "/basketball", label: "Basketbol", icon: Dumbbell },
   { href: "/leagues", label: "Ligler", icon: Trophy },
   { href: "/teams", label: "Takımlar", icon: Shield },
   { href: "/predictions", label: "Tahminler", icon: BrainCircuit },

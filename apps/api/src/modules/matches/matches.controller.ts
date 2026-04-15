@@ -6,10 +6,11 @@ export class MatchesController {
   constructor(private readonly matchesService: MatchesService) {}
 
   @Get()
-  list(@Query("status") status?: string, @Query("take") take?: string) {
+  list(@Query("status") status?: string, @Query("take") take?: string, @Query("sport") sport?: string) {
     const parsedTake = Number(take);
     return this.matchesService.list({
       status,
+      sport,
       take: Number.isFinite(parsedTake) ? parsedTake : undefined
     });
   }

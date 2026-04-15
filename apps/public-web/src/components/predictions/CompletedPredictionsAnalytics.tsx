@@ -60,9 +60,13 @@ function shortModelId(modelId: string): string {
   return `${modelId.slice(0, 8)}...${modelId.slice(-4)}`;
 }
 
-export function CompletedPredictionsAnalytics() {
-  const finishedQuery = usePredictionsByType("all", "finished", 300);
-  const fallbackQuery = usePredictionsByType("all", undefined, 300);
+type CompletedPredictionsAnalyticsProps = {
+  sport?: "football" | "basketball";
+};
+
+export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAnalyticsProps = {}) {
+  const finishedQuery = usePredictionsByType("all", "finished", 300, sport);
+  const fallbackQuery = usePredictionsByType("all", undefined, 300, sport);
 
   const playedItems = useMemo(() => {
     const sortRows = (rows: MatchPredictionItem[]) =>

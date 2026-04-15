@@ -7,6 +7,7 @@ import { OddsService } from "../odds/odds.service";
 
 type ListPredictionsParams = {
   status?: string;
+  sport?: string;
   predictionType?: string;
   line?: number;
   take?: number;
@@ -79,6 +80,20 @@ function parseTake(input: number | undefined, hasExplicitStatus: boolean) {
   return Math.max(1, Math.min(300, Math.trunc(input)));
 }
 
+function parseSportFilter(input?: string): "football" | "basketball" | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (normalized === "football" || normalized === "soccer") {
+    return "football";
+  }
+  if (normalized === "basketball" || normalized === "basket" || normalized === "nba") {
+    return "basketball";
+  }
+  return undefined;
+}
+
 async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return await Promise.race<T>([
     promise,
@@ -100,6 +115,7 @@ export class PredictionsService {
 
   async list(params?: ListPredictionsParams) {
     const statuses = parseStatusFilter(params?.status);
+    const sportCode = parseSportFilter(params?.sport);
     const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
     const predictionType = parsePredictionType(params?.predictionType);
     const line = parseLine(params?.line);
@@ -107,10 +123,11 @@ export class PredictionsService {
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
     const statusKey = effectiveStatuses.join("|");
     const typeKey = predictionType ?? "all";
+    const sportKey = sportCode ?? "all";
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v7:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v8:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -150,7 +167,10 @@ export class PredictionsService {
         effectiveStatuses.length === 1
           ? await queryWithTimeout(
               this.prisma.match.findMany({
-                where: { status: { in: effectiveStatuses } },
+                where: {
+                  status: { in: effectiveStatuses },
+                  ...(sportCode ? { sport: { code: sportCode } } : {})
+                },
                 select: { id: true, matchDateTimeUTC: true },
                 orderBy: { matchDateTimeUTC: "desc" },
                 take: targetTake
@@ -163,7 +183,10 @@ export class PredictionsService {
                   try {
                     return await queryWithTimeout(
                       this.prisma.match.findMany({
-                        where: { status },
+                        where: {
+                          status,
+                          ...(sportCode ? { sport: { code: sportCode } } : {})
+                        },
                         select: { id: true, matchDateTimeUTC: true },
                         orderBy: { matchDateTimeUTC: "desc" },
                         take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)

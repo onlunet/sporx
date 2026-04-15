@@ -262,13 +262,21 @@ function PredictionCard({ item, index }: { item: MatchPredictionItem; index: num
 
 type PredictionsExplorerProps = {
   scope?: "upcoming" | "completed";
+  sport?: "football" | "basketball";
+  title?: string;
+  description?: string;
 };
 
-export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerProps) {
+export function PredictionsExplorer({
+  scope = "upcoming",
+  sport,
+  title,
+  description
+}: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
   const requestedTake = scope === "completed" ? 180 : 80;
-  const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake);
+  const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
   const items = useMemo(() => {
     const sorted = sortPredictions(query.data ?? [], scope);
     if (scope === "completed") {
@@ -293,13 +301,14 @@ export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerP
           </div>
           
           <h1 className="font-display text-3xl md:text-4xl font-bold text-white mb-2">
-            Maç <span className="gradient-text">Tahminleri</span>
+            {title ?? <>Maç <span className="gradient-text">Tahminleri</span></>}
           </h1>
           
           <p className="text-slate-400 max-w-xl">
-            {scope === "completed"
-              ? "Sonuçlanan maçlar için üretilen tahminlerin detay listesi."
-              : "Yapay zeka destekli analizler ve henüz oynanmamış maç tahminleri."}
+            {description ??
+              (scope === "completed"
+                ? "Sonuçlanan maçlar için üretilen tahminlerin detay listesi."
+                : "Yapay zeka destekli analizler ve henüz oynanmamış maç tahminleri.")}
           </p>
           {scope === "upcoming" && (
             <div className="mt-3">

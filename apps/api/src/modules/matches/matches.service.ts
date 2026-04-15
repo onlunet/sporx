@@ -7,6 +7,7 @@ import { OddsService } from "../odds/odds.service";
 
 type ListMatchesParams = {
   status?: string;
+  sport?: string;
   take?: number;
 };
 
@@ -45,6 +46,20 @@ function normalizeTake(take?: number): number {
   return Math.max(1, Math.min(300, Math.trunc(take ?? 80)));
 }
 
+function parseSportFilter(input?: string): "football" | "basketball" | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (normalized === "football" || normalized === "soccer") {
+    return "football";
+  }
+  if (normalized === "basketball" || normalized === "nba" || normalized === "basket") {
+    return "basketball";
+  }
+  return undefined;
+}
+
 async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return await Promise.race<T>([
     promise,
@@ -64,10 +79,12 @@ export class MatchesService {
 
   async list(params?: ListMatchesParams) {
     const statuses = parseStatusFilter(params?.status);
+    const sportCode = parseSportFilter(params?.sport);
     const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live, MatchStatus.finished];
     const take = normalizeTake(params?.take);
+    const sportKey = sportCode ?? "all";
     const statusKey = effectiveStatuses.join("|");
-    const cacheKey = `matches:list:v2:${statusKey}:${take}`;
+    const cacheKey = `matches:list:v3:${sportKey}:${statusKey}:${take}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -102,7 +119,10 @@ export class MatchesService {
       if (statuses && statuses.length === 1) {
         matches = await queryWithTimeout(
           this.prisma.match.findMany({
-            where: { status: { in: effectiveStatuses } },
+            where: {
+              status: { in: effectiveStatuses },
+              ...(sportCode ? { sport: { code: sportCode } } : {})
+            },
             orderBy: { matchDateTimeUTC: "desc" },
             select: matchSelect,
             take
@@ -116,7 +136,10 @@ export class MatchesService {
             try {
               return await queryWithTimeout(
                 this.prisma.match.findMany({
-                  where: { status },
+                  where: {
+                    status,
+                    ...(sportCode ? { sport: { code: sportCode } } : {})
+                  },
                   orderBy: { matchDateTimeUTC: "desc" },
                   select: matchSelect,
                   take: perStatusTake

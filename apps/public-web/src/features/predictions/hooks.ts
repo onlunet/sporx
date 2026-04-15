@@ -48,6 +48,7 @@ type PredictionListQuery = {
   predictionType?: PredictionType | "all";
   status?: string;
   take?: number;
+  sport?: string;
 };
 
 function buildPredictionQueryString(query: PredictionListQuery): string {
@@ -62,6 +63,9 @@ function buildPredictionQueryString(query: PredictionListQuery): string {
   }
   if (Number.isFinite(query.take ?? NaN) && (query.take ?? 0) > 0) {
     params.set("take", String(Math.trunc(query.take as number)));
+  }
+  if (query.sport && query.sport.trim().length > 0) {
+    params.set("sport", query.sport.trim().toLowerCase());
   }
 
   const serialized = params.toString();
@@ -140,10 +144,15 @@ export function useMatchCommentary(matchId: string, enabled = true) {
   });
 }
 
-export function usePredictionsByType(predictionType?: PredictionType | "all", status?: string, take?: number) {
+export function usePredictionsByType(
+  predictionType?: PredictionType | "all",
+  status?: string,
+  take?: number,
+  sport?: string
+) {
   const query = useQuery({
-    queryKey: ["predictions", predictionType ?? "all", status ?? "all", take ?? "default"],
-    queryFn: () => fetchPredictions({ predictionType, status, take }),
+    queryKey: ["predictions", predictionType ?? "all", status ?? "all", take ?? "default", sport ?? "all"],
+    queryFn: () => fetchPredictions({ predictionType, status, take, sport }),
     retry: 1,
     staleTime: 60_000,
     refetchInterval: 30_000,
