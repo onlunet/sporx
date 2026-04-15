@@ -72,13 +72,13 @@ export default function GuidePage() {
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link
-              href="/predictions"
+              href="/football/predictions"
               className="rounded-lg border border-neon-cyan/40 bg-neon-cyan/10 px-4 py-2 text-sm font-medium text-neon-cyan transition hover:bg-neon-cyan/20"
             >
               Tahminlere Git
             </Link>
             <Link
-              href="/predictions/completed"
+              href="/football/predictions/completed"
               className="rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
             >
               Sonuclanan Tahminler
@@ -172,7 +172,7 @@ export default function GuidePage() {
           <article className="rounded-xl border border-white/10 bg-white/5 p-4">
             <h3 className="text-sm font-semibold text-white">Motor basarisini nereden izlerim?</h3>
             <p className="mt-2 text-sm text-slate-300">
-              <Link href="/predictions/completed" className="text-neon-cyan hover:underline">
+              <Link href="/football/predictions/completed" className="text-neon-cyan hover:underline">
                 Sonuclanan Tahminler
               </Link>{" "}
               ekraninda toplam dogru/yanlis ve tahmin tipi bazli basariyi gorebilirsin.

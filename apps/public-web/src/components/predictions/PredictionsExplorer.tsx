@@ -274,6 +274,7 @@ export function PredictionsExplorer({
   description
 }: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
+  const completedLink = sport ? `/${sport}/predictions/completed` : "/football/predictions/completed";
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
   const requestedTake = scope === "completed" ? 180 : 80;
   const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
@@ -313,7 +314,7 @@ export function PredictionsExplorer({
           {scope === "upcoming" && (
             <div className="mt-3">
               <Link
-                href="/predictions/completed"
+                href={completedLink}
                 className="inline-flex items-center gap-2 rounded-lg border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-2 text-xs font-medium text-neon-cyan hover:bg-neon-cyan/20"
               >
                 Sonuçlanan tahmin analizine git

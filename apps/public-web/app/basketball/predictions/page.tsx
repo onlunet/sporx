@@ -6,8 +6,7 @@ export default function BasketballPredictionsPage() {
       scope="upcoming"
       sport="basketball"
       title="Basketbol Tahminleri"
-      description="Basketbol maçları için üretilen canlı ve yaklaşan tahminleri bu bölümde takip edebilirsiniz."
+      description="Basketbol maclari icin uretilen canli ve yaklasan tahminleri bu bolumde takip edebilirsiniz."
     />
   );
 }
-

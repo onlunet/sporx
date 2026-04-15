@@ -1,11 +1,13 @@
-'use client';
+"use client";
 
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { MatchPredictionItem, normalizePredictionList } from '../../features/predictions';
-import { LiveMatchCard, LiveStats } from './';
-import { Radio, RefreshCw, Zap } from 'lucide-react';
-import { resolveBrowserApiBase } from '../../lib/api-base-url';
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { MatchPredictionItem, normalizePredictionList } from "../../features/predictions";
+import { LiveMatchCard, LiveStats } from "./";
+import { Radio, RefreshCw, Zap } from "lucide-react";
+import { resolveBrowserApiBase } from "../../lib/api-base-url";
+
+type SportScope = "football" | "basketball";
 
 type Envelope<T> = {
   success: boolean;
@@ -30,48 +32,66 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T> | null> {
   const apiBase = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
   try {
     const response = await fetch(`${apiBase}${path}`, {
-      cache: 'no-store',
-      credentials: 'include',
+      cache: "no-store",
+      credentials: "include"
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return null;
+    }
     return (await response.json()) as Envelope<T>;
   } catch {
     return null;
   }
 }
 
-async function fetchLiveMatches(): Promise<MatchSummary[]> {
-  const response = await fetchEnvelope<MatchSummary[]>('/api/v1/matches?status=live&take=50');
-  const data = Array.isArray(response?.data) ? response.data : [];
-  return data.filter((item) => item.status?.toLowerCase() === 'live');
+function withSport(path: string, sport?: SportScope): string {
+  if (!sport) {
+    return path;
+  }
+  const joiner = path.includes("?") ? "&" : "?";
+  return `${path}${joiner}sport=${sport}`;
 }
 
-async function fetchLivePredictions(): Promise<MatchPredictionItem[]> {
-  const response = await fetchEnvelope<unknown>('/api/v1/predictions?status=live');
+async function fetchLiveMatches(sport?: SportScope): Promise<MatchSummary[]> {
+  const response = await fetchEnvelope<MatchSummary[]>(withSport("/api/v1/matches?status=live&take=50", sport));
+  const data = Array.isArray(response?.data) ? response.data : [];
+  return data.filter((item) => item.status?.toLowerCase() === "live");
+}
+
+async function fetchLivePredictions(sport?: SportScope): Promise<MatchPredictionItem[]> {
+  const response = await fetchEnvelope<unknown>(withSport("/api/v1/predictions?status=live", sport));
   const all = normalizePredictionList(response?.data);
-  return all.filter((item) => (item.matchStatus ?? '').toLowerCase() === 'live');
+  return all.filter((item) => (item.matchStatus ?? "").toLowerCase() === "live");
 }
 
 function normalizeScore(value: number | null | undefined): number | null {
-  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
+  }
   return Math.max(0, Math.round(value));
 }
 
-export function LiveMatchesBoard() {
+type LiveMatchesBoardProps = {
+  sport?: SportScope;
+};
+
+export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
+  const sportLabel = sport === "basketball" ? "Basketbol" : "Futbol";
+
   const matchesQuery = useQuery({
-    queryKey: ['live-matches'],
-    queryFn: fetchLiveMatches,
+    queryKey: ["live-matches", sport ?? "all"],
+    queryFn: () => fetchLiveMatches(sport),
     refetchInterval: 15_000,
     staleTime: 10_000,
-    retry: 1,
+    retry: 1
   });
 
   const predictionsQuery = useQuery({
-    queryKey: ['live-predictions'],
-    queryFn: fetchLivePredictions,
+    queryKey: ["live-predictions", sport ?? "all"],
+    queryFn: () => fetchLivePredictions(sport),
     refetchInterval: 15_000,
     staleTime: 10_000,
-    retry: 1,
+    retry: 1
   });
 
   const rows = useMemo<LiveMatchRow[]>(() => {
@@ -91,93 +111,96 @@ export function LiveMatchesBoard() {
       byMatchId.set(prediction.matchId, {
         id: prediction.matchId,
         kickoffAt: prediction.matchDateTimeUTC ?? new Date().toISOString(),
-        leagueName: 'Canlı',
-        homeTeam: prediction.homeTeam ?? 'Ev sahibi',
-        awayTeam: prediction.awayTeam ?? 'Deplasman',
-        status: 'live',
+        leagueName: `Canli ${sportLabel}`,
+        homeTeam: prediction.homeTeam ?? "Ev Sahibi",
+        awayTeam: prediction.awayTeam ?? "Deplasman",
+        status: "live",
         score: {
           home: normalizeScore(prediction.homeScore),
-          away: normalizeScore(prediction.awayScore),
+          away: normalizeScore(prediction.awayScore)
         },
-        predictions: [prediction],
+        predictions: [prediction]
       });
     }
 
     return Array.from(byMatchId.values()).sort(
       (a, b) => new Date(b.kickoffAt).getTime() - new Date(a.kickoffAt).getTime()
     );
-  }, [matchesQuery.data, predictionsQuery.data]);
+  }, [matchesQuery.data, predictionsQuery.data, sportLabel]);
 
   const isLoading = matchesQuery.isLoading || predictionsQuery.isLoading;
   const isError = matchesQuery.isError || predictionsQuery.isError;
 
   return (
-    <div className='space-y-8'>
-      <div className='relative overflow-hidden rounded-3xl bg-gradient-to-br from-surface via-abyss to-void border border-white/10 p-8'>
-        <div className='absolute top-0 right-0 w-96 h-96 bg-neon-red/10 rounded-full blur-[100px] pointer-events-none' />
-        <div className='absolute bottom-0 left-0 w-64 h-64 bg-neon-cyan/10 rounded-full blur-[80px] pointer-events-none' />
-        
-        <div className='relative'>
-          <div className='flex items-center justify-between mb-6'>
-            <div className='flex items-center gap-3'>
-              <div className='relative'>
-                <div className='absolute inset-0 bg-neon-red/30 blur-xl rounded-full animate-pulse' />                
-                <div className='relative w-12 h-12 rounded-xl bg-gradient-to-br from-neon-red to-neon-amber flex items-center justify-center'>
-                  <Radio className='w-6 h-6 text-white' />
+    <div className="space-y-8">
+      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-surface via-abyss to-void p-8">
+        <div className="pointer-events-none absolute right-0 top-0 h-96 w-96 rounded-full bg-neon-red/10 blur-[100px]" />
+        <div className="pointer-events-none absolute bottom-0 left-0 h-64 w-64 rounded-full bg-neon-cyan/10 blur-[80px]" />
+
+        <div className="relative">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <div className="absolute inset-0 animate-pulse rounded-full bg-neon-red/30 blur-xl" />
+                <div className="relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-neon-red to-neon-amber">
+                  <Radio className="h-6 w-6 text-white" />
                 </div>
-              </div>              
+              </div>
               <div>
-                <h1 className='text-3xl font-bold font-display'>
-                  <span className='text-white'>Canlı</span>{' '}
-                  <span className='text-neon-red'>Maç Merkezi</span>
-                </h1>                
-                <p className='text-sm text-slate-400'>Gerçek zamanlı skorlar ve tahminler</p>
+                <h1 className="font-display text-3xl font-bold">
+                  <span className="text-white">Canli</span> <span className="text-neon-red">{sportLabel} Merkezi</span>
+                </h1>
+                <p className="text-sm text-slate-400">Gercek zamanli skorlar ve tahminler</p>
               </div>
             </div>
-            
-            <div className='flex items-center gap-2 text-xs text-slate-500'>
-              <RefreshCw className={`w-4 h-4 ${matchesQuery.isFetching ? 'animate-spin' : ''}`} />              
+
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <RefreshCw className={`h-4 w-4 ${matchesQuery.isFetching ? "animate-spin" : ""}`} />
               <span>15 saniyede yenilenir</span>
             </div>
-          </div>          
-          
-          <LiveStats matches={rows} />
+          </div>
+
+          <LiveStats
+            matches={rows}
+            matchLabel={`Canli ${sportLabel} Maci`}
+            scoreLabel={sport === "basketball" ? "Toplam Sayi" : "Toplam Gol"}
+          />
         </div>
       </div>
 
       {isLoading ? (
-        <div className='grid gap-5 md:grid-cols-2'>
+        <div className="grid gap-5 md:grid-cols-2">
           {Array.from({ length: 4 }).map((_, index) => (
             <div
               key={index}
-              className='h-56 animate-pulse rounded-2xl border border-slate-700 bg-slate-900/30'
+              className="h-56 animate-pulse rounded-2xl border border-slate-700 bg-slate-900/30"
             />
           ))}
         </div>
       ) : null}
 
       {isError ? (
-        <div className='glass-card rounded-2xl p-8 text-center border-neon-red/30'>
-          <div className='w-16 h-16 mx-auto mb-4 rounded-full bg-neon-red/20 flex items-center justify-center'>
-            <Zap className='w-8 h-8 text-neon-red' />
-          </div>          
-          <h2 className='text-xl font-semibold text-white mb-2'>Bağlantı Hatası</h2>          
-          <p className='text-slate-400'>Canlı veri alınamadı. Otomatik olarak tekrar denenecek.</p>
+        <div className="glass-card rounded-2xl border-neon-red/30 p-8 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-neon-red/20">
+            <Zap className="h-8 w-8 text-neon-red" />
+          </div>
+          <h2 className="mb-2 text-xl font-semibold text-white">Baglanti Hatasi</h2>
+          <p className="text-slate-400">Canli veri alinamadi. Otomatik olarak tekrar denenecek.</p>
         </div>
       ) : null}
 
       {!isLoading && !isError && rows.length === 0 ? (
-        <div className='glass-card rounded-2xl p-12 text-center'>
-          <div className='w-20 h-20 mx-auto mb-4 rounded-full bg-slate-800 flex items-center justify-center'>
-            <Radio className='w-10 h-10 text-slate-600' />
-          </div>          
-          <h2 className='text-xl font-semibold text-white mb-2'>Şu Anda Canlı Maç Yok</h2>          
-          <p className='text-slate-400'>Canlı karşılaşmalar başladığında burada görünecek.</p>
+        <div className="glass-card rounded-2xl p-12 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
+            <Radio className="h-10 w-10 text-slate-600" />
+          </div>
+          <h2 className="mb-2 text-xl font-semibold text-white">Su Anda Canli Mac Yok</h2>
+          <p className="text-slate-400">Canli karsilasmalar basladiginda burada gorunecek.</p>
         </div>
       ) : null}
 
       {!isLoading && !isError ? (
-        <div className='grid gap-5 md:grid-cols-2'>
+        <div className="grid gap-5 md:grid-cols-2">
           {rows.map((match) => (
             <LiveMatchCard key={match.id} match={match} />
           ))}

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 
-export default function MatchesPage() {
+export default function FootballIndexPage() {
   redirect("/football/matches");
 }
+

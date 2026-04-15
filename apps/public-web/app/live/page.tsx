@@ -1,5 +1,5 @@
-﻿import { LiveMatchesBoard } from "../../src/components/live/LiveMatchesBoard";
+import { redirect } from "next/navigation";
 
 export default function LivePage() {
-  return <LiveMatchesBoard />;
+  redirect("/football/live");
 }

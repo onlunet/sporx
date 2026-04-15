@@ -1,5 +1,5 @@
-import { PredictionsExplorer } from "../../src/components/predictions";
+import { redirect } from "next/navigation";
 
 export default function PredictionsPage() {
-  return <PredictionsExplorer scope="upcoming" />;
+  redirect("/football/predictions");
 }

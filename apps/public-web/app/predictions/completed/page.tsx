@@ -1,5 +1,5 @@
-import { CompletedPredictionsAnalytics } from "../../../src/components/predictions";
+import { redirect } from "next/navigation";
 
 export default function CompletedPredictionsPage() {
-  return <CompletedPredictionsAnalytics />;
+  redirect("/football/predictions/completed");
 }
