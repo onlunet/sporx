@@ -4,7 +4,14 @@ import { TeamComparisonStrategyRegistry } from "./team-comparison-strategy.regis
 
 describe("TeamComparisonStrategyRegistry", () => {
   const football = new FootballComparisonStrategy({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
-  const basketball = new BasketballComparisonStrategy(football);
+  const basketball = new BasketballComparisonStrategy(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any
+  );
   const registry = new TeamComparisonStrategyRegistry(football, basketball);
 
   it("resolves basketball aliases", () => {
