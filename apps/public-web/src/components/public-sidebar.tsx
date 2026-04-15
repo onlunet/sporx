@@ -54,7 +54,7 @@ export function PublicSidebar() {
     <aside className="sticky top-0 h-screen w-72 flex flex-col border-r border-white/5 bg-depth/80 backdrop-blur-xl">
       {/* Logo Area */}
       <div className="p-6 border-b border-white/5">
-        <Link href="/" className="flex items-center gap-3 group">
+        <Link href="/" prefetch={false} className="flex items-center gap-3 group">
           <div className="relative">
             <div className="absolute inset-0 bg-neon-cyan/20 blur-xl rounded-full group-hover:bg-neon-cyan/30 transition-all" />
             <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-neon-cyan to-neon-purple flex items-center justify-center">
@@ -92,6 +92,7 @@ export function PublicSidebar() {
               <motion.div key={link.href} variants={itemVariants}>
                 <Link
                   href={link.href}
+                  prefetch={false}
                   className={`
                     group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200
                     ${active 

@@ -46,7 +46,7 @@ export default async function DashboardPage() {
   } | null = null;
 
   try {
-    const predictions = await fetchWithSchema("/api/v1/predictions?take=200", publicContract.predictionsResponseSchema);
+    const predictions = await fetchWithSchema("/api/v1/predictions?take=80", publicContract.predictionsResponseSchema);
     const highConfidence = predictions.data.filter((item) => item.confidenceScore >= 0.7).length;
     const mediumConfidence = predictions.data.filter(
       (item) => item.confidenceScore >= 0.56 && item.confidenceScore < 0.7
