@@ -13,8 +13,30 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const forceHttpForSslipScript = `
+    (function () {
+      try {
+        var host = window.location.hostname || "";
+        if (window.location.protocol === "https:" && host.endsWith(".sslip.io")) {
+          var nextUrl =
+            "http://" +
+            window.location.host +
+            window.location.pathname +
+            window.location.search +
+            window.location.hash;
+          window.location.replace(nextUrl);
+        }
+      } catch (error) {
+        // no-op
+      }
+    })();
+  `;
+
   return (
     <html lang="tr">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: forceHttpForSslipScript }} />
+      </head>
       <body className="min-h-screen bg-void text-slate-200 antialiased">
         <Providers>
           <div className="relative flex min-h-screen">
