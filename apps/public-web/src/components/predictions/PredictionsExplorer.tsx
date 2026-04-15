@@ -12,7 +12,7 @@ import {
 } from "../../features/predictions";
 import { PredictionConfidenceBadge } from "./PredictionConfidenceBadge";
 import { PredictionRiskBadges } from "./PredictionRiskBadges";
-import { Brain, TrendingUp, ShieldAlert, Target, Clock, Sparkles, BarChart3, Zap } from "lucide-react";
+import { Brain, TrendingUp, ShieldAlert, Target, Clock, Sparkles, BarChart3, Zap, ChevronRight } from "lucide-react";
 
 type FilterOption = PredictionType | "all";
 
@@ -140,6 +140,8 @@ function PredictionCard({ item, index }: { item: MatchPredictionItem; index: num
   const matchState = resolveMatchState(item);
   const hasScore = item.homeScore !== null && item.homeScore !== undefined && item.awayScore !== null && item.awayScore !== undefined;
   const scoreText = hasScore ? `${item.homeScore} - ${item.awayScore}` : null;
+  const matchLabel =
+    item.homeTeam && item.awayTeam ? `${item.homeTeam} - ${item.awayTeam}` : `Maç ${item.matchId.slice(0, 8)}`;
   
   return (
     <motion.div
@@ -148,105 +150,116 @@ function PredictionCard({ item, index }: { item: MatchPredictionItem; index: num
       transition={{ delay: index * 0.05, duration: 0.4 }}
       className="group relative"
     >
-      <div className="absolute -inset-0.5 bg-gradient-to-r from-neon-cyan/20 to-neon-purple/20 rounded-2xl opacity-0 group-hover:opacity-100 blur-xl transition-opacity duration-500" />
-      
-      <div className="relative glass-card rounded-2xl p-5 overflow-hidden">
-        <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${confidenceGradient}`} />
+      <Link
+        href={`/matches/${item.matchId}`}
+        aria-label={`${matchLabel} maç detayına git`}
+        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70 rounded-2xl"
+      >
+        <div className="absolute -inset-0.5 bg-gradient-to-r from-neon-cyan/20 to-neon-purple/20 rounded-2xl opacity-0 group-hover:opacity-100 blur-xl transition-opacity duration-500" />
         
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider uppercase bg-white/5 text-slate-400 border border-white/10">
-                {predictionTypeLabel(item.predictionType)}
-              </span>
-              {item.line !== undefined && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider bg-neon-amber/10 text-neon-amber border border-neon-amber/20">
-                  Line {item.line.toFixed(1)}
-                </span>
-              )}
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider border ${matchState.className}`}>
-                {matchState.label}
-              </span>
-            </div>
-            
-            <h3 className="text-lg font-display font-semibold text-white group-hover:text-neon-cyan transition-colors">
-              {item.homeTeam && item.awayTeam 
-                ? `${item.homeTeam} vs ${item.awayTeam}`
-                : `Maç #${item.matchId.slice(0, 8)}`
-              }
-            </h3>
-            
-            {item.matchDateTimeUTC && (
-              <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                <Clock className="w-3 h-3" />
-                <span>
-                  {new Date(item.matchDateTimeUTC).toLocaleString("tr-TR", {
-                    dateStyle: "medium",
-                    timeStyle: "short"
-                  })}
-                </span>
-              </div>
-            )}
-            {scoreText && matchState.isPlayed ? (
-              <p className="mt-1 text-xs text-emerald-300">Maç Sonucu: {scoreText}</p>
-            ) : null}
-          </div>
+        <div className="relative glass-card rounded-2xl p-5 overflow-hidden">
+          <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${confidenceGradient}`} />
           
-          <div className="relative">
-            <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${confidenceGradient} p-[2px]`}>
-              <div className="w-full h-full rounded-full bg-surface flex flex-col items-center justify-center">
-                <span className="text-lg font-display font-bold text-white">{Math.round(confidence * 100)}%</span>
-                <span className="text-[8px] text-slate-500 uppercase tracking-wider">Güven</span>
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider uppercase bg-white/5 text-slate-400 border border-white/10">
+                  {predictionTypeLabel(item.predictionType)}
+                </span>
+                {item.line !== undefined && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider bg-neon-amber/10 text-neon-amber border border-neon-amber/20">
+                    Line {item.line.toFixed(1)}
+                  </span>
+                )}
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider border ${matchState.className}`}>
+                  {matchState.label}
+                </span>
               </div>
-            </div>
-            <div className={`absolute inset-0 rounded-full ${getConfidenceGlow(confidence)} opacity-50`} />
-          </div>
-        </div>
-
-        {probs && (
-          <div className="space-y-2 mb-4">
-            {probs.map((prob) => (
-              <div key={prob.label} className="flex items-center gap-3">
-                <span className="text-xs text-slate-400 w-10">{prob.label}</span>
-                <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${prob.value}%` }}
-                    transition={{ duration: 0.8, delay: index * 0.05 + 0.2 }}
-                    className={`h-full ${prob.color} rounded-full`}
-                  />
+              
+              <h3 className="text-lg font-display font-semibold text-white group-hover:text-neon-cyan transition-colors">
+                {item.homeTeam && item.awayTeam 
+                  ? `${item.homeTeam} vs ${item.awayTeam}`
+                  : `Maç #${item.matchId.slice(0, 8)}`
+                }
+              </h3>
+              
+              {item.matchDateTimeUTC && (
+                <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                  <Clock className="w-3 h-3" />
+                  <span>
+                    {new Date(item.matchDateTimeUTC).toLocaleString("tr-TR", {
+                      dateStyle: "medium",
+                      timeStyle: "short"
+                    })}
+                  </span>
                 </div>
-                <span className="text-xs font-medium text-white w-8 text-right">{prob.value}%</span>
+              )}
+              {scoreText && matchState.isPlayed ? (
+                <p className="mt-1 text-xs text-emerald-300">Maç Sonucu: {scoreText}</p>
+              ) : null}
+            </div>
+            
+            <div className="relative">
+              <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${confidenceGradient} p-[2px]`}>
+                <div className="w-full h-full rounded-full bg-surface flex flex-col items-center justify-center">
+                  <span className="text-lg font-display font-bold text-white">{Math.round(confidence * 100)}%</span>
+                  <span className="text-[8px] text-slate-500 uppercase tracking-wider">Güven</span>
+                </div>
               </div>
-            ))}
+              <div className={`absolute inset-0 rounded-full ${getConfidenceGlow(confidence)} opacity-50`} />
+            </div>
           </div>
-        )}
 
-        {item.summary && (
-          <p className="text-sm text-slate-300 leading-relaxed mb-3">{item.summary}</p>
-        )}
+          {probs && (
+            <div className="space-y-2 mb-4">
+              {probs.map((prob) => (
+                <div key={prob.label} className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400 w-10">{prob.label}</span>
+                  <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${prob.value}%` }}
+                      transition={{ duration: 0.8, delay: index * 0.05 + 0.2 }}
+                      className={`h-full ${prob.color} rounded-full`}
+                    />
+                  </div>
+                  <span className="text-xs font-medium text-white w-8 text-right">{prob.value}%</span>
+                </div>
+              ))}
+            </div>
+          )}
 
-        {topScore && (
-          <div className="flex items-center gap-2 mb-3 p-3 rounded-lg bg-neon-cyan/5 border border-neon-cyan/10">
-            <Target className="w-4 h-4 text-neon-cyan" />
-            <span className="text-sm text-slate-300">
-              Tahmini Skor: <span className="text-neon-cyan font-semibold">{topScore.label}</span>
-              {" "}(<span className="text-slate-400">%{Math.round(topScore.probability * 100)}</span>)
-            </span>
+          {item.summary && (
+            <p className="text-sm text-slate-300 leading-relaxed mb-3">{item.summary}</p>
+          )}
+
+          {topScore && (
+            <div className="flex items-center gap-2 mb-3 p-3 rounded-lg bg-neon-cyan/5 border border-neon-cyan/10">
+              <Target className="w-4 h-4 text-neon-cyan" />
+              <span className="text-sm text-slate-300">
+                Tahmini Skor: <span className="text-neon-cyan font-semibold">{topScore.label}</span>
+                {" "}(<span className="text-slate-400">%{Math.round(topScore.probability * 100)}</span>)
+              </span>
+            </div>
+          )}
+
+          {item.avoidReason && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-neon-red/5 border border-neon-red/20 mb-3">
+              <ShieldAlert className="w-4 h-4 text-neon-red flex-shrink-0 mt-0.5" />
+              <span className="text-sm text-slate-300">{item.avoidReason}</span>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-1.5">
+            <PredictionRiskBadges prediction={item} />
           </div>
-        )}
 
-        {item.avoidReason && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-neon-red/5 border border-neon-red/20 mb-3">
-            <ShieldAlert className="w-4 h-4 text-neon-red flex-shrink-0 mt-0.5" />
-            <span className="text-sm text-slate-300">{item.avoidReason}</span>
+          <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-3 text-xs text-slate-500">
+            <span>Maç detayı ve analizlere git</span>
+            <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1 group-hover:text-neon-cyan" />
           </div>
-        )}
-
-        <div className="flex flex-wrap gap-1.5">
-          <PredictionRiskBadges prediction={item} />
         </div>
-      </div>
+      </Link>
     </motion.div>
   );
 }
