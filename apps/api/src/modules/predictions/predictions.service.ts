@@ -14,6 +14,12 @@ type ListPredictionsParams = {
   includeMarketAnalysis?: boolean;
 };
 
+type ListByMatchParams = {
+  predictionType?: string;
+  line?: number;
+  includeMarketAnalysis?: boolean;
+};
+
 const MATCH_STATUS_SET = new Set<MatchStatus>([
   MatchStatus.scheduled,
   MatchStatus.live,
@@ -302,6 +308,75 @@ export class PredictionsService {
     await this.cache.set(cacheKey, enriched, 20, ["predictions", "market-analysis"]);
     await this.cache.set(stableCacheKey, enriched, 300, ["predictions", "market-analysis"]);
     return enriched;
+  }
+
+  async listByMatch(matchId: string, params?: ListByMatchParams) {
+    const predictionType = parsePredictionType(params?.predictionType);
+    const line = parseLine(params?.line);
+    const includeMarketAnalysis = params?.includeMarketAnalysis === true;
+
+    const row = await this.prisma.prediction.findUnique({
+      where: { matchId },
+      include: {
+        match: {
+          include: {
+            sport: true,
+            homeTeam: true,
+            awayTeam: true
+          }
+        }
+      }
+    });
+    if (!row) {
+      return [];
+    }
+
+    const strategy = this.predictionStrategyRegistry.forSport(row.match.sport?.code);
+    const expanded = strategy.expand({
+      matchId: row.matchId,
+      modelVersionId: row.modelVersionId,
+      probabilities: row.probabilities,
+      calibratedProbabilities: row.calibratedProbabilities,
+      rawProbabilities: row.rawProbabilities,
+      expectedScore: row.expectedScore,
+      confidenceScore: row.confidenceScore,
+      summary: row.summary,
+      riskFlags: row.riskFlags,
+      avoidReason: row.avoidReason,
+      updatedAt: row.updatedAt,
+      match: {
+        homeTeam: { name: row.match.homeTeam.name },
+        awayTeam: { name: row.match.awayTeam.name },
+        matchDateTimeUTC: row.match.matchDateTimeUTC,
+        status: row.match.status,
+        homeScore: row.match.homeScore,
+        awayScore: row.match.awayScore,
+        halfTimeHomeScore: row.match.halfTimeHomeScore,
+        halfTimeAwayScore: row.match.halfTimeAwayScore
+      }
+    });
+
+    const filteredByType = predictionType
+      ? expanded.filter((item) => item.predictionType === predictionType)
+      : expanded;
+    const lineFiltered = line === undefined ? filteredByType : filteredByType.filter((item) => item.line === line);
+
+    const uniqueByMarket = new Map<string, (typeof lineFiltered)[number]>();
+    for (const item of lineFiltered) {
+      const dedupeKey = [
+        item.matchId,
+        item.predictionType,
+        item.line === undefined ? "na" : String(item.line),
+        item.marketKey ?? "market",
+        item.selectionLabel ?? "selection"
+      ].join("|");
+      if (!uniqueByMarket.has(dedupeKey)) {
+        uniqueByMarket.set(dedupeKey, item);
+      }
+    }
+
+    const deduped = Array.from(uniqueByMarket.values());
+    return this.oddsService.attachMarketAnalysis(deduped, includeMarketAnalysis, line);
   }
 
   highConfidence() {

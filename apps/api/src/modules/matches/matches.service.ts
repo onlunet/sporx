@@ -2,8 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
-import { expandPredictionMarkets } from "../predictions/prediction-markets.util";
-import { OddsService } from "../odds/odds.service";
+import { PredictionsService } from "../predictions/predictions.service";
 
 type ListMatchesParams = {
   status?: string;
@@ -74,7 +73,7 @@ export class MatchesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
-    private readonly oddsService: OddsService
+    private readonly predictionsService: PredictionsService
   ) {}
 
   async list(params?: ListMatchesParams) {
@@ -243,52 +242,12 @@ export class MatchesService {
   }
 
   async prediction(id: string, predictionType?: string, line?: number, includeMarketAnalysis = false) {
-    const prediction = await this.prisma.prediction.findUnique({
-      where: { matchId: id },
-      include: {
-        match: {
-          include: {
-            homeTeam: true,
-            awayTeam: true
-          }
-        }
-      }
-    });
-
-    if (!prediction) {
-      return null;
-    }
-
-    const expanded = expandPredictionMarkets({
-      matchId: prediction.matchId,
-      modelVersionId: prediction.modelVersionId,
-      probabilities: prediction.probabilities,
-      calibratedProbabilities: prediction.calibratedProbabilities,
-      rawProbabilities: prediction.rawProbabilities,
-      expectedScore: prediction.expectedScore,
-      confidenceScore: prediction.confidenceScore,
-      summary: prediction.summary,
-      riskFlags: prediction.riskFlags,
-      avoidReason: prediction.avoidReason,
-      updatedAt: prediction.updatedAt,
-      match: {
-        homeTeam: { name: prediction.match.homeTeam.name },
-        awayTeam: { name: prediction.match.awayTeam.name },
-        matchDateTimeUTC: prediction.match.matchDateTimeUTC,
-        status: prediction.match.status,
-        homeScore: prediction.match.homeScore,
-        awayScore: prediction.match.awayScore,
-        halfTimeHomeScore: prediction.match.halfTimeHomeScore,
-        halfTimeAwayScore: prediction.match.halfTimeAwayScore
-      }
-    });
-
     const lineNormalized = line !== undefined && Number.isFinite(line) ? Number(line.toFixed(2)) : undefined;
-    const filteredByType = predictionType
-      ? expanded.filter((item) => item.predictionType === predictionType)
-      : expanded;
-    const filtered = lineNormalized === undefined ? filteredByType : filteredByType.filter((item) => item.line === lineNormalized);
-    const enriched = await this.oddsService.attachMarketAnalysis(filtered, includeMarketAnalysis, lineNormalized);
+    const enriched = await this.predictionsService.listByMatch(id, {
+      predictionType,
+      line: lineNormalized,
+      includeMarketAnalysis
+    });
 
     if (predictionType) {
       return enriched[0] ?? null;
@@ -297,52 +256,12 @@ export class MatchesService {
   }
 
   async predictions(id: string, predictionType?: string, line?: number, includeMarketAnalysis = false) {
-    const prediction = await this.prisma.prediction.findUnique({
-      where: { matchId: id },
-      include: {
-        match: {
-          include: {
-            homeTeam: true,
-            awayTeam: true
-          }
-        }
-      }
-    });
-
-    if (!prediction) {
-      return [];
-    }
-
-    const expanded = expandPredictionMarkets({
-      matchId: prediction.matchId,
-      modelVersionId: prediction.modelVersionId,
-      probabilities: prediction.probabilities,
-      calibratedProbabilities: prediction.calibratedProbabilities,
-      rawProbabilities: prediction.rawProbabilities,
-      expectedScore: prediction.expectedScore,
-      confidenceScore: prediction.confidenceScore,
-      summary: prediction.summary,
-      riskFlags: prediction.riskFlags,
-      avoidReason: prediction.avoidReason,
-      updatedAt: prediction.updatedAt,
-      match: {
-        homeTeam: { name: prediction.match.homeTeam.name },
-        awayTeam: { name: prediction.match.awayTeam.name },
-        matchDateTimeUTC: prediction.match.matchDateTimeUTC,
-        status: prediction.match.status,
-        homeScore: prediction.match.homeScore,
-        awayScore: prediction.match.awayScore,
-        halfTimeHomeScore: prediction.match.halfTimeHomeScore,
-        halfTimeAwayScore: prediction.match.halfTimeAwayScore
-      }
-    });
-
     const lineNormalized = line !== undefined && Number.isFinite(line) ? Number(line.toFixed(2)) : undefined;
-    const filteredByType = predictionType
-      ? expanded.filter((item) => item.predictionType === predictionType)
-      : expanded;
-    const filtered = lineNormalized === undefined ? filteredByType : filteredByType.filter((item) => item.line === lineNormalized);
-    return this.oddsService.attachMarketAnalysis(filtered, includeMarketAnalysis, lineNormalized);
+    return this.predictionsService.listByMatch(id, {
+      predictionType,
+      line: lineNormalized,
+      includeMarketAnalysis
+    });
   }
 
   async commentary(id: string, includeMarketAnalysis = false) {

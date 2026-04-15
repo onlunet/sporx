@@ -118,6 +118,7 @@ model Team {
   players           Player[]
   providerMappings  ProviderTeamMapping[]
   standings         Standing[]
+  basketballStats   BasketballTeamStat[]
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
@@ -184,6 +185,7 @@ model Match {
   awayTeam               Team                   @relation("AwayTeam", fields: [awayTeamId], references: [id])
   events                 MatchEvent[]
   teamStats              TeamStat[]
+  basketballStats        BasketballTeamStat[]
   playerStats            PlayerStat[]
   prediction             Prediction?
   featureSnapshots       MatchFeatureSnapshot[]
@@ -308,6 +310,51 @@ model Prediction {
 
   @@index([createdAt])
   @@index([confidenceScore, isLowConfidence])
+}
+
+model BasketballTeamStat {
+  id                         String   @id @default(uuid())
+  matchId                    String
+  teamId                     String
+  possessions                Float?
+  offensiveRating            Float?
+  defensiveRating            Float?
+  netRating                  Float?
+  pace                       Float?
+  effectiveFgPct             Float?
+  trueShootingPct            Float?
+  turnoverPct                Float?
+  offensiveReboundPct        Float?
+  defensiveReboundPct        Float?
+  freeThrowRate              Float?
+  threePointAttemptRate      Float?
+  pointsInPaint              Int?
+  secondChancePoints         Int?
+  fastBreakPoints            Int?
+  benchPoints                Int?
+  assistRatio                Float?
+  assistToTurnoverRatio      Float?
+  stealRate                  Float?
+  blockRate                  Float?
+  foulRate                   Float?
+  playerAvailabilityScore    Float?
+  lineupContinuityScore      Float?
+  topUsageAvailabilityScore  Float?
+  backToBack                 Boolean  @default(false)
+  thirdGameInFourNights      Boolean  @default(false)
+  travelLoad                 Float?
+  overtimeLastGame           Boolean  @default(false)
+  gameContext                String?
+  mustWinPressure            Float?
+  dataSource                 String?
+  importedAt                 DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  match                      Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  team                       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, teamId])
+  @@index([teamId, createdAt])
 }
 
 model PredictionExplanation {

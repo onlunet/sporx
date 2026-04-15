@@ -13,6 +13,7 @@ import { ProvidersService } from "./providers.service";
 import { OddsIngestionService } from "./odds-ingestion.service";
 import { PredictionEngineService } from "../predictions/prediction-engine.service";
 import { AdvancedPredictionEngineService } from "../predictions/advanced-prediction-engine.service";
+import { BasketballPredictionEngineService } from "../predictions/basketball/basketball-prediction-engine.service";
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
 
 type SyncSummary = {
@@ -104,6 +105,7 @@ export class ProviderIngestionService {
     private readonly oddsIngestionService: OddsIngestionService,
     private readonly predictionEngine: PredictionEngineService,
     private readonly advancedPredictionEngine: AdvancedPredictionEngineService,
+    private readonly basketballPredictionEngine: BasketballPredictionEngineService,
     private readonly matchContextEnrichment: MatchContextEnrichmentService
   ) {}
 
@@ -744,6 +746,7 @@ export class ProviderIngestionService {
         matchDateTimeUTC: { lte: toDate }
       },
       include: {
+        sport: true,
         league: true,
         homeTeam: true,
         awayTeam: true
@@ -758,6 +761,7 @@ export class ProviderIngestionService {
         matchDateTimeUTC: { gte: fromDate, lte: now }
       },
       include: {
+        sport: true,
         league: true,
         homeTeam: true,
         awayTeam: true
@@ -777,6 +781,7 @@ export class ProviderIngestionService {
         matchDateTimeUTC: { lte: now }
       },
       include: {
+        sport: true,
         league: true,
         homeTeam: true,
         awayTeam: true
@@ -842,6 +847,65 @@ export class ProviderIngestionService {
 
     for (const match of candidates) {
       try {
+        if (match.sport.code.toLowerCase() === "basketball") {
+          const basketball = await this.basketballPredictionEngine.compute({
+            matchId: match.id,
+            leagueId: match.leagueId,
+            homeTeamId: match.homeTeamId,
+            awayTeamId: match.awayTeamId,
+            homeTeamName: match.homeTeam.name,
+            awayTeamName: match.awayTeam.name,
+            kickoffAt: match.matchDateTimeUTC,
+            status: match.status,
+            homeScore: match.homeScore,
+            awayScore: match.awayScore,
+            now
+          });
+
+          await this.prisma.prediction.upsert({
+            where: { matchId: match.id },
+            update: {
+              modelVersionId: activeModel?.id ?? null,
+              probabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
+              expectedScore: basketball.expectedScore as Prisma.InputJsonValue,
+              rawProbabilities: basketball.rawProbabilities as Prisma.InputJsonValue,
+              calibratedProbabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
+              rawConfidenceScore: basketball.rawConfidenceScore,
+              calibratedConfidenceScore: basketball.calibratedConfidenceScore,
+              confidenceScore: basketball.confidenceScore,
+              summary: basketball.summary,
+              riskFlags: basketball.riskFlags as Prisma.InputJsonValue,
+              isRecommended: basketball.isRecommended,
+              isLowConfidence: basketball.isLowConfidence,
+              avoidReason: basketball.avoidReason,
+              updatedByProcess: "generate_predictions_job",
+              importedAt: new Date(),
+              dataSource: "generated"
+            },
+            create: {
+              matchId: match.id,
+              modelVersionId: activeModel?.id ?? null,
+              probabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
+              expectedScore: basketball.expectedScore as Prisma.InputJsonValue,
+              rawProbabilities: basketball.rawProbabilities as Prisma.InputJsonValue,
+              calibratedProbabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
+              rawConfidenceScore: basketball.rawConfidenceScore,
+              calibratedConfidenceScore: basketball.calibratedConfidenceScore,
+              confidenceScore: basketball.confidenceScore,
+              summary: basketball.summary,
+              riskFlags: basketball.riskFlags as Prisma.InputJsonValue,
+              isRecommended: basketball.isRecommended,
+              isLowConfidence: basketball.isLowConfidence,
+              avoidReason: basketball.avoidReason,
+              updatedByProcess: "generate_predictions_job",
+              importedAt: new Date(),
+              dataSource: "generated"
+            }
+          });
+          written += 1;
+          continue;
+        }
+
         let context = contextByMatchId.get(match.id) ?? null;
         const shouldEnrichContext =
           match.status === MatchStatus.scheduled ||
