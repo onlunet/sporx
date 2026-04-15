@@ -12,6 +12,8 @@ import {
   Clock
 } from "lucide-react";
 
+export const revalidate = 30;
+
 type DashboardSnapshot = {
   matchCount: number;
   predictionCount: number;
@@ -29,15 +31,13 @@ const EMPTY_DASHBOARD: DashboardSnapshot = {
 };
 
 export default async function DashboardPage() {
-  let dashboard: DashboardSnapshot = EMPTY_DASHBOARD;
-  let dashboardUnavailable = false;
+  const [dashboardResult, predictionsResult] = await Promise.allSettled([
+    fetchWithSchema("/api/v1/analytics/dashboard", publicContract.dashboardResponseSchema),
+    fetchWithSchema("/api/v1/predictions?take=40", publicContract.predictionsResponseSchema)
+  ]);
 
-  try {
-    const response = await fetchWithSchema("/api/v1/analytics/dashboard", publicContract.dashboardResponseSchema);
-    dashboard = response.data;
-  } catch {
-    dashboardUnavailable = true;
-  }
+  const dashboard = dashboardResult.status === "fulfilled" ? dashboardResult.value.data : EMPTY_DASHBOARD;
+  const dashboardUnavailable = dashboardResult.status !== "fulfilled";
 
   let predictionOverview: {
     highConfidence: number;
@@ -45,16 +45,14 @@ export default async function DashboardPage() {
     lowConfidence: number;
   } | null = null;
 
-  try {
-    const predictions = await fetchWithSchema("/api/v1/predictions?take=80", publicContract.predictionsResponseSchema);
-    const highConfidence = predictions.data.filter((item) => item.confidenceScore >= 0.7).length;
-    const mediumConfidence = predictions.data.filter(
+  if (predictionsResult.status === "fulfilled") {
+    const predictions = predictionsResult.value.data;
+    const highConfidence = predictions.filter((item) => item.confidenceScore >= 0.7).length;
+    const mediumConfidence = predictions.filter(
       (item) => item.confidenceScore >= 0.56 && item.confidenceScore < 0.7
     ).length;
-    const lowConfidence = predictions.data.filter((item) => item.confidenceScore < 0.56).length;
+    const lowConfidence = predictions.filter((item) => item.confidenceScore < 0.56).length;
     predictionOverview = { highConfidence, mediumConfidence, lowConfidence };
-  } catch {
-    predictionOverview = null;
   }
 
   return (

@@ -81,7 +81,10 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
   const selectedHomeTeam = teamOptions.find((team) => team.id === defaultHome);
   const selectedAwayTeam = teamOptions.find((team) => team.id === defaultAway);
 
+  const hasExplicitSelection = Boolean(query.homeTeamId && query.awayTeamId);
+
   const hasValidSelection =
+    hasExplicitSelection &&
     !!defaultHome &&
     !!defaultAway &&
     defaultHome !== defaultAway &&

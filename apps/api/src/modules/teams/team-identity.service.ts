@@ -100,9 +100,17 @@ class UnionFind {
 export class TeamIdentityService {
   private snapshot: TeamIdentitySnapshot | null = null;
   private snapshotPromise: Promise<TeamIdentitySnapshot> | null = null;
-  private readonly snapshotTtlMs = 5 * 60 * 1000;
+  private readonly snapshotTtlMs = this.parseSnapshotTtlMs();
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private parseSnapshotTtlMs() {
+    const raw = Number(process.env.TEAM_IDENTITY_SNAPSHOT_TTL_MS ?? "");
+    if (Number.isFinite(raw) && raw >= 60_000) {
+      return Math.floor(raw);
+    }
+    return 45 * 60 * 1000;
+  }
 
   private isUuidLike(value: string) {
     return UUID_REGEX.test(value);

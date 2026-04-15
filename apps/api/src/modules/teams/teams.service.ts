@@ -51,18 +51,19 @@ export class TeamsService {
 
     let teams: Array<{ id: string; name: string; shortName: string | null; country: string | null }> = [];
     try {
-      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 8000);
+      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 3500);
     } catch {
       try {
+        const fallbackTake = Math.min(safeTake, 3000);
         const fallback = await queryWithTimeout(
           this.prisma.team.findMany({
-            orderBy: [{ name: "asc" }, { id: "asc" }],
-            take: safeTake
+            orderBy: { id: "asc" },
+            take: fallbackTake
           }),
-          9000
+          2500
         );
         const filteredFallback = applyQueryFilter(fallback);
-        await this.cache.set(cacheKey, filteredFallback, 45, ["teams"]);
+        await this.cache.set(cacheKey, filteredFallback, 90, ["teams"]);
         return filteredFallback;
       } catch {
         await this.cache.set(cacheKey, [], 20, ["teams"]);

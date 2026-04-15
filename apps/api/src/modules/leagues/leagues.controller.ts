@@ -1,4 +1,4 @@
-﻿import { Controller, Get, Param } from "@nestjs/common";
+import { Controller, Get, Param, Query } from "@nestjs/common";
 import { LeaguesService } from "./leagues.service";
 
 @Controller("leagues")
@@ -6,8 +6,10 @@ export class LeaguesController {
   constructor(private readonly leaguesService: LeaguesService) {}
 
   @Get()
-  list() {
-    return this.leaguesService.list();
+  list(@Query("take") take?: string) {
+    const parsedTake = Number(take ?? "");
+    const takeValue = Number.isFinite(parsedTake) ? parsedTake : undefined;
+    return this.leaguesService.list(takeValue);
   }
 
   @Get(":id")
