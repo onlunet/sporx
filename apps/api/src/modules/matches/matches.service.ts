@@ -40,9 +40,9 @@ function parseStatusFilter(input?: string): MatchStatus[] | undefined {
 
 function normalizeTake(take?: number): number {
   if (!Number.isFinite(take)) {
-    return 100;
+    return 80;
   }
-  return Math.max(1, Math.min(500, Math.trunc(take ?? 100)));
+  return Math.max(1, Math.min(300, Math.trunc(take ?? 80)));
 }
 
 async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -68,6 +68,7 @@ export class MatchesService {
     const take = normalizeTake(params?.take);
     const statusKey = effectiveStatuses.join("|");
     const cacheKey = `matches:list:v2:${statusKey}:${take}`;
+    const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
@@ -149,7 +150,11 @@ export class MatchesService {
           .slice(0, take);
       }
     } catch {
-      await this.cache.set(cacheKey, [], 20, ["matches"]);
+      const stale = await this.cache.get<unknown[]>(stableCacheKey);
+      if (stale) {
+        await this.cache.set(cacheKey, stale, 12, ["matches"]);
+        return stale;
+      }
       return [];
     }
 
@@ -189,6 +194,7 @@ export class MatchesService {
     }));
 
     await this.cache.set(cacheKey, data, 120, ["matches"]);
+    await this.cache.set(stableCacheKey, data, 600, ["matches"]);
     return data;
   }
 

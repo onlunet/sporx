@@ -247,4 +247,12 @@ return 0
       // no-op
     }
   }
+
+  diagnostics() {
+    return {
+      redisAvailable: this.redisAvailable,
+      memoryEntries: this.memoryStore.size,
+      memoryTagCount: this.memoryTagIndex.size
+    };
+  }
 }

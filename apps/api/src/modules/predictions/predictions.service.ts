@@ -72,11 +72,11 @@ function parseLine(input?: number) {
 }
 
 function parseTake(input: number | undefined, hasExplicitStatus: boolean) {
-  const defaultTake = hasExplicitStatus ? 250 : 120;
+  const defaultTake = hasExplicitStatus ? 120 : 80;
   if (input === undefined || !Number.isFinite(input)) {
     return defaultTake;
   }
-  return Math.max(1, Math.min(500, Math.trunc(input)));
+  return Math.max(1, Math.min(300, Math.trunc(input)));
 }
 
 async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -111,6 +111,7 @@ export class PredictionsService {
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
     const cacheKey = `predictions:list:v7:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
@@ -149,7 +150,7 @@ export class PredictionsService {
           where: { status: { in: effectiveStatuses } },
           select: { id: true },
           orderBy: { matchDateTimeUTC: "desc" },
-          take: Math.max(take, 80)
+          take: Math.max(take, 60)
         }),
         8000
       );
@@ -165,12 +166,16 @@ export class PredictionsService {
           where: { matchId: { in: matchIds } },
           orderBy: { createdAt: "desc" },
           include: { match: { include: { homeTeam: true, awayTeam: true } } },
-          take: Math.max(take * 3, 120)
+          take: Math.max(take * 2, 100)
         }),
         12000
       );
     } catch {
-      await this.cache.set(cacheKey, [], 10, ["predictions", "market-analysis"]);
+      const stale = await this.cache.get<unknown[]>(stableCacheKey);
+      if (stale) {
+        await this.cache.set(cacheKey, stale, 12, ["predictions", "market-analysis"]);
+        return stale;
+      }
       return [];
     }
 
@@ -226,11 +231,26 @@ export class PredictionsService {
       const rightTs = right.matchDateTimeUTC ? Date.parse(right.matchDateTimeUTC) : 0;
       return rightTs - leftTs;
     });
+    const uniqueByMarket = new Map<string, (typeof lineFiltered)[number]>();
+    for (const item of lineFiltered) {
+      const dedupeKey = [
+        item.matchId,
+        item.predictionType,
+        item.line === undefined ? "na" : String(item.line),
+        item.marketKey ?? "market",
+        item.selectionLabel ?? "selection"
+      ].join("|");
+      if (!uniqueByMarket.has(dedupeKey)) {
+        uniqueByMarket.set(dedupeKey, item);
+      }
+    }
+    const deduped = Array.from(uniqueByMarket.values());
     const enriched = await this.oddsService
-      .attachMarketAnalysis(lineFiltered, includeMarketAnalysis, line)
-      .catch(() => lineFiltered);
+      .attachMarketAnalysis(deduped, includeMarketAnalysis, line)
+      .catch(() => deduped);
 
     await this.cache.set(cacheKey, enriched, 20, ["predictions", "market-analysis"]);
+    await this.cache.set(stableCacheKey, enriched, 300, ["predictions", "market-analysis"]);
     return enriched;
   }
 

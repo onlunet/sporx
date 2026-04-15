@@ -25,6 +25,7 @@ export class TeamsService {
     const normalizedQuery = String(query ?? "").trim();
     const queryKey = normalizedQuery.toLocaleLowerCase("tr-TR") || "all";
     const cacheKey = `teams:list:v2:${safeTake}:${queryKey}`;
+    const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
@@ -57,6 +58,12 @@ export class TeamsService {
         const fallbackTake = Math.min(safeTake, 3000);
         const fallback = await queryWithTimeout(
           this.prisma.team.findMany({
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              country: true
+            },
             orderBy: { id: "asc" },
             take: fallbackTake
           }),
@@ -64,15 +71,21 @@ export class TeamsService {
         );
         const filteredFallback = applyQueryFilter(fallback);
         await this.cache.set(cacheKey, filteredFallback, 90, ["teams"]);
+        await this.cache.set(stableCacheKey, filteredFallback, 600, ["teams"]);
         return filteredFallback;
       } catch {
-        await this.cache.set(cacheKey, [], 20, ["teams"]);
+        const stale = await this.cache.get<unknown[]>(stableCacheKey);
+        if (stale) {
+          await this.cache.set(cacheKey, stale, 12, ["teams"]);
+          return stale;
+        }
         return [];
       }
     }
 
     const filtered = applyQueryFilter(teams);
     await this.cache.set(cacheKey, filtered, 90, ["teams"]);
+    await this.cache.set(stableCacheKey, filtered, 600, ["teams"]);
     return filtered;
   }
 

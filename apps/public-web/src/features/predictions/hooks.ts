@@ -47,6 +47,7 @@ async function fetchMatchPredictions(matchId: string): Promise<MatchPredictionIt
 type PredictionListQuery = {
   predictionType?: PredictionType | "all";
   status?: string;
+  take?: number;
 };
 
 function buildPredictionQueryString(query: PredictionListQuery): string {
@@ -58,6 +59,9 @@ function buildPredictionQueryString(query: PredictionListQuery): string {
 
   if (query.predictionType && query.predictionType !== "all") {
     params.set("predictionType", query.predictionType);
+  }
+  if (Number.isFinite(query.take ?? NaN) && (query.take ?? 0) > 0) {
+    params.set("take", String(Math.trunc(query.take as number)));
   }
 
   const serialized = params.toString();
@@ -136,10 +140,10 @@ export function useMatchCommentary(matchId: string, enabled = true) {
   });
 }
 
-export function usePredictionsByType(predictionType?: PredictionType | "all", status?: string) {
+export function usePredictionsByType(predictionType?: PredictionType | "all", status?: string, take?: number) {
   const query = useQuery({
-    queryKey: ["predictions", predictionType ?? "all", status ?? "all"],
-    queryFn: () => fetchPredictions({ predictionType, status }),
+    queryKey: ["predictions", predictionType ?? "all", status ?? "all", take ?? "default"],
+    queryFn: () => fetchPredictions({ predictionType, status, take }),
     retry: 1,
     staleTime: 60_000,
     refetchInterval: 30_000,

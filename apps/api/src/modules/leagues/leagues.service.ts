@@ -21,6 +21,7 @@ export class LeaguesService {
   async list(take?: number) {
     const safeTake = Number.isFinite(take ?? NaN) ? Math.max(50, Math.min(1500, Math.floor(take ?? 0))) : 500;
     const cacheKey = `leagues:list:v2:${safeTake}`;
+    const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
       return cached;
@@ -35,6 +36,7 @@ export class LeaguesService {
         2200
       );
       await this.cache.set(cacheKey, rows, 120, ["leagues"]);
+      await this.cache.set(stableCacheKey, rows, 600, ["leagues"]);
       return rows;
     } catch {
       try {
@@ -46,9 +48,14 @@ export class LeaguesService {
           1800
         );
         await this.cache.set(cacheKey, fallbackRows, 60, ["leagues"]);
+        await this.cache.set(stableCacheKey, fallbackRows, 600, ["leagues"]);
         return fallbackRows;
       } catch {
-        await this.cache.set(cacheKey, [], 20, ["leagues"]);
+        const stale = await this.cache.get<unknown[]>(stableCacheKey);
+        if (stale) {
+          await this.cache.set(cacheKey, stale, 12, ["leagues"]);
+          return stale;
+        }
         return [];
       }
     }
