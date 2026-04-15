@@ -110,18 +110,31 @@ export class MatchesService {
         );
       } else {
         const perStatusTake = Math.max(take, 40);
-        const statusChunks = await queryWithTimeout(
-          Promise.all(
-            effectiveStatuses.map((status) =>
-              this.prisma.match.findMany({
-                where: { status },
-                orderBy: { matchDateTimeUTC: "desc" },
-                select: matchSelect,
-                take: perStatusTake
-              })
-            )
-          ),
-          12000
+        const statusChunks = await Promise.all(
+          effectiveStatuses.map(async (status) => {
+            try {
+              return await queryWithTimeout(
+                this.prisma.match.findMany({
+                  where: { status },
+                  orderBy: { matchDateTimeUTC: "desc" },
+                  select: matchSelect,
+                  take: perStatusTake
+                }),
+                9000
+              );
+            } catch {
+              return [] as Array<{
+                id: string;
+                matchDateTimeUTC: Date;
+                status: MatchStatus;
+                homeScore: number | null;
+                awayScore: number | null;
+                homeTeamId: string;
+                awayTeamId: string;
+                leagueId: string;
+              }>;
+            }
+          })
         );
 
         const mergedById = new Map<string, (typeof statusChunks)[number][number]>();
