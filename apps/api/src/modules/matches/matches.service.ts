@@ -64,8 +64,9 @@ export class MatchesService {
 
   async list(params?: ListMatchesParams) {
     const statuses = parseStatusFilter(params?.status);
+    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live, MatchStatus.finished];
     const take = normalizeTake(params?.take);
-    const statusKey = statuses?.join("|") ?? "all";
+    const statusKey = effectiveStatuses.join("|");
     const cacheKey = `matches:list:v2:${statusKey}:${take}`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -88,7 +89,7 @@ export class MatchesService {
     try {
       matches = await queryWithTimeout(
         this.prisma.match.findMany({
-          where: statuses ? { status: { in: statuses } } : undefined,
+          where: { status: { in: effectiveStatuses } },
           orderBy: { matchDateTimeUTC: "desc" },
           select: {
             id: true,
