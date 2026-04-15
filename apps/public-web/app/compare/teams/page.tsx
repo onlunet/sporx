@@ -65,10 +65,18 @@ function deriveMatchOutcomeProbabilities(compareData: z.infer<typeof publicContr
 
 export default async function CompareTeamsPage({ searchParams }: CompareTeamsPageProps) {
   const query = await searchParams;
-  const teamsResponse = await fetchWithSchema("/api/v1/teams?take=10000", publicContract.teamsResponseSchema);
-  const teamOptions = teamsResponse.data;
+
+  let teamOptions: z.infer<typeof publicContract.teamsResponseSchema>["data"] = [];
+  try {
+    const teamsResponse = await fetchWithSchema("/api/v1/teams?take=2500", publicContract.teamsResponseSchema);
+    teamOptions = teamsResponse.data;
+  } catch {
+    teamOptions = [];
+  }
+
   const defaultHome = query.homeTeamId ?? teamOptions[0]?.id;
-  const defaultAway = query.awayTeamId ?? teamOptions[1]?.id;
+  const defaultAway =
+    query.awayTeamId ?? teamOptions.find((team) => team.id !== defaultHome)?.id ?? teamOptions[1]?.id;
 
   const selectedHomeTeam = teamOptions.find((team) => team.id === defaultHome);
   const selectedAwayTeam = teamOptions.find((team) => team.id === defaultAway);
@@ -80,12 +88,17 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
     uuidPattern.test(defaultHome) &&
     uuidPattern.test(defaultAway);
 
-  const compareResponse = hasValidSelection
-    ? await fetchWithSchema(
+  let compareResponse: z.infer<typeof publicContract.compareTeamsResponseSchema> | null = null;
+  if (hasValidSelection) {
+    try {
+      compareResponse = await fetchWithSchema(
         `/api/v1/compare/teams?homeTeamId=${defaultHome}&awayTeamId=${defaultAway}`,
         publicContract.compareTeamsResponseSchema
-      )
-    : null;
+      );
+    } catch {
+      compareResponse = null;
+    }
+  }
 
   let h2hMatches: z.infer<typeof teamMatchesSchema>["data"] = [];
   if (hasValidSelection && defaultHome && defaultAway) {
@@ -132,34 +145,40 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
             </div>
           </div>
 
-          <form method="get" className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <TeamSelector
-                label="Ev Sahibi Takım"
-                name="homeTeamId"
-                teams={teamOptions}
-                defaultValue={defaultHome}
-                excludedTeamId={defaultAway}
-                color="cyan"
-              />
-              <TeamSelector
-                label="Deplasman Takımı"
-                name="awayTeamId"
-                teams={teamOptions}
-                defaultValue={defaultAway}
-                excludedTeamId={defaultHome}
-                color="purple"
-              />
+          {teamOptions.length === 0 ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+              Takım listesi şu anda alınamıyor. Lütfen birkaç dakika sonra tekrar deneyin.
             </div>
+          ) : (
+            <form method="get" className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <TeamSelector
+                  label="Ev Sahibi Takım"
+                  name="homeTeamId"
+                  teams={teamOptions}
+                  defaultValue={defaultHome}
+                  excludedTeamId={defaultAway}
+                  color="cyan"
+                />
+                <TeamSelector
+                  label="Deplasman Takımı"
+                  name="awayTeamId"
+                  teams={teamOptions}
+                  defaultValue={defaultAway}
+                  excludedTeamId={defaultHome}
+                  color="purple"
+                />
+              </div>
 
-            <button
-              type="submit"
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple px-6 py-3 font-semibold text-void transition-opacity hover:opacity-90 md:w-auto"
-            >
-              <Sparkles className="h-4 w-4" />
-              Karşılaştır
-            </button>
-          </form>
+              <button
+                type="submit"
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple px-6 py-3 font-semibold text-void transition-opacity hover:opacity-90 md:w-auto"
+              >
+                <Sparkles className="h-4 w-4" />
+                Karşılaştır
+              </button>
+            </form>
+          )}
         </div>
       </div>
 
