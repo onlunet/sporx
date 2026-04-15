@@ -60,7 +60,9 @@ function sanitizeProbability(value: number | undefined): number | undefined {
   if (value === undefined || Number.isNaN(value)) {
     return undefined;
   }
-  return Math.max(0, Math.min(1, value));
+  // Some providers occasionally send percentages (0-100) instead of ratios (0-1).
+  const normalized = value > 1 && value <= 100 ? value / 100 : value;
+  return Math.max(0, Math.min(1, normalized));
 }
 
 function normalizeProbabilities(raw: unknown): Record<string, number> | undefined {
@@ -348,9 +350,34 @@ export function normalizePredictionList(raw: unknown, fallbackType: PredictionTy
     const single = normalizePredictionItem(raw, fallbackType);
     return single ? [single] : [];
   }
-  return raw
+  const normalized = raw
     .map((item) => normalizePredictionItem(item, fallbackType))
     .filter((item): item is MatchPredictionItem => item !== null);
+
+  const deduped = new Map<string, MatchPredictionItem>();
+  for (const item of normalized) {
+    const dedupeKey = [
+      item.matchId,
+      item.predictionType,
+      item.marketKey ?? "market",
+      item.selectionLabel ?? "selection",
+      item.line ?? "na"
+    ].join("|");
+
+    const existing = deduped.get(dedupeKey);
+    if (!existing) {
+      deduped.set(dedupeKey, item);
+      continue;
+    }
+
+    const existingTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+    const nextTs = item.updatedAt ? Date.parse(item.updatedAt) : 0;
+    if (nextTs >= existingTs) {
+      deduped.set(dedupeKey, item);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 export function groupPredictionsByType(items: MatchPredictionItem[]): MatchPredictionGroup {

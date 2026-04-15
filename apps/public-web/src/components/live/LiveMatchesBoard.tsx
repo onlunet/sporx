@@ -7,8 +7,6 @@ import { LiveMatchCard, LiveStats } from './';
 import { Radio, RefreshCw, Zap } from 'lucide-react';
 import { resolveBrowserApiBase } from '../../lib/api-base-url';
 
-const API_URL = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
-
 type Envelope<T> = {
   success: boolean;
   data: T;
@@ -29,8 +27,9 @@ type MatchSummary = {
 type LiveMatchRow = MatchSummary & { predictions: MatchPredictionItem[] };
 
 async function fetchEnvelope<T>(path: string): Promise<Envelope<T> | null> {
+  const apiBase = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await fetch(`${apiBase}${path}`, {
       cache: 'no-store',
       credentials: 'include',
     });

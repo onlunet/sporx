@@ -6,8 +6,6 @@ import { MatchPredictionItem, PredictionType, MatchCommentary } from "./types";
 import { filterPredictionsByType, normalizePredictionItem, normalizePredictionList } from "./normalize";
 import { resolveBrowserApiBase } from "../../lib/api-base-url";
 
-const API_URL = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
-
 type Envelope<T> = {
   success: boolean;
   data: T;
@@ -16,8 +14,9 @@ type Envelope<T> = {
 };
 
 async function safeFetchEnvelope<T>(path: string): Promise<Envelope<T> | null> {
+  const apiBase = resolveBrowserApiBase(process.env.NEXT_PUBLIC_API_URL);
   try {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await fetch(`${apiBase}${path}`, {
       cache: "no-store",
       credentials: "include"
     });
@@ -84,7 +83,14 @@ async function fetchMatchCommentary(matchId: string): Promise<MatchCommentary | 
 async function fetchPredictions(query: PredictionListQuery): Promise<MatchPredictionItem[]> {
   const suffix = buildPredictionQueryString(query);
   const response = await safeFetchEnvelope<unknown>(`/api/v1/predictions${suffix}`);
-  return normalizePredictionList(response?.data);
+  const normalized = normalizePredictionList(response?.data);
+  if (normalized.length > 0 || !query.status) {
+    return normalized;
+  }
+
+  // Fallback for temporary status inconsistencies in upstream data.
+  const fallbackResponse = await safeFetchEnvelope<unknown>("/api/v1/predictions");
+  return normalizePredictionList(fallbackResponse?.data);
 }
 
 export function useMatchPredictions(matchId: string, initialData?: MatchPredictionItem[]) {
