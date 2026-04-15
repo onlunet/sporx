@@ -86,25 +86,55 @@ export class MatchesService {
         }>
       | [] = [];
 
+    const matchSelect = {
+      id: true,
+      matchDateTimeUTC: true,
+      status: true,
+      homeScore: true,
+      awayScore: true,
+      homeTeamId: true,
+      awayTeamId: true,
+      leagueId: true
+    } as const;
+
     try {
-      matches = await queryWithTimeout(
-        this.prisma.match.findMany({
-          where: { status: { in: effectiveStatuses } },
-          orderBy: { matchDateTimeUTC: "desc" },
-          select: {
-            id: true,
-            matchDateTimeUTC: true,
-            status: true,
-            homeScore: true,
-            awayScore: true,
-            homeTeamId: true,
-            awayTeamId: true,
-            leagueId: true
-          },
-          take
-        }),
-        9000
-      );
+      if (statuses && statuses.length > 0) {
+        matches = await queryWithTimeout(
+          this.prisma.match.findMany({
+            where: { status: { in: effectiveStatuses } },
+            orderBy: { matchDateTimeUTC: "desc" },
+            select: matchSelect,
+            take
+          }),
+          9000
+        );
+      } else {
+        const perStatusTake = Math.max(take, 40);
+        const statusChunks = await queryWithTimeout(
+          Promise.all(
+            effectiveStatuses.map((status) =>
+              this.prisma.match.findMany({
+                where: { status },
+                orderBy: { matchDateTimeUTC: "desc" },
+                select: matchSelect,
+                take: perStatusTake
+              })
+            )
+          ),
+          12000
+        );
+
+        const mergedById = new Map<string, (typeof statusChunks)[number][number]>();
+        for (const chunk of statusChunks) {
+          for (const row of chunk) {
+            mergedById.set(row.id, row);
+          }
+        }
+
+        matches = Array.from(mergedById.values())
+          .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
+          .slice(0, take);
+      }
     } catch {
       await this.cache.set(cacheKey, [], 20, ["matches"]);
       return [];
