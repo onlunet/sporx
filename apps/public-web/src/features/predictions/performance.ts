@@ -1,4 +1,4 @@
-import { predictionTypeLabel } from "./normalize";
+import { isCompletedMatchStatus, isLiveMatchStatus, predictionTypeLabel } from "./normalize";
 import { MatchPredictionItem, PredictionType } from "./types";
 
 export type PredictionAccuracyStats = {
@@ -233,7 +233,15 @@ function engineLabel(type: PredictionType): string {
 }
 
 export function buildPredictionPerformanceReport(items: MatchPredictionItem[]): PredictionPerformanceReport {
-  const playedItems = items.filter((item) => item.isPlayed);
+  const playedItems = items.filter((item) => {
+    if (isCompletedMatchStatus(item.matchStatus)) {
+      return true;
+    }
+    if (isLiveMatchStatus(item.matchStatus)) {
+      return false;
+    }
+    return item.isPlayed === true;
+  });
   const evaluations = playedItems.map((item) => ({
     item,
     result: evaluatePrediction(item)

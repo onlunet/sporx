@@ -8,7 +8,10 @@ import {
   PredictionType,
   predictionTypeLabel,
   usePredictionsByType,
-  bestScorelineSummary
+  bestScorelineSummary,
+  isCompletedMatchStatus,
+  isLiveMatchStatus,
+  normalizeMatchStatus
 } from "../../features/predictions";
 import { PredictionConfidenceBadge } from "./PredictionConfidenceBadge";
 import { PredictionRiskBadges } from "./PredictionRiskBadges";
@@ -82,51 +85,44 @@ function predictionListKey(item: MatchPredictionItem, index: number) {
 }
 
 function isPredictionPlayed(item: MatchPredictionItem) {
-  const rawStatus = (item.matchStatus ?? "").toLowerCase();
-  const normalizedStatus = rawStatus.replaceAll("-", "_").replaceAll(" ", "_");
+  const normalizedStatus = normalizeMatchStatus(item.matchStatus);
   const hasScore = item.homeScore !== null && item.homeScore !== undefined && item.awayScore !== null && item.awayScore !== undefined;
   const kickoff = item.matchDateTimeUTC ? new Date(item.matchDateTimeUTC).getTime() : undefined;
   const now = Date.now();
-  const isNearOrPast = kickoff !== undefined && Number.isFinite(kickoff) && kickoff <= now + 2 * 60 * 60 * 1000;
+  const isHistoric = kickoff !== undefined && Number.isFinite(kickoff) && kickoff <= now - 6 * 60 * 60 * 1000;
 
-  if (normalizedStatus === "live" || normalizedStatus === "in_play" || normalizedStatus === "paused") {
+  if (isLiveMatchStatus(normalizedStatus)) {
     return false;
   }
-  if (
-    normalizedStatus === "finished" ||
-    normalizedStatus === "ft" ||
-    normalizedStatus === "full_time" ||
-    normalizedStatus === "after_extra_time" ||
-    normalizedStatus === "after_penalties"
-  ) {
+  if (isCompletedMatchStatus(normalizedStatus)) {
     return true;
   }
-  if (normalizedStatus === "scheduled" && kickoff !== undefined && Number.isFinite(kickoff) && kickoff > now + 2 * 60 * 60 * 1000) {
+  if (normalizedStatus.length > 0) {
     return false;
   }
   if (item.isPlayed === true) {
     return true;
   }
-  if (hasScore && isNearOrPast) {
+  if (hasScore && isHistoric) {
     return true;
   }
   return false;
 }
 
 function resolveMatchState(item: MatchPredictionItem) {
-  const rawStatus = (item.matchStatus ?? "").toLowerCase();
+  const normalizedStatus = normalizeMatchStatus(item.matchStatus);
   const isPlayed = isPredictionPlayed(item);
 
-  if (rawStatus === "live") {
-    return { label: "Canlı", className: "bg-red-500/10 text-red-300 border-red-500/30", isPlayed: false };
+  if (isLiveMatchStatus(normalizedStatus)) {
+    return { label: "Oynanıyor", className: "bg-red-500/10 text-red-300 border-red-500/30", isPlayed: false };
   }
   if (isPlayed) {
     return { label: "Oynandı", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30", isPlayed: true };
   }
-  if (rawStatus === "postponed") {
+  if (normalizedStatus === "postponed") {
     return { label: "Ertelendi", className: "bg-amber-500/10 text-amber-300 border-amber-500/30", isPlayed: false };
   }
-  if (rawStatus === "cancelled") {
+  if (normalizedStatus === "cancelled") {
     return { label: "İptal", className: "bg-rose-500/10 text-rose-300 border-rose-500/30", isPlayed: false };
   }
   return { label: "Oynanmadı", className: "bg-slate-500/10 text-slate-300 border-slate-500/30", isPlayed: false };

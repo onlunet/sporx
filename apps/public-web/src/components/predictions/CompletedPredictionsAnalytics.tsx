@@ -6,6 +6,7 @@ import {
   MatchPredictionItem,
   buildPredictionPerformanceReport,
   evaluatePredictionResult,
+  isCompletedMatchStatus,
   predictionTypeLabel,
   usePredictionsByType
 } from "../../features/predictions";
@@ -73,12 +74,12 @@ export function CompletedPredictionsAnalytics() {
           return rightTime - leftTime;
         });
 
-    const fromFinished = sortRows((finishedQuery.data ?? []).filter((item) => item.isPlayed));
+    const fromFinished = sortRows((finishedQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
     if (fromFinished.length > 0) {
       return fromFinished;
     }
 
-    return sortRows((fallbackQuery.data ?? []).filter((item) => item.isPlayed));
+    return sortRows((fallbackQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
   }, [fallbackQuery.data, finishedQuery.data]);
 
   const report = useMemo(() => buildPredictionPerformanceReport(playedItems), [playedItems]);

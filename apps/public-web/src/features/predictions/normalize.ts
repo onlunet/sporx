@@ -15,6 +15,49 @@ type UnknownRecord = Record<string, unknown>;
 
 const DEFAULT_OVER_UNDER_LINES = [1.5, 2.5, 3.5];
 
+const COMPLETED_MATCH_STATUSES = new Set([
+  "finished",
+  "ft",
+  "full_time",
+  "fulltime",
+  "after_extra_time",
+  "after_penalties",
+  "ended",
+  "completed"
+]);
+
+const LIVE_MATCH_STATUSES = new Set([
+  "live",
+  "in_play",
+  "inplay",
+  "playing",
+  "ongoing",
+  "paused",
+  "first_half",
+  "second_half",
+  "halftime",
+  "extra_time",
+  "penalties"
+]);
+
+export function normalizeMatchStatus(value?: string): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .trim()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+}
+
+export function isCompletedMatchStatus(value?: string): boolean {
+  const normalized = normalizeMatchStatus(value);
+  return normalized.length > 0 && COMPLETED_MATCH_STATUSES.has(normalized);
+}
+
+export function isLiveMatchStatus(value?: string): boolean {
+  const normalized = normalizeMatchStatus(value);
+  return normalized.length > 0 && LIVE_MATCH_STATUSES.has(normalized);
+}
+
 function asRecord(value: unknown): UnknownRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -282,24 +325,31 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
   const nowMs = Date.now();
   const kickoffMs = matchDateTimeUTC ? new Date(matchDateTimeUTC).getTime() : undefined;
   const hasScore = homeScore !== null && awayScore !== null;
-  const statusLower = matchStatus?.toLowerCase();
+  const normalizedStatus = normalizeMatchStatus(matchStatus);
+  const hasKnownStatus = normalizedStatus.length > 0;
   const explicitPlayed = asBoolean(record.isPlayed);
-  const scoreSuggestsPlayed =
-    hasScore && kickoffMs !== undefined && Number.isFinite(kickoffMs) && kickoffMs <= nowMs + 2 * 60 * 60 * 1000 && statusLower !== "live";
-  const staleScheduledPast =
-    statusLower === "scheduled" && kickoffMs !== undefined && Number.isFinite(kickoffMs) && kickoffMs <= nowMs - 3 * 60 * 60 * 1000;
-  const inconsistentFutureScheduled =
-    explicitPlayed === true &&
-    statusLower === "scheduled" &&
-    kickoffMs !== undefined &&
-    Number.isFinite(kickoffMs) &&
-    kickoffMs > nowMs + 2 * 60 * 60 * 1000;
-  const inferredPlayed =
-    explicitPlayed !== undefined
-      ? inconsistentFutureScheduled
-        ? false
-        : explicitPlayed
-      : statusLower === "finished" || scoreSuggestsPlayed || staleScheduledPast;
+
+  // Completed analytics should only include truly finished matches.
+  const inferredPlayed = (() => {
+    if (isCompletedMatchStatus(normalizedStatus)) {
+      return true;
+    }
+    if (isLiveMatchStatus(normalizedStatus)) {
+      return false;
+    }
+    if (hasKnownStatus) {
+      return false;
+    }
+    if (explicitPlayed !== undefined) {
+      return explicitPlayed;
+    }
+    const scoreSuggestsHistoricCompletion =
+      hasScore &&
+      kickoffMs !== undefined &&
+      Number.isFinite(kickoffMs) &&
+      kickoffMs <= nowMs - 6 * 60 * 60 * 1000;
+    return scoreSuggestsHistoricCompletion;
+  })();
 
   const probabilities =
     normalizeProbabilities(record.probabilities) ??

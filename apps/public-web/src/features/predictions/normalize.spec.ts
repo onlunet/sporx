@@ -90,7 +90,7 @@ describe("prediction normalize", () => {
     expect(item?.isPlayed).toBe(false);
   });
 
-  it("marks stale scheduled past matches as played", () => {
+  it("keeps stale scheduled past matches out of completed list", () => {
     const past = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
     const item = normalizePredictionItem({
       matchId: "00000000-0000-0000-0000-000000000101",
@@ -99,6 +99,6 @@ describe("prediction normalize", () => {
       matchDateTimeUTC: past
     });
 
-    expect(item?.isPlayed).toBe(true);
+    expect(item?.isPlayed).toBe(false);
   });
 });
