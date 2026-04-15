@@ -45,6 +45,15 @@ function normalizeTake(take?: number): number {
   return Math.max(1, Math.min(500, Math.trunc(take ?? 100)));
 }
 
+async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return await Promise.race<T>([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`query_timeout_${timeoutMs}`)), timeoutMs);
+    })
+  ]);
+}
+
 @Injectable()
 export class MatchesService {
   constructor(
@@ -63,12 +72,33 @@ export class MatchesService {
       return cached;
     }
 
-    const matches = await this.prisma.match.findMany({
-      where: statuses ? { status: { in: statuses } } : undefined,
-      orderBy: { matchDateTimeUTC: "desc" },
-      include: { homeTeam: true, awayTeam: true, league: true },
-      take
-    });
+    let matches:
+      | Array<{
+          id: string;
+          matchDateTimeUTC: Date;
+          status: MatchStatus;
+          homeScore: number | null;
+          awayScore: number | null;
+          league: { name: string };
+          homeTeam: { name: string };
+          awayTeam: { name: string };
+        }>
+      | [] = [];
+
+    try {
+      matches = await queryWithTimeout(
+        this.prisma.match.findMany({
+          where: statuses ? { status: { in: statuses } } : undefined,
+          orderBy: { matchDateTimeUTC: "desc" },
+          include: { homeTeam: true, awayTeam: true, league: true },
+          take
+        }),
+        9000
+      );
+    } catch {
+      await this.cache.set(cacheKey, [], 20, ["matches"]);
+      return [];
+    }
 
     const data = matches.map((match) => ({
       id: match.id,
