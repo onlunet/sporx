@@ -32,17 +32,49 @@ function pickTopProbabilityLabel(item: MatchPredictionItem): string {
   return item.selectionLabel ?? key;
 }
 
-function verdictLabel(item: MatchPredictionItem): { text: string; className: string } {
-  const result = evaluatePredictionResult(item);
-  if (result === true) {
-    return { text: "Doğru", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" };
+function notEvaluatedReason(item: MatchPredictionItem): string {
+  const missingFullTimeScore =
+    item.homeScore === null || item.homeScore === undefined || item.awayScore === null || item.awayScore === undefined;
+  if (missingFullTimeScore) {
+    return "Mac skoru eksik";
   }
-  if (result === false) {
-    return { text: "Başarısız", className: "border-rose-500/30 bg-rose-500/10 text-rose-300" };
+
+  const needsHalfTime =
+    item.predictionType === "firstHalfResult" ||
+    item.predictionType === "halfTimeFullTime" ||
+    item.predictionType === "firstHalfGoals" ||
+    item.predictionType === "secondHalfGoals";
+  const missingHalfTimeScore =
+    item.halfTimeHomeScore === null ||
+    item.halfTimeHomeScore === undefined ||
+    item.halfTimeAwayScore === null ||
+    item.halfTimeAwayScore === undefined;
+
+  if (needsHalfTime && missingHalfTimeScore) {
+    return "Devre skoru eksik";
   }
-  return { text: "Değerlendirilemedi", className: "border-slate-500/30 bg-slate-500/10 text-slate-300" };
+
+  if (!item.probabilities || Object.keys(item.probabilities).length === 0) {
+    return "Tahmin olasilik verisi eksik";
+  }
+
+  return "Gerekli degerlendirme verisi eksik";
 }
 
+function verdictLabel(item: MatchPredictionItem): { text: string; className: string; reason?: string } {
+  const result = evaluatePredictionResult(item);
+  if (result === true) {
+    return { text: "Dogru", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" };
+  }
+  if (result === false) {
+    return { text: "Basarisiz", className: "border-rose-500/30 bg-rose-500/10 text-rose-300" };
+  }
+  return {
+    text: "Degerlendirilemedi",
+    className: "border-slate-500/30 bg-slate-500/10 text-slate-300",
+    reason: notEvaluatedReason(item)
+  };
+}
 function asScore(item: MatchPredictionItem): string {
   if (item.homeScore === null || item.homeScore === undefined || item.awayScore === null || item.awayScore === undefined) {
     return "-";
@@ -243,7 +275,10 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
                     <td className="py-2 pr-3">{pickTopProbabilityLabel(item)}</td>
                     <td className="py-2 pr-3">{asScore(item)}</td>
                     <td className="py-2 pr-3">
-                      <span className={`rounded-full border px-2 py-1 text-xs ${verdict.className}`}>{verdict.text}</span>
+                      <div className="space-y-1">
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs ${verdict.className}`}>{verdict.text}</span>
+                        {verdict.reason ? <div className="text-xs text-amber-300">{verdict.reason}</div> : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -262,3 +297,5 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
     </div>
   );
 }
+
+

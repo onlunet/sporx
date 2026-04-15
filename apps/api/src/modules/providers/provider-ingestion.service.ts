@@ -63,6 +63,8 @@ type MatchSeedInput = {
   status: MatchStatus;
   homeScore: number | null;
   awayScore: number | null;
+  halfTimeHomeScore?: number | null;
+  halfTimeAwayScore?: number | null;
   homeElo?: number | null;
   awayElo?: number | null;
   form5Home?: number | null;
@@ -1495,6 +1497,10 @@ export class ProviderIngestionService {
     return homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined;
   }
 
+  private hasHalfTimePair(homeScore: number | null | undefined, awayScore: number | null | undefined) {
+    return homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined;
+  }
+
   private providerReliabilityScore(dataSource: string | null | undefined) {
     const key = (dataSource ?? "").trim().toLowerCase();
     if (key === "api_football") {
@@ -1523,6 +1529,8 @@ export class ProviderIngestionService {
       status: MatchStatus;
       homeScore: number | null;
       awayScore: number | null;
+      halfTimeHomeScore: number | null;
+      halfTimeAwayScore: number | null;
       homeElo: number | null;
       awayElo: number | null;
       form5Home: number | null;
@@ -1534,10 +1542,14 @@ export class ProviderIngestionService {
   ) {
     const incomingHasScore = this.hasScorePair(input.homeScore, input.awayScore);
     const existingHasScore = this.hasScorePair(existing?.homeScore, existing?.awayScore);
+    const incomingHasHalfTime = this.hasHalfTimePair(input.halfTimeHomeScore, input.halfTimeAwayScore);
+    const existingHasHalfTime = this.hasHalfTimePair(existing?.halfTimeHomeScore, existing?.halfTimeAwayScore);
 
     let status = normalizedIncomingStatus;
     let homeScore = input.homeScore;
     let awayScore = input.awayScore;
+    let halfTimeHomeScore = input.halfTimeHomeScore ?? null;
+    let halfTimeAwayScore = input.halfTimeAwayScore ?? null;
     let statusAdjustedFromFinishedWithoutScore = false;
     let statusAdjustedFromStaleScheduled = false;
     let scoreConflictResolved: null | {
@@ -1595,6 +1607,22 @@ export class ProviderIngestionService {
       status = MatchStatus.finished;
     }
 
+    if (existingHasHalfTime && !incomingHasHalfTime) {
+      halfTimeHomeScore = existing!.halfTimeHomeScore;
+      halfTimeAwayScore = existing!.halfTimeAwayScore;
+    } else if (existingHasHalfTime && incomingHasHalfTime) {
+      const halfTimeDiffers =
+        existing!.halfTimeHomeScore !== input.halfTimeHomeScore || existing!.halfTimeAwayScore !== input.halfTimeAwayScore;
+      if (halfTimeDiffers) {
+        const incomingPriority = this.providerReliabilityScore(input.dataSource);
+        const existingPriority = this.providerReliabilityScore(existing!.dataSource);
+        if (existingPriority > incomingPriority) {
+          halfTimeHomeScore = existing!.halfTimeHomeScore;
+          halfTimeAwayScore = existing!.halfTimeAwayScore;
+        }
+      }
+    }
+
     if (existing?.status === MatchStatus.finished && existingHasScore && status !== MatchStatus.finished) {
       status = MatchStatus.finished;
       homeScore = existing.homeScore;
@@ -1631,6 +1659,8 @@ export class ProviderIngestionService {
       status,
       homeScore,
       awayScore,
+      halfTimeHomeScore,
+      halfTimeAwayScore,
       homeElo,
       awayElo,
       form5Home,
@@ -1853,6 +1883,53 @@ export class ProviderIngestionService {
       return null;
     }
     return Math.round(parsed);
+  }
+
+  private readHalfTimeScore(row: Record<string, unknown>, side: "home" | "away") {
+    const keyCandidates =
+      side === "home"
+        ? [
+            "home_ht_score",
+            "home_score_ht",
+            "ht_home_score",
+            "half_time_home_score",
+            "score_ht_home",
+            "home_half_score"
+          ]
+        : [
+            "away_ht_score",
+            "away_score_ht",
+            "ht_away_score",
+            "half_time_away_score",
+            "score_ht_away",
+            "away_half_score"
+          ];
+
+    for (const key of keyCandidates) {
+      const value = this.toNullableScore(row[key]);
+      if (value !== null) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  async rewindFootballResultsCheckpoints(daysBack: number) {
+    const safeDaysBack = Math.max(1, Math.min(365, Math.trunc(daysBack)));
+    const cursor = this.todayDateString(-safeDaysBack);
+    const activeProviders = await this.providersService.listActiveApiProviders();
+    const providerKeys = activeProviders.map((provider) => provider.key);
+
+    for (const providerKey of providerKeys) {
+      await this.setCheckpoint(providerKey, "football_matches_results", cursor);
+    }
+
+    return {
+      cursor,
+      daysBack: safeDaysBack,
+      providers: providerKeys
+    };
   }
 
   private normalizeMatchStatus(
@@ -2112,6 +2189,8 @@ export class ProviderIngestionService {
         status: true,
         homeScore: true,
         awayScore: true,
+        halfTimeHomeScore: true,
+        halfTimeAwayScore: true,
         homeElo: true,
         awayElo: true,
         form5Home: true,
@@ -2137,6 +2216,8 @@ export class ProviderIngestionService {
         status: merged.status,
         homeScore: merged.homeScore,
         awayScore: merged.awayScore,
+        halfTimeHomeScore: merged.halfTimeHomeScore,
+        halfTimeAwayScore: merged.halfTimeAwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
@@ -2155,6 +2236,8 @@ export class ProviderIngestionService {
         status: merged.status,
         homeScore: merged.homeScore,
         awayScore: merged.awayScore,
+        halfTimeHomeScore: merged.halfTimeHomeScore,
+        halfTimeAwayScore: merged.halfTimeAwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
@@ -2731,6 +2814,7 @@ export class ProviderIngestionService {
           const competitionObj = (raw.competition as Record<string, unknown> | undefined) ?? {};
           const scoreObj = (raw.score as Record<string, unknown> | undefined) ?? {};
           const fullTimeObj = (scoreObj.fullTime as Record<string, unknown> | undefined) ?? {};
+          const halfTimeObj = (scoreObj.halfTime as Record<string, unknown> | undefined) ?? {};
 
           const kickoffAt = this.parseEventDate(raw.utcDate);
           const homeTeamName = String(homeTeamObj.name ?? "").trim();
@@ -2760,6 +2844,8 @@ export class ProviderIngestionService {
             status: this.footballStatus(String(raw.status ?? "SCHEDULED")),
             homeScore: this.toNullableScore(fullTimeObj.home),
             awayScore: this.toNullableScore(fullTimeObj.away),
+            halfTimeHomeScore: this.toNullableScore(halfTimeObj.home),
+            halfTimeAwayScore: this.toNullableScore(halfTimeObj.away),
             refereeName,
             dataSource: provider.key
           });
@@ -4217,6 +4303,8 @@ export class ProviderIngestionService {
       const league = (fixtureEntry.league as Record<string, unknown> | undefined) ?? {};
       const teams = (fixtureEntry.teams as Record<string, unknown> | undefined) ?? {};
       const goals = (fixtureEntry.goals as Record<string, unknown> | undefined) ?? {};
+      const score = (fixtureEntry.score as Record<string, unknown> | undefined) ?? {};
+      const halfTimeScore = (score.halftime as Record<string, unknown> | undefined) ?? {};
 
       if (leagueFilter && String(league.id ?? "") !== leagueFilter) {
         continue;
@@ -4258,6 +4346,8 @@ export class ProviderIngestionService {
         status: this.footballStatus(String((fixture.status as Record<string, unknown> | undefined)?.short ?? "SCHEDULED")),
         homeScore: this.toNullableScore(goals.home),
         awayScore: this.toNullableScore(goals.away),
+        halfTimeHomeScore: this.toNullableScore(halfTimeScore.home),
+        halfTimeAwayScore: this.toNullableScore(halfTimeScore.away),
         refereeName,
         dataSource: provider.key
       });
@@ -4726,6 +4816,8 @@ export class ProviderIngestionService {
           status: this.footballStatus(String(fixtureRecord.status ?? "SCHEDULED")),
           homeScore: this.toNullableScore(fixtureRecord.home_score),
           awayScore: this.toNullableScore(fixtureRecord.away_score),
+          halfTimeHomeScore: this.readHalfTimeScore(fixtureRecord, "home"),
+          halfTimeAwayScore: this.readHalfTimeScore(fixtureRecord, "away"),
           refereeName,
           dataSource: provider.key
         });

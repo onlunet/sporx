@@ -1,12 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { IngestionQueueService } from "./ingestion-queue.service";
+import { ProviderIngestionService } from "../providers/provider-ingestion.service";
 
 @Injectable()
 export class IngestionService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly queue: IngestionQueueService
+    private readonly queue: IngestionQueueService,
+    private readonly providerIngestionService: ProviderIngestionService
   ) {}
 
   private async resolveIngestionJobId(jobType: string) {
@@ -80,5 +82,14 @@ export class IngestionService {
         errors: run.errors
       })
     );
+  }
+
+  async runHalfTimeBackfill(daysBack?: number) {
+    const rewind = await this.providerIngestionService.rewindFootballResultsCheckpoints(daysBack ?? 60);
+    const run = await this.run("syncResults");
+    return {
+      ...run,
+      backfill: rewind
+    };
   }
 }

@@ -15,6 +15,11 @@ export class AdminIngestionController {
     return this.ingestionService.run(body.jobType);
   }
 
+  @Post("backfill/half-time")
+  backfillHalfTime(@Body() body?: { daysBack?: number }) {
+    return this.ingestionService.runHalfTimeBackfill(body?.daysBack);
+  }
+
   @Get("jobs")
   jobs() {
     return this.ingestionService.listRuns();
