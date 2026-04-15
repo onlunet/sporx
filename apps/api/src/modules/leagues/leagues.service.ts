@@ -33,7 +33,7 @@ export class LeaguesService {
           orderBy: [{ name: "asc" }, { id: "asc" }],
           take: safeTake
         }),
-        2200
+        6000
       );
       await this.cache.set(cacheKey, rows, 120, ["leagues"]);
       await this.cache.set(stableCacheKey, rows, 600, ["leagues"]);
@@ -45,7 +45,7 @@ export class LeaguesService {
             orderBy: { id: "asc" },
             take: safeTake
           }),
-          1800
+          4500
         );
         await this.cache.set(cacheKey, fallbackRows, 60, ["leagues"]);
         await this.cache.set(stableCacheKey, fallbackRows, 600, ["leagues"]);

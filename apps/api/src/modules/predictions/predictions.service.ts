@@ -145,15 +145,40 @@ export class PredictionsService {
       | [] = [];
 
     try {
-      const relevantMatches = await queryWithTimeout(
-        this.prisma.match.findMany({
-          where: { status: { in: effectiveStatuses } },
-          select: { id: true },
-          orderBy: { matchDateTimeUTC: "desc" },
-          take: Math.max(take, 60)
-        }),
-        8000
-      );
+      const targetTake = Math.max(take, 60);
+      const relevantMatches =
+        effectiveStatuses.length === 1
+          ? await queryWithTimeout(
+              this.prisma.match.findMany({
+                where: { status: { in: effectiveStatuses } },
+                select: { id: true, matchDateTimeUTC: true },
+                orderBy: { matchDateTimeUTC: "desc" },
+                take: targetTake
+              }),
+              12000
+            )
+          : (
+              await Promise.all(
+                effectiveStatuses.map(async (status) => {
+                  try {
+                    return await queryWithTimeout(
+                      this.prisma.match.findMany({
+                        where: { status },
+                        select: { id: true, matchDateTimeUTC: true },
+                        orderBy: { matchDateTimeUTC: "desc" },
+                        take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
+                      }),
+                      9000
+                    );
+                  } catch {
+                    return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
+                  }
+                })
+              )
+            )
+              .flat()
+              .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
+              .slice(0, targetTake);
 
       if (relevantMatches.length === 0) {
         await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);

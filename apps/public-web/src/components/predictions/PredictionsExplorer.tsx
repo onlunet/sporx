@@ -258,7 +258,7 @@ type PredictionsExplorerProps = {
 export function PredictionsExplorer({ scope = "upcoming" }: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
-  const requestedTake = scope === "completed" ? 240 : 120;
+  const requestedTake = scope === "completed" ? 180 : 80;
   const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake);
   const items = useMemo(() => {
     const sorted = sortPredictions(query.data ?? [], scope);

@@ -99,7 +99,7 @@ export class MatchesService {
     } as const;
 
     try {
-      if (statuses && statuses.length > 0) {
+      if (statuses && statuses.length === 1) {
         matches = await queryWithTimeout(
           this.prisma.match.findMany({
             where: { status: { in: effectiveStatuses } },
@@ -107,10 +107,10 @@ export class MatchesService {
             select: matchSelect,
             take
           }),
-          9000
+          12000
         );
       } else {
-        const perStatusTake = Math.max(take, 40);
+        const perStatusTake = Math.max(Math.ceil(take / effectiveStatuses.length) + 24, 40);
         const statusChunks = await Promise.all(
           effectiveStatuses.map(async (status) => {
             try {

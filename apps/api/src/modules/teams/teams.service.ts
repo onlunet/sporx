@@ -52,10 +52,10 @@ export class TeamsService {
 
     let teams: Array<{ id: string; name: string; shortName: string | null; country: string | null }> = [];
     try {
-      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 3500);
+      teams = await queryWithTimeout(this.teamIdentityService.listCanonicalTeams(safeTake), 6500);
     } catch {
       try {
-        const fallbackTake = Math.min(safeTake, 3000);
+        const fallbackTake = Math.min(safeTake, 2000);
         const fallback = await queryWithTimeout(
           this.prisma.team.findMany({
             select: {
@@ -67,7 +67,7 @@ export class TeamsService {
             orderBy: { id: "asc" },
             take: fallbackTake
           }),
-          2500
+          6500
         );
         const filteredFallback = applyQueryFilter(fallback);
         await this.cache.set(cacheKey, filteredFallback, 90, ["teams"]);

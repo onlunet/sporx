@@ -60,8 +60,8 @@ function shortModelId(modelId: string): string {
 }
 
 export function CompletedPredictionsAnalytics() {
-  const finishedQuery = usePredictionsByType("all", "finished", 600);
-  const fallbackQuery = usePredictionsByType("all", undefined, 600);
+  const finishedQuery = usePredictionsByType("all", "finished", 300);
+  const fallbackQuery = usePredictionsByType("all", undefined, 300);
 
   const playedItems = useMemo(() => {
     const sortRows = (rows: MatchPredictionItem[]) =>
