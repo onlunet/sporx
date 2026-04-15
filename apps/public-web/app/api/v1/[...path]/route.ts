@@ -54,7 +54,9 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
     request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
 
   let lastError: unknown = null;
-  for (const baseUrl of upstreamCandidates) {
+  let lastUpstreamResponse: { status: number; payload: string; headers: Headers } | null = null;
+  for (let index = 0; index < upstreamCandidates.length; index += 1) {
+    const baseUrl = upstreamCandidates[index] as string;
     const targetUrl = buildTargetUrl(baseUrl, incomingPathname, incomingSearch);
     try {
       const upstreamResponse = await fetch(targetUrl, {
@@ -77,6 +79,17 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
       }
       responseHeaders.set("cache-control", "no-store");
 
+      const hasNextCandidate = index < upstreamCandidates.length - 1;
+      if (upstreamResponse.status >= 500 && hasNextCandidate) {
+        // If a candidate upstream is unhealthy/misconfigured, fail over to next base URL.
+        lastUpstreamResponse = {
+          status: upstreamResponse.status,
+          payload,
+          headers: responseHeaders
+        };
+        continue;
+      }
+
       return new NextResponse(payload, {
         status: upstreamResponse.status,
         headers: responseHeaders
@@ -84,6 +97,13 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
     } catch (error) {
       lastError = error;
     }
+  }
+
+  if (lastUpstreamResponse) {
+    return new NextResponse(lastUpstreamResponse.payload, {
+      status: lastUpstreamResponse.status,
+      headers: lastUpstreamResponse.headers
+    });
   }
 
   return NextResponse.json(

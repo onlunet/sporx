@@ -21,28 +21,13 @@ function normalizeConfiguredApiUrl(configuredApiUrl?: string) {
 }
 
 export function resolveBrowserApiBase(configuredApiUrl?: string) {
-  const normalized = normalizeConfiguredApiUrl(configuredApiUrl);
-
   if (typeof window === "undefined") {
-    return normalized;
+    return normalizeConfiguredApiUrl(configuredApiUrl);
   }
 
-  if (normalized.length === 0) {
-    return "";
-  }
-
-  const hasHttpProtocol = normalized.startsWith("http://") || normalized.startsWith("https://");
-  if (!hasHttpProtocol) {
-    return "";
-  }
-
-  // When public app runs on HTTPS, never call plain HTTP API from the browser.
-  // Fall back to same-origin `/api/v1/*` rewrite handled by Next.js.
-  if (window.location.protocol === "https:" && normalized.startsWith("http://")) {
-    return "";
-  }
-
-  return normalized;
+  // Browser requests must always go through same-origin `/api/v1/*` proxy route.
+  // This prevents mixed-content, TLS mismatch and cross-origin cookie issues.
+  return "";
 }
 
 export function resolveServerApiBase(internalApiUrl?: string, apiUrl?: string, publicApiUrl?: string) {
