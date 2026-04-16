@@ -12,7 +12,7 @@ import {
   Clock
 } from "lucide-react";
 
-export const revalidate = 30;
+export const dynamic = "force-dynamic";
 
 type DashboardSnapshot = {
   matchCount: number;
@@ -32,8 +32,12 @@ const EMPTY_DASHBOARD: DashboardSnapshot = {
 
 export default async function DashboardPage() {
   const [dashboardResult, predictionsResult] = await Promise.allSettled([
-    fetchWithSchema("/api/v1/analytics/dashboard", publicContract.dashboardResponseSchema),
-    fetchWithSchema("/api/v1/predictions?take=40", publicContract.predictionsResponseSchema)
+    fetchWithSchema("/api/v1/analytics/dashboard", publicContract.dashboardResponseSchema, {
+      cache: "no-store"
+    }),
+    fetchWithSchema("/api/v1/predictions?take=40", publicContract.predictionsResponseSchema, {
+      cache: "no-store"
+    })
   ]);
 
   const dashboard = dashboardResult.status === "fulfilled" ? dashboardResult.value.data : EMPTY_DASHBOARD;
