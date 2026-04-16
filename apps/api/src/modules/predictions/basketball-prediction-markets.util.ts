@@ -153,6 +153,113 @@ function lineOverProbability(expectedTotal: number, line: number) {
   return clampProbability(1 / (1 + Math.exp(-scaled)));
 }
 
+function splitTwoParts(total: number, firstRatio = 0.49) {
+  const safeTotal = Math.max(0, total);
+  const first = Math.max(0, Math.round(safeTotal * firstRatio));
+  const second = Math.max(0, safeTotal - first);
+  return { first, second };
+}
+
+function projectedQuarterPoints(teamExpectedPoints: number) {
+  const weights = [0.24, 0.26, 0.24, 0.26] as const;
+  const raw = weights.map((weight) => Math.max(0, Number((teamExpectedPoints * weight).toFixed(1))));
+  const correction = Number((teamExpectedPoints - raw.reduce((acc, value) => acc + value, 0)).toFixed(1));
+  raw[3] = Number((raw[3] + correction).toFixed(1));
+  return raw;
+}
+
+function quarterBreakdownFromProjection(expectedHome: number, expectedAway: number) {
+  const home = projectedQuarterPoints(expectedHome);
+  const away = projectedQuarterPoints(expectedAway);
+  return {
+    q1: { home: home[0], away: away[0] },
+    q2: { home: home[1], away: away[1] },
+    q3: { home: home[2], away: away[2] },
+    q4: { home: home[3], away: away[3] },
+    source: "projected" as const
+  };
+}
+
+function quarterBreakdownFromProviderPeriods(match: PredictionRowInput["match"]) {
+  if (!match) {
+    return null;
+  }
+  const q1Home = match.q1HomeScore;
+  const q1Away = match.q1AwayScore;
+  const q2Home = match.q2HomeScore;
+  const q2Away = match.q2AwayScore;
+  const q3Home = match.q3HomeScore;
+  const q3Away = match.q3AwayScore;
+  const q4Home = match.q4HomeScore;
+  const q4Away = match.q4AwayScore;
+
+  const hasAll =
+    q1Home !== null &&
+    q1Home !== undefined &&
+    q1Away !== null &&
+    q1Away !== undefined &&
+    q2Home !== null &&
+    q2Home !== undefined &&
+    q2Away !== null &&
+    q2Away !== undefined &&
+    q3Home !== null &&
+    q3Home !== undefined &&
+    q3Away !== null &&
+    q3Away !== undefined &&
+    q4Home !== null &&
+    q4Home !== undefined &&
+    q4Away !== null &&
+    q4Away !== undefined;
+
+  if (!hasAll) {
+    return null;
+  }
+
+  return {
+    q1: { home: q1Home, away: q1Away },
+    q2: { home: q2Home, away: q2Away },
+    q3: { home: q3Home, away: q3Away },
+    q4: { home: q4Home, away: q4Away },
+    source: "provider_period_scores" as const
+  };
+}
+
+function quarterBreakdownFromScores(
+  homeScore: number | null,
+  awayScore: number | null,
+  halfTimeHomeScore: number | null,
+  halfTimeAwayScore: number | null
+) {
+  if (homeScore === null || awayScore === null) {
+    return null;
+  }
+
+  if (halfTimeHomeScore !== null && halfTimeAwayScore !== null) {
+    const homeFirstHalf = splitTwoParts(halfTimeHomeScore);
+    const awayFirstHalf = splitTwoParts(halfTimeAwayScore);
+    const homeSecondHalf = splitTwoParts(Math.max(0, homeScore - halfTimeHomeScore));
+    const awaySecondHalf = splitTwoParts(Math.max(0, awayScore - halfTimeAwayScore));
+
+    return {
+      q1: { home: homeFirstHalf.first, away: awayFirstHalf.first },
+      q2: { home: homeFirstHalf.second, away: awayFirstHalf.second },
+      q3: { home: homeSecondHalf.first, away: awaySecondHalf.first },
+      q4: { home: homeSecondHalf.second, away: awaySecondHalf.second },
+      source: "estimated_from_half_time_and_final" as const
+    };
+  }
+
+  const home = projectedQuarterPoints(homeScore);
+  const away = projectedQuarterPoints(awayScore);
+  return {
+    q1: { home: home[0], away: away[0] },
+    q2: { home: home[1], away: away[1] },
+    q3: { home: home[2], away: away[2] },
+    q4: { home: home[3], away: away[3] },
+    source: "estimated_from_final_score" as const
+  };
+}
+
 export function expandBasketballPredictionMarkets(row: PredictionRowInput): ExpandedPredictionItem[] {
   const outcome = normalizeOutcome(row.calibratedProbabilities ?? row.probabilities ?? row.rawProbabilities);
   const expected = normalizeExpectedScore(row.expectedScore);
@@ -195,6 +302,15 @@ export function expandBasketballPredictionMarkets(row: PredictionRowInput): Expa
 
   const kickoff = row.match?.matchDateTimeUTC?.toISOString();
   const status = (row.match?.status ?? "").toLowerCase() || "scheduled";
+  const quarterBreakdown =
+    quarterBreakdownFromProviderPeriods(row.match) ??
+    quarterBreakdownFromScores(
+      row.match?.homeScore ?? null,
+      row.match?.awayScore ?? null,
+      row.match?.halfTimeHomeScore ?? null,
+      row.match?.halfTimeAwayScore ?? null
+    ) ??
+    quarterBreakdownFromProjection(expected.home, expected.away);
   const baseItem: Omit<ExpandedPredictionItem, "predictionType" | "marketKey" | "probabilities"> = {
     matchId: row.matchId,
     modelVersionId: row.modelVersionId ?? null,
@@ -222,6 +338,7 @@ export function expandBasketballPredictionMarkets(row: PredictionRowInput): Expa
     awayScore: row.match?.awayScore ?? null,
     halfTimeHomeScore: row.match?.halfTimeHomeScore ?? null,
     halfTimeAwayScore: row.match?.halfTimeAwayScore ?? null,
+    quarterBreakdown,
     isPlayed: status === "finished",
     leagueId: row.match?.league?.id,
     leagueName: row.match?.league?.name,

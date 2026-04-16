@@ -12,6 +12,20 @@ async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Prom
   ]);
 }
 
+function parseSportFilter(input?: string): "football" | "basketball" | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (normalized === "football" || normalized === "soccer") {
+    return "football";
+  }
+  if (normalized === "basketball" || normalized === "nba" || normalized === "basket") {
+    return "basketball";
+  }
+  return undefined;
+}
+
 @Injectable()
 export class TeamsService {
   constructor(
@@ -20,11 +34,13 @@ export class TeamsService {
     private readonly cache: CacheService
   ) {}
 
-  async list(query?: string, take?: number) {
+  async list(query?: string, take?: number, sport?: string) {
     const safeTake = Number.isFinite(take ?? NaN) ? Math.max(50, Math.min(10000, Math.floor(take ?? 0))) : 10000;
     const normalizedQuery = String(query ?? "").trim();
     const queryKey = normalizedQuery.toLocaleLowerCase("tr-TR") || "all";
-    const cacheKey = `teams:list:v2:${safeTake}:${queryKey}`;
+    const sportCode = parseSportFilter(sport);
+    const sportKey = sportCode ?? "all";
+    const cacheKey = `teams:list:v3:${safeTake}:${queryKey}:${sportKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -49,6 +65,42 @@ export class TeamsService {
           .some((item) => item.includes(needle))
       );
     };
+
+    if (sportCode) {
+      try {
+        const rows = await queryWithTimeout(
+          this.prisma.team.findMany({
+            where: {
+              OR: [
+                { homeMatches: { some: { sport: { code: sportCode } } } },
+                { awayMatches: { some: { sport: { code: sportCode } } } }
+              ]
+            },
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              country: true
+            },
+            orderBy: [{ name: "asc" }, { id: "asc" }],
+            take: safeTake
+          }),
+          12000
+        );
+
+        const filtered = applyQueryFilter(rows);
+        await this.cache.set(cacheKey, filtered, 90, ["teams"]);
+        await this.cache.set(stableCacheKey, filtered, 600, ["teams"]);
+        return filtered;
+      } catch {
+        const stale = await this.cache.get<unknown[]>(stableCacheKey);
+        if (stale) {
+          await this.cache.set(cacheKey, stale, 12, ["teams"]);
+          return stale;
+        }
+        return [];
+      }
+    }
 
     let teams: Array<{ id: string; name: string; shortName: string | null; country: string | null }> = [];
     try {
@@ -94,14 +146,17 @@ export class TeamsService {
     return resolved.canonicalTeam;
   }
 
-  async matches(id: string) {
+  async matches(id: string, sport?: string) {
     try {
       const equivalentIds = await queryWithTimeout(this.teamIdentityService.resolveEquivalentTeamIds(id), 6000);
+      const sportCode = parseSportFilter(sport);
+      const where = {
+        OR: [{ homeTeamId: { in: equivalentIds } }, { awayTeamId: { in: equivalentIds } }],
+        ...(sportCode ? { sport: { code: sportCode } } : {})
+      };
       return await queryWithTimeout(
         this.prisma.match.findMany({
-          where: {
-            OR: [{ homeTeamId: { in: equivalentIds } }, { awayTeamId: { in: equivalentIds } }]
-          },
+          where,
           orderBy: { matchDateTimeUTC: "desc" },
           take: 20,
           include: { homeTeam: true, awayTeam: true, league: true }

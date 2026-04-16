@@ -6,7 +6,7 @@ export default function BasketballPredictionsPage() {
       scope="upcoming"
       sport="basketball"
       title="Basketbol Tahminleri"
-      description="Basketbol maclari icin uretilen canli ve yaklasan tahminleri bu bolumde takip edebilirsiniz."
+      description="Basketbolda 4 periyot dinamiklerini baz alan, oynanmamis mac tahminlerini bu bolumde takip edebilirsiniz."
     />
   );
 }

@@ -156,6 +156,14 @@ model Match {
   awayScore              Int?
   halfTimeHomeScore      Int?
   halfTimeAwayScore      Int?
+  q1HomeScore            Int?
+  q1AwayScore            Int?
+  q2HomeScore            Int?
+  q2AwayScore            Int?
+  q3HomeScore            Int?
+  q3AwayScore            Int?
+  q4HomeScore            Int?
+  q4AwayScore            Int?
   resultCode             String?
   oddsHome               Float?
   oddsDraw               Float?

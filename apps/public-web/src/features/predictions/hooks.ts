@@ -33,14 +33,15 @@ async function safeFetchEnvelope<T>(path: string): Promise<Envelope<T> | null> {
   }
 }
 
-async function fetchMatchPredictions(matchId: string): Promise<MatchPredictionItem[]> {
-  const groupedResponse = await safeFetchEnvelope<unknown>(`/api/v1/matches/${matchId}/predictions`);
+async function fetchMatchPredictions(matchId: string, includeMarketAnalysis = false): Promise<MatchPredictionItem[]> {
+  const query = includeMarketAnalysis ? "?includeMarketAnalysis=1" : "";
+  const groupedResponse = await safeFetchEnvelope<unknown>(`/api/v1/matches/${matchId}/predictions${query}`);
   const groupedItems = normalizePredictionList(groupedResponse?.data);
   if (groupedItems.length > 0) {
     return groupedItems;
   }
 
-  const singleResponse = await safeFetchEnvelope<unknown>(`/api/v1/matches/${matchId}/prediction`);
+  const singleResponse = await safeFetchEnvelope<unknown>(`/api/v1/matches/${matchId}/prediction${query}`);
   return normalizePredictionList(singleResponse?.data);
 }
 
@@ -49,6 +50,7 @@ type PredictionListQuery = {
   status?: string;
   take?: number;
   sport?: string;
+  includeMarketAnalysis?: boolean;
 };
 
 function buildPredictionQueryString(query: PredictionListQuery): string {
@@ -66,6 +68,9 @@ function buildPredictionQueryString(query: PredictionListQuery): string {
   }
   if (query.sport && query.sport.trim().length > 0) {
     params.set("sport", query.sport.trim().toLowerCase());
+  }
+  if (query.includeMarketAnalysis) {
+    params.set("includeMarketAnalysis", "1");
   }
 
   const serialized = params.toString();
@@ -96,15 +101,36 @@ async function fetchPredictions(query: PredictionListQuery): Promise<MatchPredic
     return normalized;
   }
 
-  // Fallback for temporary status inconsistencies in upstream data.
-  const fallbackResponse = await safeFetchEnvelope<unknown>("/api/v1/predictions");
-  return normalizePredictionList(fallbackResponse?.data);
+  // Fallback 1: keep finished/in-play data in scope when strict status query fails.
+  const broadStatusParams = new URLSearchParams();
+  broadStatusParams.set("status", "finished,scheduled,live,postponed,cancelled");
+  if (query.sport && query.sport.trim().length > 0) {
+    broadStatusParams.set("sport", query.sport.trim().toLowerCase());
+  }
+  if (query.predictionType && query.predictionType !== "all") {
+    broadStatusParams.set("predictionType", query.predictionType);
+  }
+  if (Number.isFinite(query.take ?? NaN) && (query.take ?? 0) > 0) {
+    broadStatusParams.set("take", String(Math.trunc(query.take as number)));
+  }
+
+  const broadStatusSuffix = `?${broadStatusParams.toString()}`;
+  const broadStatusResponse = await safeFetchEnvelope<unknown>(`/api/v1/predictions${broadStatusSuffix}`);
+  const broadNormalized = normalizePredictionList(broadStatusResponse?.data);
+  if (broadNormalized.length > 0) {
+    return broadNormalized;
+  }
+
+  // Fallback 2: last-resort default endpoint.
+  const defaultResponse = await safeFetchEnvelope<unknown>("/api/v1/predictions");
+  return normalizePredictionList(defaultResponse?.data);
 }
 
 export function useMatchPredictions(matchId: string, initialData?: MatchPredictionItem[]) {
+  const includeMarketAnalysis = true;
   return useQuery({
-    queryKey: ["match-predictions", matchId],
-    queryFn: () => fetchMatchPredictions(matchId),
+    queryKey: ["match-predictions", matchId, includeMarketAnalysis ? "market" : "nomarket"],
+    queryFn: () => fetchMatchPredictions(matchId, includeMarketAnalysis),
     enabled: matchId.length > 0,
     retry: 1,
     staleTime: 60_000,
@@ -148,11 +174,20 @@ export function usePredictionsByType(
   predictionType?: PredictionType | "all",
   status?: string,
   take?: number,
-  sport?: string
+  sport?: string,
+  includeMarketAnalysis?: boolean
 ) {
+  const includeMarket = includeMarketAnalysis ?? sport === "basketball";
   const query = useQuery({
-    queryKey: ["predictions", predictionType ?? "all", status ?? "all", take ?? "default", sport ?? "all"],
-    queryFn: () => fetchPredictions({ predictionType, status, take, sport }),
+    queryKey: [
+      "predictions",
+      predictionType ?? "all",
+      status ?? "all",
+      take ?? "default",
+      sport ?? "all",
+      includeMarket ? "market" : "nomarket"
+    ],
+    queryFn: () => fetchPredictions({ predictionType, status, take, sport, includeMarketAnalysis: includeMarket }),
     retry: 1,
     staleTime: 60_000,
     refetchInterval: 30_000,

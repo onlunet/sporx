@@ -66,6 +66,14 @@ type MatchSeedInput = {
   awayScore: number | null;
   halfTimeHomeScore?: number | null;
   halfTimeAwayScore?: number | null;
+  q1HomeScore?: number | null;
+  q1AwayScore?: number | null;
+  q2HomeScore?: number | null;
+  q2AwayScore?: number | null;
+  q3HomeScore?: number | null;
+  q3AwayScore?: number | null;
+  q4HomeScore?: number | null;
+  q4AwayScore?: number | null;
   homeElo?: number | null;
   awayElo?: number | null;
   form5Home?: number | null;
@@ -1565,6 +1573,10 @@ export class ProviderIngestionService {
     return homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined;
   }
 
+  private hasQuarterPair(homeScore: number | null | undefined, awayScore: number | null | undefined) {
+    return homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined;
+  }
+
   private providerReliabilityScore(dataSource: string | null | undefined) {
     const key = (dataSource ?? "").trim().toLowerCase();
     if (key === "api_football") {
@@ -1595,6 +1607,14 @@ export class ProviderIngestionService {
       awayScore: number | null;
       halfTimeHomeScore: number | null;
       halfTimeAwayScore: number | null;
+      q1HomeScore: number | null;
+      q1AwayScore: number | null;
+      q2HomeScore: number | null;
+      q2AwayScore: number | null;
+      q3HomeScore: number | null;
+      q3AwayScore: number | null;
+      q4HomeScore: number | null;
+      q4AwayScore: number | null;
       homeElo: number | null;
       awayElo: number | null;
       form5Home: number | null;
@@ -1614,6 +1634,14 @@ export class ProviderIngestionService {
     let awayScore = input.awayScore;
     let halfTimeHomeScore = input.halfTimeHomeScore ?? null;
     let halfTimeAwayScore = input.halfTimeAwayScore ?? null;
+    let q1HomeScore = input.q1HomeScore ?? null;
+    let q1AwayScore = input.q1AwayScore ?? null;
+    let q2HomeScore = input.q2HomeScore ?? null;
+    let q2AwayScore = input.q2AwayScore ?? null;
+    let q3HomeScore = input.q3HomeScore ?? null;
+    let q3AwayScore = input.q3AwayScore ?? null;
+    let q4HomeScore = input.q4HomeScore ?? null;
+    let q4AwayScore = input.q4AwayScore ?? null;
     let statusAdjustedFromFinishedWithoutScore = false;
     let statusAdjustedFromStaleScheduled = false;
     let scoreConflictResolved: null | {
@@ -1687,6 +1715,72 @@ export class ProviderIngestionService {
       }
     }
 
+    const quarterPairs = [
+      {
+        key: "q1",
+        incomingHome: input.q1HomeScore ?? null,
+        incomingAway: input.q1AwayScore ?? null,
+        existingHome: existing?.q1HomeScore ?? null,
+        existingAway: existing?.q1AwayScore ?? null
+      },
+      {
+        key: "q2",
+        incomingHome: input.q2HomeScore ?? null,
+        incomingAway: input.q2AwayScore ?? null,
+        existingHome: existing?.q2HomeScore ?? null,
+        existingAway: existing?.q2AwayScore ?? null
+      },
+      {
+        key: "q3",
+        incomingHome: input.q3HomeScore ?? null,
+        incomingAway: input.q3AwayScore ?? null,
+        existingHome: existing?.q3HomeScore ?? null,
+        existingAway: existing?.q3AwayScore ?? null
+      },
+      {
+        key: "q4",
+        incomingHome: input.q4HomeScore ?? null,
+        incomingAway: input.q4AwayScore ?? null,
+        existingHome: existing?.q4HomeScore ?? null,
+        existingAway: existing?.q4AwayScore ?? null
+      }
+    ] as const;
+
+    const incomingPriority = this.providerReliabilityScore(input.dataSource);
+    const existingPriority = this.providerReliabilityScore(existing?.dataSource);
+
+    for (const pair of quarterPairs) {
+      const incomingHasQuarter = this.hasQuarterPair(pair.incomingHome, pair.incomingAway);
+      const existingHasQuarter = this.hasQuarterPair(pair.existingHome, pair.existingAway);
+      let resolvedHome = pair.incomingHome;
+      let resolvedAway = pair.incomingAway;
+
+      if (existingHasQuarter && !incomingHasQuarter) {
+        resolvedHome = pair.existingHome;
+        resolvedAway = pair.existingAway;
+      } else if (existingHasQuarter && incomingHasQuarter) {
+        const differs = pair.existingHome !== pair.incomingHome || pair.existingAway !== pair.incomingAway;
+        if (differs && existingPriority > incomingPriority) {
+          resolvedHome = pair.existingHome;
+          resolvedAway = pair.existingAway;
+        }
+      }
+
+      if (pair.key === "q1") {
+        q1HomeScore = resolvedHome;
+        q1AwayScore = resolvedAway;
+      } else if (pair.key === "q2") {
+        q2HomeScore = resolvedHome;
+        q2AwayScore = resolvedAway;
+      } else if (pair.key === "q3") {
+        q3HomeScore = resolvedHome;
+        q3AwayScore = resolvedAway;
+      } else {
+        q4HomeScore = resolvedHome;
+        q4AwayScore = resolvedAway;
+      }
+    }
+
     if (existing?.status === MatchStatus.finished && existingHasScore && status !== MatchStatus.finished) {
       status = MatchStatus.finished;
       homeScore = existing.homeScore;
@@ -1725,6 +1819,14 @@ export class ProviderIngestionService {
       awayScore,
       halfTimeHomeScore,
       halfTimeAwayScore,
+      q1HomeScore,
+      q1AwayScore,
+      q2HomeScore,
+      q2AwayScore,
+      q3HomeScore,
+      q3AwayScore,
+      q4HomeScore,
+      q4AwayScore,
       homeElo,
       awayElo,
       form5Home,
@@ -1977,6 +2079,78 @@ export class ProviderIngestionService {
     }
 
     return null;
+  }
+
+  private readQuarterScoreFromSideScores(sideScores: Record<string, unknown>, quarter: 1 | 2 | 3 | 4) {
+    const keyCandidates = [
+      `q${quarter}`,
+      `q_${quarter}`,
+      `quarter_${quarter}`,
+      `quarter${quarter}`,
+      `period_${quarter}`,
+      `period${quarter}`,
+      `${quarter}`
+    ];
+
+    for (const key of keyCandidates) {
+      const value = this.toNullableScore(sideScores[key]);
+      if (value !== null) {
+        return value;
+      }
+    }
+
+    const arrayCandidates = [
+      sideScores.linescore,
+      sideScores.lineScore,
+      sideScores.periods,
+      sideScores.quarters,
+      sideScores.periodScores
+    ];
+
+    for (const candidate of arrayCandidates) {
+      if (!Array.isArray(candidate)) {
+        continue;
+      }
+      const row = candidate[quarter - 1];
+      if (row === undefined || row === null) {
+        continue;
+      }
+      const direct = this.toNullableScore(row);
+      if (direct !== null) {
+        return direct;
+      }
+      const rowRecord = this.toRecord(row);
+      if (!rowRecord) {
+        continue;
+      }
+      const nested = this.toNullableScore(rowRecord.points ?? rowRecord.score ?? rowRecord.value);
+      if (nested !== null) {
+        return nested;
+      }
+    }
+
+    return null;
+  }
+
+  private buildHalfTimeFromQuarters(
+    q1HomeScore: number | null,
+    q1AwayScore: number | null,
+    q2HomeScore: number | null,
+    q2AwayScore: number | null
+  ) {
+    if (
+      q1HomeScore === null ||
+      q1AwayScore === null ||
+      q2HomeScore === null ||
+      q2AwayScore === null
+    ) {
+      return { halfTimeHomeScore: null as number | null, halfTimeAwayScore: null as number | null };
+    }
+
+    return {
+      halfTimeHomeScore: q1HomeScore + q2HomeScore,
+      halfTimeAwayScore: q1AwayScore + q2AwayScore
+    };
   }
 
   async rewindFootballResultsCheckpoints(daysBack: number) {
@@ -2255,6 +2429,14 @@ export class ProviderIngestionService {
         awayScore: true,
         halfTimeHomeScore: true,
         halfTimeAwayScore: true,
+        q1HomeScore: true,
+        q1AwayScore: true,
+        q2HomeScore: true,
+        q2AwayScore: true,
+        q3HomeScore: true,
+        q3AwayScore: true,
+        q4HomeScore: true,
+        q4AwayScore: true,
         homeElo: true,
         awayElo: true,
         form5Home: true,
@@ -2282,6 +2464,14 @@ export class ProviderIngestionService {
         awayScore: merged.awayScore,
         halfTimeHomeScore: merged.halfTimeHomeScore,
         halfTimeAwayScore: merged.halfTimeAwayScore,
+        q1HomeScore: merged.q1HomeScore,
+        q1AwayScore: merged.q1AwayScore,
+        q2HomeScore: merged.q2HomeScore,
+        q2AwayScore: merged.q2AwayScore,
+        q3HomeScore: merged.q3HomeScore,
+        q3AwayScore: merged.q3AwayScore,
+        q4HomeScore: merged.q4HomeScore,
+        q4AwayScore: merged.q4AwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
@@ -2302,6 +2492,14 @@ export class ProviderIngestionService {
         awayScore: merged.awayScore,
         halfTimeHomeScore: merged.halfTimeHomeScore,
         halfTimeAwayScore: merged.halfTimeAwayScore,
+        q1HomeScore: merged.q1HomeScore,
+        q1AwayScore: merged.q1AwayScore,
+        q2HomeScore: merged.q2HomeScore,
+        q2AwayScore: merged.q2AwayScore,
+        q3HomeScore: merged.q3HomeScore,
+        q3AwayScore: merged.q3AwayScore,
+        q4HomeScore: merged.q4HomeScore,
+        q4AwayScore: merged.q4AwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
@@ -4519,6 +4717,15 @@ export class ProviderIngestionService {
       const awayTeamObj = (teams.away as Record<string, unknown> | undefined) ?? {};
       const homeScores = (scores.home as Record<string, unknown> | undefined) ?? {};
       const awayScores = (scores.away as Record<string, unknown> | undefined) ?? {};
+      const q1HomeScore = this.readQuarterScoreFromSideScores(homeScores, 1);
+      const q1AwayScore = this.readQuarterScoreFromSideScores(awayScores, 1);
+      const q2HomeScore = this.readQuarterScoreFromSideScores(homeScores, 2);
+      const q2AwayScore = this.readQuarterScoreFromSideScores(awayScores, 2);
+      const q3HomeScore = this.readQuarterScoreFromSideScores(homeScores, 3);
+      const q3AwayScore = this.readQuarterScoreFromSideScores(awayScores, 3);
+      const q4HomeScore = this.readQuarterScoreFromSideScores(homeScores, 4);
+      const q4AwayScore = this.readQuarterScoreFromSideScores(awayScores, 4);
+      const inferredHalf = this.buildHalfTimeFromQuarters(q1HomeScore, q1AwayScore, q2HomeScore, q2AwayScore);
 
       const kickoffAt = this.parseEventDate(game.date);
       const homeTeamName = String(homeTeamObj.name ?? "").trim();
@@ -4546,6 +4753,16 @@ export class ProviderIngestionService {
         status: this.basketballStatus(statusRaw),
         homeScore: this.toNullableScore(homeScores.total),
         awayScore: this.toNullableScore(awayScores.total),
+        halfTimeHomeScore: inferredHalf.halfTimeHomeScore,
+        halfTimeAwayScore: inferredHalf.halfTimeAwayScore,
+        q1HomeScore,
+        q1AwayScore,
+        q2HomeScore,
+        q2AwayScore,
+        q3HomeScore,
+        q3AwayScore,
+        q4HomeScore,
+        q4AwayScore,
         refereeName: null,
         dataSource: provider.key
       });
@@ -4645,6 +4862,15 @@ export class ProviderIngestionService {
       const awayTeamObj = (teams.visitors as Record<string, unknown> | undefined) ?? {};
       const homeScoreObj = (scores.home as Record<string, unknown> | undefined) ?? {};
       const awayScoreObj = (scores.visitors as Record<string, unknown> | undefined) ?? {};
+      const q1HomeScore = this.readQuarterScoreFromSideScores(homeScoreObj, 1);
+      const q1AwayScore = this.readQuarterScoreFromSideScores(awayScoreObj, 1);
+      const q2HomeScore = this.readQuarterScoreFromSideScores(homeScoreObj, 2);
+      const q2AwayScore = this.readQuarterScoreFromSideScores(awayScoreObj, 2);
+      const q3HomeScore = this.readQuarterScoreFromSideScores(homeScoreObj, 3);
+      const q3AwayScore = this.readQuarterScoreFromSideScores(awayScoreObj, 3);
+      const q4HomeScore = this.readQuarterScoreFromSideScores(homeScoreObj, 4);
+      const q4AwayScore = this.readQuarterScoreFromSideScores(awayScoreObj, 4);
+      const inferredHalf = this.buildHalfTimeFromQuarters(q1HomeScore, q1AwayScore, q2HomeScore, q2AwayScore);
       const dateObj = (game.date as Record<string, unknown> | undefined) ?? {};
 
       const gameLeague = String(game.league ?? "").trim().toLowerCase();
@@ -4692,6 +4918,16 @@ export class ProviderIngestionService {
         status,
         homeScore: this.toNullableScore(homeScoreObj.points),
         awayScore: this.toNullableScore(awayScoreObj.points),
+        halfTimeHomeScore: inferredHalf.halfTimeHomeScore,
+        halfTimeAwayScore: inferredHalf.halfTimeAwayScore,
+        q1HomeScore,
+        q1AwayScore,
+        q2HomeScore,
+        q2AwayScore,
+        q3HomeScore,
+        q3AwayScore,
+        q4HomeScore,
+        q4AwayScore,
         refereeName: null,
         dataSource: provider.key
       });

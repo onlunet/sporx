@@ -58,7 +58,7 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
   let predictionData: z.infer<typeof predictionSchema> = null;
   try {
     const predictionResponse = await fetchWithSchema(
-      `/api/v1/matches/${resolved.id}/prediction`,
+      `/api/v1/matches/${resolved.id}/prediction?includeMarketAnalysis=1`,
       envelopeSchema(predictionSchema)
     );
     predictionData = predictionResponse.data;
@@ -99,8 +99,7 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
         </p>
       </div>
 
-      <MatchPredictionExperience matchId={resolved.id} initialPrediction={initialPrediction} />
+      <MatchPredictionExperience matchId={resolved.id} initialPrediction={initialPrediction} sport="football" />
     </div>
   );
 }
-

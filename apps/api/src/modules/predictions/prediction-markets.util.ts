@@ -30,6 +30,13 @@ export type ExpandedPredictionItem = {
   probabilities: Record<string, number>;
   expectedScore?: { home: number; away: number };
   scorelineDistribution?: Array<{ home: number; away: number; probability: number }>;
+  quarterBreakdown?: {
+    q1: { home: number; away: number };
+    q2: { home: number; away: number };
+    q3: { home: number; away: number };
+    q4: { home: number; away: number };
+    source: "provider_period_scores" | "projected" | "estimated_from_final_score" | "estimated_from_half_time_and_final";
+  };
   commentary?: {
     shortComment: string;
     detailedComment: string;
@@ -76,6 +83,14 @@ export type PredictionRowInput = {
     awayScore?: number | null;
     halfTimeHomeScore?: number | null;
     halfTimeAwayScore?: number | null;
+    q1HomeScore?: number | null;
+    q1AwayScore?: number | null;
+    q2HomeScore?: number | null;
+    q2AwayScore?: number | null;
+    q3HomeScore?: number | null;
+    q3AwayScore?: number | null;
+    q4HomeScore?: number | null;
+    q4AwayScore?: number | null;
   };
 };
 

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
@@ -26,13 +26,16 @@ const ScorelineDistributionCard = dynamic(
   () => import("./ScorelineDistributionCard").then((mod) => ({ default: mod.ScorelineDistributionCard })),
   {
     ssr: false,
-    loading: () => <p className="text-xs text-slate-400">Skor dağılımı yükleniyor...</p>
+    loading: () => <p className="text-xs text-slate-400">Skor dagilimi yukleniyor...</p>
   }
 );
+
+type SportScope = "football" | "basketball";
 
 type MatchPredictionExperienceProps = {
   matchId: string;
   initialPrediction?: MatchPredictionItem | null;
+  sport?: SportScope;
 };
 
 function ProbabilityRow({ label, value }: { label: string; value?: number }) {
@@ -50,7 +53,14 @@ function ProbabilityRow({ label, value }: { label: string; value?: number }) {
   );
 }
 
-export function MatchPredictionExperience({ matchId, initialPrediction }: MatchPredictionExperienceProps) {
+function asPct(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  return `%${Math.round(value * 100)}`;
+}
+
+export function MatchPredictionExperience({ matchId, initialPrediction, sport = "football" }: MatchPredictionExperienceProps) {
   const initial = initialPrediction ? [initialPrediction] : undefined;
   const predictionsQuery = useMatchPredictions(matchId, initial);
   const predictions = useMemo(() => predictionsQuery.data ?? [], [predictionsQuery.data]);
@@ -96,13 +106,13 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
   }, [activeLine, availableLines]);
 
   if (predictionsQuery.isLoading && predictions.length === 0) {
-    return <p className="text-sm text-slate-400">Tahmin detayları yükleniyor...</p>;
+    return <p className="text-sm text-slate-400">Tahmin detaylari yukleniyor...</p>;
   }
 
   if (predictionsQuery.isError && predictions.length === 0) {
     return (
       <p className="rounded-md border border-rose-700/50 bg-rose-900/20 p-3 text-sm text-rose-200">
-        Tahmin detayları şu anda alınamıyor. Kısa süre sonra tekrar deneyebilirsin.
+        Tahmin detaylari su anda alinamiyor. Kisa sure sonra tekrar deneyebilirsin.
       </p>
     );
   }
@@ -110,10 +120,13 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
   if (predictions.length === 0) {
     return (
       <p className="rounded-md border border-slate-700 bg-slate-900/60 p-3 text-sm text-slate-300">
-        Bu maç için henüz yayınlanmış tahmin bulunmuyor.
+        Bu mac icin henuz yayinlanmis tahmin bulunmuyor.
       </p>
     );
   }
+
+  const probs = generalPrediction?.probabilities ?? {};
+  const showOvertime = sport === "basketball" && typeof probs.draw === "number" && probs.draw >= 0.03;
 
   return (
     <section className="space-y-4">
@@ -124,21 +137,68 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
         {activeTab === "general" ? (
           <div className="space-y-3 rounded-md border border-slate-700 bg-slate-900/60 p-3">
             <div className="flex items-center justify-between gap-2">
-              <h4 className="text-sm font-semibold text-slate-100">Genel Tahmin</h4>
+              <h4 className="text-sm font-semibold text-slate-100">
+                {sport === "basketball" ? "Basketbol Genel Tahmini" : "Genel Tahmin"}
+              </h4>
               <PredictionConfidenceBadge prediction={generalPrediction} />
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <ProbabilityRow label="Ev Sahibi" value={generalPrediction?.probabilities?.home} />
-              <ProbabilityRow label="Beraberlik" value={generalPrediction?.probabilities?.draw} />
-              <ProbabilityRow label="Deplasman" value={generalPrediction?.probabilities?.away} />
+
+            <div className={`grid grid-cols-1 gap-3 ${showOvertime || sport === "football" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+              <ProbabilityRow label={sport === "basketball" ? "Ev Kazanir" : "Ev Sahibi"} value={generalPrediction?.probabilities?.home} />
+              {showOvertime || sport === "football" ? (
+                <ProbabilityRow label={sport === "basketball" ? "Uzatma" : "Beraberlik"} value={generalPrediction?.probabilities?.draw} />
+              ) : null}
+              <ProbabilityRow label={sport === "basketball" ? "Dep Kazanir" : "Deplasman"} value={generalPrediction?.probabilities?.away} />
             </div>
-            <p className="text-sm text-slate-200">{generalPrediction?.summary ?? "Kısa özet verisi bulunmuyor."}</p>
+
+            <p className="text-sm text-slate-200">{generalPrediction?.summary ?? "Kisa ozet verisi bulunmuyor."}</p>
+
             {generalPrediction?.expectedScore ? (
-              <p className="text-xs text-slate-400">
-                Beklenen skor: {generalPrediction.expectedScore.home?.toFixed(2) ?? "-"} -{" "}
-                {generalPrediction.expectedScore.away?.toFixed(2) ?? "-"}
+              <div className="rounded-md border border-white/10 bg-white/5 p-2 text-xs text-slate-300">
+                <p>
+                  Beklenen skor: {generalPrediction.expectedScore.home?.toFixed(2) ?? "-"} - {generalPrediction.expectedScore.away?.toFixed(2) ?? "-"}
+                </p>
+                {sport === "basketball" ? (
+                  <div className="mt-1 grid gap-1 md:grid-cols-2">
+                    <span>Beklenen toplam: {generalPrediction.expectedScore.expectedTotal?.toFixed(1) ?? "-"}</span>
+                    <span>
+                      Spread (Ev):
+                      {generalPrediction.expectedScore.expectedSpreadHome !== undefined
+                        ? ` ${generalPrediction.expectedScore.expectedSpreadHome >= 0 ? "+" : ""}${generalPrediction.expectedScore.expectedSpreadHome.toFixed(1)}`
+                        : " -"}
+                    </span>
+                    <span>Beklenen pozisyon: {generalPrediction.expectedScore.expectedPossessions?.toFixed(1) ?? "-"}</span>
+                    <span>Pace bandi: {generalPrediction.expectedScore.paceBucket ?? "-"}</span>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {generalPrediction?.marketAnalysis ? (
+              <div className="rounded-md border border-neon-purple/30 bg-neon-purple/10 p-2 text-xs text-slate-200">
+                <p className="font-medium text-neon-purple">Piyasa Karsilastirmasi</p>
+                <div className="mt-1 grid gap-1 md:grid-cols-2">
+                  <span>Model: {asPct(generalPrediction.marketAnalysis.modelProbability)}</span>
+                  <span>Piyasa: {asPct(generalPrediction.marketAnalysis.marketImpliedProbability)}</span>
+                  <span>
+                    Sapma:
+                    {generalPrediction.marketAnalysis.probabilityGap !== undefined
+                      ? ` %${Math.round(Math.abs(generalPrediction.marketAnalysis.probabilityGap) * 100)}`
+                      : " -"}
+                  </span>
+                  <span>Uyum: {generalPrediction.marketAgreementLevel ?? "-"}</span>
+                </div>
+              </div>
+            ) : null}
+
+            {generalPrediction?.recommendation?.isRecommended !== undefined ? (
+              <p className="text-xs text-slate-300">
+                Oneri: {generalPrediction.recommendation.isRecommended ? "Evet" : "Temkinli/Pas"}
+                {generalPrediction.recommendation.primaryMarket ? ` | Pazar: ${generalPrediction.recommendation.primaryMarket}` : ""}
+                {generalPrediction.recommendation.side ? ` | Yon: ${generalPrediction.recommendation.side}` : ""}
               </p>
             ) : null}
+
             {generalPrediction?.avoidReason ? (
               <p className="rounded-md border border-amber-700/50 bg-amber-900/20 p-2 text-xs text-amber-200">
                 Not: {generalPrediction.avoidReason}
@@ -149,8 +209,11 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
 
         {activeTab === "firstHalfFullTime" ? (
           <div className="space-y-3">
-            <FirstHalfResultCard prediction={firstHalfPrediction} title="İlk Yarı Sonucu" />
-            <FirstHalfResultCard prediction={fullTimePrediction} title="Maç Sonucu" />
+            <FirstHalfResultCard
+              prediction={firstHalfPrediction}
+              title={sport === "basketball" ? "Ilk 2 Periyot Sonucu" : "Ilk Yari Sonucu"}
+            />
+            <FirstHalfResultCard prediction={fullTimePrediction} title={sport === "basketball" ? "Mac Sonucu" : "Mac Sonucu"} />
             <HalfTimeFullTimeMatrix prediction={halfTimeFullTimePrediction} />
           </div>
         ) : null}
@@ -160,7 +223,9 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
         {activeTab === "overUnder" ? (
           <div className="space-y-3 rounded-md border border-slate-700 bg-slate-900/60 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-sm font-semibold text-slate-100">Alt / Üst Tahmini</h4>
+              <h4 className="text-sm font-semibold text-slate-100">
+                {sport === "basketball" ? "Toplam Sayi Alt/Ust Tahmini" : "Alt / Ust Tahmini"}
+              </h4>
               <OverUnderLineSelector lines={availableLines} activeLine={activeLine} onChange={setActiveLine} />
             </div>
             <OverUnderPredictionCard prediction={selectedLinePrediction} />
@@ -171,7 +236,7 @@ export function MatchPredictionExperience({ matchId, initialPrediction }: MatchP
 
         {activeTab === "firstHalf" ? (
           <div className="space-y-3">
-            <FirstHalfResultCard prediction={firstHalfPrediction} />
+            <FirstHalfResultCard prediction={firstHalfPrediction} title={sport === "basketball" ? "Ilk 2 Periyot Kazanani" : undefined} />
             <OverUnderPredictionCard prediction={firstHalfGoalsPrediction} />
           </div>
         ) : null}

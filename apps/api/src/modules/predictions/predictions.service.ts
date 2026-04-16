@@ -163,6 +163,14 @@ export class PredictionsService {
             awayScore: number | null;
             halfTimeHomeScore: number | null;
             halfTimeAwayScore: number | null;
+            q1HomeScore: number | null;
+            q1AwayScore: number | null;
+            q2HomeScore: number | null;
+            q2AwayScore: number | null;
+            q3HomeScore: number | null;
+            q3AwayScore: number | null;
+            q4HomeScore: number | null;
+            q4AwayScore: number | null;
             homeTeam: { name: string };
             awayTeam: { name: string };
             league: { id: string; name: string; code: string | null } | null;
@@ -277,7 +285,15 @@ export class PredictionsService {
             homeScore: item.match.homeScore,
             awayScore: item.match.awayScore,
             halfTimeHomeScore: item.match.halfTimeHomeScore,
-            halfTimeAwayScore: item.match.halfTimeAwayScore
+            halfTimeAwayScore: item.match.halfTimeAwayScore,
+            q1HomeScore: item.match.q1HomeScore,
+            q1AwayScore: item.match.q1AwayScore,
+            q2HomeScore: item.match.q2HomeScore,
+            q2AwayScore: item.match.q2AwayScore,
+            q3HomeScore: item.match.q3HomeScore,
+            q3AwayScore: item.match.q3AwayScore,
+            q4HomeScore: item.match.q4HomeScore,
+            q4AwayScore: item.match.q4AwayScore
           }
         });
       } catch {
@@ -368,7 +384,15 @@ export class PredictionsService {
         homeScore: row.match.homeScore,
         awayScore: row.match.awayScore,
         halfTimeHomeScore: row.match.halfTimeHomeScore,
-        halfTimeAwayScore: row.match.halfTimeAwayScore
+        halfTimeAwayScore: row.match.halfTimeAwayScore,
+        q1HomeScore: row.match.q1HomeScore,
+        q1AwayScore: row.match.q1AwayScore,
+        q2HomeScore: row.match.q2HomeScore,
+        q2AwayScore: row.match.q2AwayScore,
+        q3HomeScore: row.match.q3HomeScore,
+        q3AwayScore: row.match.q3AwayScore,
+        q4HomeScore: row.match.q4HomeScore,
+        q4AwayScore: row.match.q4AwayScore
       }
     });
 

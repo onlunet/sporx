@@ -119,6 +119,29 @@ function resolveLine(item: MatchPredictionItem): number {
   return 0.5;
 }
 
+function resolvedHalfTimeScore(item: MatchPredictionItem): { home: number; away: number } | null {
+  if (
+    item.halfTimeHomeScore !== null &&
+    item.halfTimeHomeScore !== undefined &&
+    item.halfTimeAwayScore !== null &&
+    item.halfTimeAwayScore !== undefined
+  ) {
+    return {
+      home: item.halfTimeHomeScore,
+      away: item.halfTimeAwayScore
+    };
+  }
+
+  if (item.quarterBreakdown) {
+    return {
+      home: item.quarterBreakdown.q1.home + item.quarterBreakdown.q2.home,
+      away: item.quarterBreakdown.q1.away + item.quarterBreakdown.q2.away
+    };
+  }
+
+  return null;
+}
+
 function evaluatePrediction(item: MatchPredictionItem): boolean | null {
   const homeScore = item.homeScore;
   const awayScore = item.awayScore;
@@ -175,38 +198,35 @@ function evaluatePrediction(item: MatchPredictionItem): boolean | null {
   }
 
   if (item.predictionType === "firstHalfResult") {
-    const htHome = item.halfTimeHomeScore;
-    const htAway = item.halfTimeAwayScore;
-    if (htHome === null || htHome === undefined || htAway === null || htAway === undefined) {
+    const half = resolvedHalfTimeScore(item);
+    if (!half) {
       return null;
     }
     const predicted = pickTopProbability(item.probabilities, ["home", "draw", "away"]);
     if (!predicted) {
       return null;
     }
-    return predicted === asOutcomeKey(htHome, htAway);
+    return predicted === asOutcomeKey(half.home, half.away);
   }
 
   if (item.predictionType === "halfTimeFullTime") {
-    const htHome = item.halfTimeHomeScore;
-    const htAway = item.halfTimeAwayScore;
-    if (htHome === null || htHome === undefined || htAway === null || htAway === undefined) {
+    const half = resolvedHalfTimeScore(item);
+    if (!half) {
       return null;
     }
     const predicted = pickTopProbability(item.probabilities, ["HH", "HD", "HA", "DH", "DD", "DA", "AH", "AD", "AA"]);
     if (!predicted) {
       return null;
     }
-    const half = asOutcomeKey(htHome, htAway);
+    const halfOutcome = asOutcomeKey(half.home, half.away);
     const full = fullTimeOutcome;
     const encode = (value: "home" | "draw" | "away") => (value === "home" ? "H" : value === "draw" ? "D" : "A");
-    return predicted === `${encode(half)}${encode(full)}`;
+    return predicted === `${encode(halfOutcome)}${encode(full)}`;
   }
 
   if (item.predictionType === "firstHalfGoals" || item.predictionType === "secondHalfGoals") {
-    const htHome = item.halfTimeHomeScore;
-    const htAway = item.halfTimeAwayScore;
-    if (htHome === null || htHome === undefined || htAway === null || htAway === undefined) {
+    const half = resolvedHalfTimeScore(item);
+    if (!half) {
       return null;
     }
     const predicted = pickTopProbability(item.probabilities, ["over", "under"]);
@@ -215,7 +235,9 @@ function evaluatePrediction(item: MatchPredictionItem): boolean | null {
     }
     const line = resolveLine(item);
     const actualTotal =
-      item.predictionType === "firstHalfGoals" ? htHome + htAway : Math.max(0, homeScore + awayScore - (htHome + htAway));
+      item.predictionType === "firstHalfGoals"
+        ? half.home + half.away
+        : Math.max(0, homeScore + awayScore - (half.home + half.away));
     const actual = actualTotal > line ? "over" : "under";
     return predicted === actual;
   }

@@ -42,6 +42,7 @@ const sportGroups: Array<{
       { href: "/football/predictions", label: "Tahminler", icon: BrainCircuit },
       { href: "/football/predictions/completed", label: "Sonuclar", icon: BarChart3 },
       { href: "/football/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
+      { href: "/football/compare/teams", label: "Karsilastir", icon: GitCompare },
       { href: "/football/live", label: "Canli", icon: Radio }
     ]
   },
@@ -54,6 +55,7 @@ const sportGroups: Array<{
       { href: "/basketball/predictions", label: "Tahminler", icon: BrainCircuit },
       { href: "/basketball/predictions/completed", label: "Sonuclar", icon: BarChart3 },
       { href: "/basketball/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
+      { href: "/basketball/compare/teams", label: "Karsilastir", icon: GitCompare },
       { href: "/basketball/live", label: "Canli", icon: Radio }
     ]
   }
@@ -62,7 +64,6 @@ const sportGroups: Array<{
 const utilityLinks: SidebarLink[] = [
   { href: "/leagues", label: "Ligler", icon: Trophy },
   { href: "/teams", label: "Takimlar", icon: Shield },
-  { href: "/compare/teams", label: "Karsilastir", icon: GitCompare },
   { href: "/guide", label: "Rehber", icon: BookOpen },
   { href: "/account", label: "Hesap", icon: User }
 ];

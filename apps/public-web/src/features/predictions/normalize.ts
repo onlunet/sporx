@@ -1,4 +1,4 @@
-import {
+﻿import {
   MatchCommentary,
   MatchPredictionGroup,
   MatchPredictionItem,
@@ -134,7 +134,7 @@ function normalizeRiskFlags(raw: unknown): RiskFlag[] {
           return null;
         }
         const code = asString(row.code) ?? "UNKNOWN_RISK";
-        const message = asString(row.message) ?? "Temkinli değerlendirme önerilir.";
+        const message = asString(row.message) ?? "Temkinli degerlendirme onerilir.";
         const severityRaw = asString(row.severity)?.toLowerCase();
         const severity =
           severityRaw === "low" || severityRaw === "medium" || severityRaw === "high" || severityRaw === "critical"
@@ -150,7 +150,7 @@ function normalizeRiskFlags(raw: unknown): RiskFlag[] {
     return [];
   }
   const code = asString(single.code) ?? "UNKNOWN_RISK";
-  const message = asString(single.message) ?? "Temkinli değerlendirme önerilir.";
+  const message = asString(single.message) ?? "Temkinli degerlendirme onerilir.";
   const severityRaw = asString(single.severity)?.toLowerCase();
   const severity =
     severityRaw === "low" || severityRaw === "medium" || severityRaw === "high" || severityRaw === "critical"
@@ -241,6 +241,212 @@ function normalizeCommentary(raw: unknown): MatchCommentary | undefined {
     : undefined;
 }
 
+function normalizeExpectedScore(raw: unknown) {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+
+  const home = asNumber(record.home);
+  const away = asNumber(record.away);
+  const expectedPossessions = asNumber(record.expectedPossessions);
+  const expectedTotal = asNumber(record.expectedTotal);
+  const expectedSpreadHome = asNumber(record.expectedSpreadHome);
+  const firstHalfTotal = asNumber(record.firstHalfTotal);
+  const secondHalfTotal = asNumber(record.secondHalfTotal);
+  const paceBucket = asString(record.paceBucket);
+  const marketAgreementLevel = asString(record.marketAgreementLevel);
+  const marketCoverageScore = asNumber(record.marketCoverageScore);
+
+  const rawLines = Array.isArray(record.totalLines) ? record.totalLines : [];
+  const totalLines = rawLines
+    .map((row) => {
+      const lineRecord = asRecord(row);
+      if (!lineRecord) {
+        return null;
+      }
+      const line = asNumber(lineRecord.line);
+      const over = sanitizeProbability(asNumber(lineRecord.over));
+      const under = sanitizeProbability(asNumber(lineRecord.under));
+      if (line === undefined || over === undefined || under === undefined) {
+        return null;
+      }
+      return {
+        line: Number(line.toFixed(2)),
+        over: Number(over.toFixed(4)),
+        under: Number(under.toFixed(4))
+      };
+    })
+    .filter((row): row is { line: number; over: number; under: number } => row !== null);
+
+  if (
+    home === undefined &&
+    away === undefined &&
+    expectedPossessions === undefined &&
+    expectedTotal === undefined &&
+    expectedSpreadHome === undefined &&
+    firstHalfTotal === undefined &&
+    secondHalfTotal === undefined &&
+    !paceBucket &&
+    !marketAgreementLevel &&
+    marketCoverageScore === undefined &&
+    totalLines.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    home,
+    away,
+    expectedPossessions,
+    expectedTotal,
+    expectedSpreadHome,
+    firstHalfTotal,
+    secondHalfTotal,
+    paceBucket,
+    marketAgreementLevel,
+    marketCoverageScore,
+    totalLines: totalLines.length > 0 ? totalLines : undefined
+  };
+}
+
+function normalizeMarketAnalysis(raw: unknown) {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+
+  const modelProbability = sanitizeProbability(asNumber(record.modelProbability));
+  const marketImpliedProbability = sanitizeProbability(asNumber(record.marketImpliedProbability));
+  const fairMarketProbabilityRaw = asNumber(record.fairMarketProbability);
+  const fairMarketProbability =
+    fairMarketProbabilityRaw === undefined ? undefined : sanitizeProbability(fairMarketProbabilityRaw) ?? null;
+  const probabilityGap = asNumber(record.probabilityGap);
+  const movementDirection = asString(record.movementDirection);
+  const volatilityScore = asNumber(record.volatilityScore);
+  const consensusScore = asNumber(record.consensusScore);
+  const contradictionScore = asNumber(record.contradictionScore);
+  const updatedAt = asString(record.updatedAt);
+  const line = asNumber(record.line);
+
+  if (
+    modelProbability === undefined &&
+    marketImpliedProbability === undefined &&
+    fairMarketProbability === undefined &&
+    probabilityGap === undefined &&
+    !movementDirection &&
+    volatilityScore === undefined &&
+    consensusScore === undefined &&
+    contradictionScore === undefined &&
+    !updatedAt &&
+    line === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    modelProbability,
+    marketImpliedProbability,
+    fairMarketProbability,
+    probabilityGap,
+    movementDirection,
+    volatilityScore,
+    consensusScore,
+    contradictionScore,
+    updatedAt,
+    line: line ?? null
+  };
+}
+
+function normalizeMovementSummary(raw: unknown) {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+  const direction = asString(record.direction);
+  const volatilityScore = asNumber(record.volatilityScore);
+  if (!direction && volatilityScore === undefined) {
+    return undefined;
+  }
+  return { direction, volatilityScore };
+}
+
+function normalizeRecommendation(raw: unknown) {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+
+  const isRecommended = asBoolean(record.isRecommended);
+  const primaryMarket = asString(record.primaryMarket);
+  const side = asString(record.side);
+  const reason = asString(record.reason);
+
+  if (isRecommended === undefined && !primaryMarket && !side && !reason) {
+    return undefined;
+  }
+
+  let normalizedPrimaryMarket: "moneyline" | "spread" | "total" | "pass" | undefined;
+  if (primaryMarket === "moneyline" || primaryMarket === "spread" || primaryMarket === "total" || primaryMarket === "pass") {
+    normalizedPrimaryMarket = primaryMarket;
+  }
+
+  let normalizedSide: "home" | "away" | "over" | "under" | null = null;
+  if (side === "home" || side === "away" || side === "over" || side === "under") {
+    normalizedSide = side;
+  }
+
+  return {
+    isRecommended,
+    primaryMarket: normalizedPrimaryMarket,
+    side: normalizedSide,
+    reason: reason ?? null
+  };
+}
+
+function normalizeQuarterBreakdown(raw: unknown) {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+
+  const parseQuarter = (value: unknown) => {
+    const quarter = asRecord(value);
+    if (!quarter) {
+      return null;
+    }
+    const home = asNumber(quarter.home);
+    const away = asNumber(quarter.away);
+    if (home === undefined || away === undefined) {
+      return null;
+    }
+    return {
+      home: Number(home.toFixed(1)),
+      away: Number(away.toFixed(1))
+    };
+  };
+
+  const q1 = parseQuarter(record.q1);
+  const q2 = parseQuarter(record.q2);
+  const q3 = parseQuarter(record.q3);
+  const q4 = parseQuarter(record.q4);
+  if (!q1 || !q2 || !q3 || !q4) {
+    return undefined;
+  }
+
+  const sourceRaw = asString(record.source);
+  const source: "provider_period_scores" | "projected" | "estimated_from_final_score" | "estimated_from_half_time_and_final" =
+    sourceRaw === "provider_period_scores"
+      ? "provider_period_scores"
+      : sourceRaw === "estimated_from_final_score"
+      ? "estimated_from_final_score"
+      : sourceRaw === "estimated_from_half_time_and_final"
+        ? "estimated_from_half_time_and_final"
+        : "projected";
+
+  return { q1, q2, q3, q4, source };
+}
+
 function resolvePredictionType(raw: UnknownRecord, fallbackType: PredictionType): PredictionType {
   const direct = asString(raw.predictionType);
   if (direct) {
@@ -302,18 +508,12 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
   }
 
   const predictionType = resolvePredictionType(record, fallbackType);
-  const expectedScoreRecord = asRecord(record.expectedScore);
+  const expectedScoreRecord = asRecord(record.expectedScore) ?? asRecord(record.projections);
   const leagueRecord = asRecord(record.league);
   const leagueId = asString(record.leagueId) ?? asString(leagueRecord?.id);
   const leagueName = asString(record.leagueName) ?? asString(leagueRecord?.name);
   const leagueCode = asString(record.leagueCode) ?? asString(leagueRecord?.code);
-  const expectedScore =
-    expectedScoreRecord && (asNumber(expectedScoreRecord.home) !== undefined || asNumber(expectedScoreRecord.away) !== undefined)
-      ? {
-          home: asNumber(expectedScoreRecord.home),
-          away: asNumber(expectedScoreRecord.away)
-        }
-      : undefined;
+  const expectedScore = normalizeExpectedScore(expectedScoreRecord);
 
   const updatedAt = asString(record.updatedAt) ?? asString(record.importedAt) ?? null;
   const homeScoreRaw = asNumber(record.homeScore);
@@ -365,6 +565,8 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
     directDistribution.length > 0
       ? directDistribution
       : normalizeScorelineDistribution(record.scorelineDistributionJson);
+  const quarterBreakdown = normalizeQuarterBreakdown(record.quarterBreakdown);
+  const marketAnalysis = normalizeMarketAnalysis(record.marketAnalysis);
 
   return {
     matchId,
@@ -379,6 +581,7 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
     probabilities,
     expectedScore,
     scorelineDistribution,
+    quarterBreakdown,
     commentary: normalizeCommentary(record.commentary) ?? normalizeCommentary(record.commentaryJson),
     supportingSignals: normalizeSignals<SupportingSignal>(record.supportingSignals ?? record.supportingSignalsJson, "supporting"),
     contradictionSignals: normalizeSignals<ContradictionSignal>(
@@ -386,6 +589,11 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
       "contradiction"
     ),
     riskFlags: normalizeRiskFlags(record.riskFlags),
+    marketAnalysis,
+    marketAgreementLevel: asString(record.marketAgreementLevel) ?? expectedScore?.marketAgreementLevel,
+    marketImpliedProbabilities: normalizeProbabilities(record.marketImpliedProbabilities),
+    movementSummary: normalizeMovementSummary(record.movementSummary),
+    recommendation: normalizeRecommendation(record.recommendation),
     confidenceScore: asNumber(record.confidenceScore),
     summary: asString(record.summary),
     avoidReason: (record.avoidReason as string | null | undefined) ?? null,
@@ -493,10 +701,28 @@ export function predictionTypeLabel(type: PredictionType) {
 
 export function riskCodeToTurkish(code: string) {
   const map: Record<string, string> = {
-    WEATHER_VARIANCE: "Hava koşulları maç akışını oynatabilir",
+    WEATHER_VARIANCE: "Hava kosullari mac akisinda sapma yaratabilir",
     LOW_LINEUP_CERTAINTY: "Muhtemel ilk 11 belirsiz",
-    REFEREE_STRICTNESS: "Hakem profili kart/foul akışını etkileyebilir",
-    REFEREE_DATA_ESTIMATED: "Hakem verisi resmi değil, tahmini kullanılıyor"
+    REFEREE_STRICTNESS: "Hakem profili kart/foul akisina etki edebilir",
+    REFEREE_DATA_ESTIMATED: "Hakem verisi resmi degil, tahmini kullaniyor",
+    MARKET_DISAGREEMENT: "Model ile piyasa ayni yonde degil",
+    SHARP_MOVEMENT: "Oran hareketi sert",
+    STALE_ODDS: "Oran verisi guncel degil",
+    LOW_ODDS_COVERAGE: "Oran kapsami sinirli",
+    HIGH_BOOKMAKER_SPREAD: "Bookmaker farki yuksek",
+    POSSIBLE_LEAKAGE_BLOCKED: "Gec veri sizintisi engellendi",
+    UNSTABLE_MARKET_SIGNAL: "Piyasa sinyali dengesiz",
+    MAJOR_LINEUP_UNCERTAINTY: "Kadro netligi dusuk",
+    BACK_TO_BACK_FATIGUE: "Yorgunluk sinyali var",
+    OVERTIME_HANGOVER: "Uzatma sonrasi performans dalgalanabilir",
+    MODEL_DISAGREEMENT: "Alt modeller birbiriyle celisiyor",
+    HIGH_VOLATILITY_3PT_PROFILE: "Uc sayilik verisi yuksek oynaklik gosteriyor",
+    LEAGUE_DATA_QUALITY_LOW: "Lig veri kalitesi dusuk",
+    SMALL_SAMPLE: "Orneklem sayisi yetersiz",
+    EXTREME_MARKET_MOVEMENT: "Piyasada asiri yon degisimi var",
+    LOW_SCORE_BIAS: "Dusuk skor yanliligi etkin",
+    UNSTABLE_LAMBDA: "Gol/sayi beklenti modeli kararsiz",
+    HIGH_VARIANCE_MATCH: "Mac oynakligi yuksek"
   };
   return map[code] ?? code.replaceAll("_", " ").toLowerCase();
 }
@@ -537,3 +763,5 @@ export function nextAvailableTab(current: PredictionTabKey, availability: Record
   ];
   return order.find((key) => availability[key]) ?? "general";
 }
+
+

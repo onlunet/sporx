@@ -6,10 +6,10 @@ export class TeamsController {
   constructor(private readonly teamsService: TeamsService) {}
 
   @Get()
-  list(@Query("q") q?: string, @Query("take") take?: string) {
+  list(@Query("q") q?: string, @Query("take") take?: string, @Query("sport") sport?: string) {
     const parsedTake = Number(take ?? "");
     const takeValue = Number.isFinite(parsedTake) ? parsedTake : undefined;
-    return this.teamsService.list(q, takeValue);
+    return this.teamsService.list(q, takeValue, sport);
   }
 
   @Get(":id")
@@ -18,8 +18,8 @@ export class TeamsController {
   }
 
   @Get(":id/matches")
-  matches(@Param("id") id: string) {
-    return this.teamsService.matches(id);
+  matches(@Param("id") id: string, @Query("sport") sport?: string) {
+    return this.teamsService.matches(id, sport);
   }
 
   @Get(":id/form")
