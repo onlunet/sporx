@@ -3,6 +3,13 @@ import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import { IngestionQueueService } from "./modules/ingestion/ingestion-queue.service";
 
+type WorkerHealthState = {
+  phase: "starting" | "ready" | "failed";
+  startedAt: string;
+  readyAt: string | null;
+  error: string | null;
+};
+
 function parsePort(raw: string | undefined) {
   if (!raw) {
     return null;
@@ -47,7 +54,7 @@ function resolveHealthPorts() {
   return Array.from(ports.values()).sort((left, right) => left - right);
 }
 
-function startHealthServers() {
+function startHealthServers(state: WorkerHealthState) {
   const ports = resolveHealthPorts();
   if (ports.length === 0) {
     return;
@@ -57,13 +64,17 @@ function startHealthServers() {
     const server = createServer((req, res) => {
       const path = (req.url ?? "").split("?")[0];
       if (path === "/health" || path === "/" || path === "") {
-        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        const statusCode = state.phase === "failed" ? 503 : 200;
+        res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
         res.end(
           JSON.stringify({
             service: "worker",
-            status: "ok",
+            status: state.phase === "ready" ? "ok" : state.phase,
             timestamp: new Date().toISOString(),
-            pid: process.pid
+            pid: process.pid,
+            startedAt: state.startedAt,
+            readyAt: state.readyAt,
+            error: state.error
           })
         );
         return;
@@ -85,10 +96,31 @@ function startHealthServers() {
 }
 
 async function bootstrapWorker() {
-  const app = await NestFactory.createApplicationContext(AppModule);
-  const queue = app.get(IngestionQueueService);
-  await queue.startWorker();
-  startHealthServers();
+  const state: WorkerHealthState = {
+    phase: "starting",
+    startedAt: new Date().toISOString(),
+    readyAt: null,
+    error: null
+  };
+
+  startHealthServers(state);
+
+  try {
+    const app = await NestFactory.createApplicationContext(AppModule);
+    const queue = app.get(IngestionQueueService);
+    await queue.startWorker();
+    state.phase = "ready";
+    state.readyAt = new Date().toISOString();
+    console.log("[worker] bootstrap completed");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown worker bootstrap error";
+    state.phase = "failed";
+    state.error = message;
+    console.error(`[worker] bootstrap failed: ${message}`);
+    setTimeout(() => {
+      process.exit(1);
+    }, 250);
+  }
 }
 
 bootstrapWorker();
