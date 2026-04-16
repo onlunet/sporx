@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MatchPredictionItem,
@@ -14,11 +14,12 @@ import {
   normalizeMatchStatus
 } from "../../features/predictions";
 import { PredictionRiskBadges } from "./PredictionRiskBadges";
-import { Brain, TrendingUp, ShieldAlert, Target, Clock, Sparkles, BarChart3, Zap, ChevronRight } from "lucide-react";
+import { Brain, TrendingUp, ShieldAlert, Target, Clock, Sparkles, BarChart3, Zap, ChevronRight, Search } from "lucide-react";
 
 type FilterOption = PredictionType | "all";
 type SportScope = "football" | "basketball";
 type QuarterSource = NonNullable<MatchPredictionItem["quarterBreakdown"]>["source"];
+type MatchOption = { matchId: string; label: string; kickoff?: string };
 
 const FOOTBALL_FILTERS: Array<{ value: FilterOption; label: string; icon: typeof Brain }> = [
   { value: "all", label: "Tum Tahminler", icon: Target },
@@ -129,6 +130,51 @@ function sortPredictions(items: MatchPredictionItem[], scope: "upcoming" | "comp
     if (dateDiff !== 0) return dateDiff;
     return (b.confidenceScore ?? -1) - (a.confidenceScore ?? -1);
   });
+}
+
+function normalizeText(value?: string | null) {
+  return (value ?? "")
+    .toLocaleLowerCase("tr-TR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function matchesTeamQuery(teamName: string | undefined, normalizedQuery: string) {
+  if (!normalizedQuery) {
+    return true;
+  }
+  return normalizeText(teamName).includes(normalizedQuery);
+}
+
+function uniqueSortedTeamNames(items: MatchPredictionItem[], pick: "home" | "away") {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const item of items) {
+    const rawName = pick === "home" ? item.homeTeam : item.awayTeam;
+    const name = rawName?.trim();
+    if (!name) {
+      continue;
+    }
+    const key = normalizeText(name);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    names.push(name);
+  }
+  return names.sort((a, b) => a.localeCompare(b, "tr"));
+}
+
+function formatKickoff(value?: string) {
+  if (!value) {
+    return "Tarih bilinmiyor";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Tarih bilinmiyor";
+  }
+  return date.toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" });
 }
 
 function predictionListKey(item: MatchPredictionItem, index: number) {
@@ -445,6 +491,9 @@ type PredictionsExplorerProps = {
 
 export function PredictionsExplorer({ scope = "upcoming", sport, title, description }: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
+  const [homeTeamQuery, setHomeTeamQuery] = useState("");
+  const [awayTeamQuery, setAwayTeamQuery] = useState("");
+  const [selectedMatchId, setSelectedMatchId] = useState("");
   const filters = useMemo(() => getFilters(sport), [sport]);
   const completedLink = sport ? `/${sport}/predictions/completed` : "/football/predictions/completed";
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
@@ -469,9 +518,81 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
     return sorted.filter((item) => !isPredictionPlayed(item));
   }, [scope, sourceItems]);
 
+  const normalizedHomeQuery = useMemo(() => normalizeText(homeTeamQuery), [homeTeamQuery]);
+  const normalizedAwayQuery = useMemo(() => normalizeText(awayTeamQuery), [awayTeamQuery]);
+
+  const homeSuggestionSource = useMemo(
+    () => items.filter((item) => matchesTeamQuery(item.awayTeam, normalizedAwayQuery)),
+    [items, normalizedAwayQuery]
+  );
+
+  const awaySuggestionSource = useMemo(
+    () => items.filter((item) => matchesTeamQuery(item.homeTeam, normalizedHomeQuery)),
+    [items, normalizedHomeQuery]
+  );
+
+  const homeSuggestions = useMemo(() => uniqueSortedTeamNames(homeSuggestionSource, "home"), [homeSuggestionSource]);
+  const awaySuggestions = useMemo(() => uniqueSortedTeamNames(awaySuggestionSource, "away"), [awaySuggestionSource]);
+
+  const matchOptions = useMemo(() => {
+    const map = new Map<string, MatchOption>();
+    for (const item of items) {
+      if (!matchesTeamQuery(item.homeTeam, normalizedHomeQuery) || !matchesTeamQuery(item.awayTeam, normalizedAwayQuery)) {
+        continue;
+      }
+      if (map.has(item.matchId)) {
+        continue;
+      }
+      const homeName = item.homeTeam?.trim() || "Ev";
+      const awayName = item.awayTeam?.trim() || "Dep";
+      const kickoffLabel = formatKickoff(item.matchDateTimeUTC);
+      map.set(item.matchId, {
+        matchId: item.matchId,
+        kickoff: item.matchDateTimeUTC,
+        label: `${homeName} vs ${awayName} - ${kickoffLabel}`
+      });
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const aTime = a.kickoff ? new Date(a.kickoff).getTime() : Number.MAX_SAFE_INTEGER;
+      const bTime = b.kickoff ? new Date(b.kickoff).getTime() : Number.MAX_SAFE_INTEGER;
+      if (scope === "completed") {
+        return bTime - aTime;
+      }
+      return aTime - bTime;
+    });
+  }, [items, normalizedAwayQuery, normalizedHomeQuery, scope]);
+
+  useEffect(() => {
+    if (!selectedMatchId) {
+      return;
+    }
+    if (matchOptions.some((option) => option.matchId === selectedMatchId)) {
+      return;
+    }
+    setSelectedMatchId("");
+  }, [matchOptions, selectedMatchId]);
+
+  const filteredItems = useMemo(
+    () =>
+      items.filter((item) => {
+        if (!matchesTeamQuery(item.homeTeam, normalizedHomeQuery)) {
+          return false;
+        }
+        if (!matchesTeamQuery(item.awayTeam, normalizedAwayQuery)) {
+          return false;
+        }
+        if (selectedMatchId && item.matchId !== selectedMatchId) {
+          return false;
+        }
+        return true;
+      }),
+    [items, normalizedAwayQuery, normalizedHomeQuery, selectedMatchId]
+  );
+
   const matchLevelItems = useMemo(() => {
     const map = new Map<string, MatchPredictionItem>();
-    for (const item of items) {
+    for (const item of filteredItems) {
       const existing = map.get(item.matchId);
       if (!existing) {
         map.set(item.matchId, item);
@@ -482,7 +603,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
       }
     }
     return Array.from(map.values());
-  }, [items]);
+  }, [filteredItems]);
 
   const basketballTotalStats = useMemo(() => {
     if (sport !== "basketball") {
@@ -554,7 +675,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
 
           <p className="text-slate-400 max-w-2xl">{defaultDescription}</p>
           {scope === "upcoming" && (
-            <div className="mt-3">
+          <div className="mt-3">
               <Link
                 href={completedLink}
                 className="inline-flex items-center gap-2 rounded-lg border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-2 text-xs font-medium text-neon-cyan hover:bg-neon-cyan/20"
@@ -603,17 +724,90 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         })}
       </div>
 
+      <div className="rounded-xl border border-white/10 bg-surface/40 p-4">
+        <div className="mb-3 flex items-center gap-2 text-xs font-display uppercase tracking-wider text-slate-400">
+          <Search className="h-4 w-4 text-neon-cyan" />
+          Takim ve karsilasma filtreleri
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="space-y-1 text-xs text-slate-400">
+            <span>Ev sahibi ara</span>
+            <input
+              value={homeTeamQuery}
+              onChange={(event) => setHomeTeamQuery(event.target.value)}
+              list="prediction-home-team-suggestions"
+              placeholder="Orn: Galatasaray"
+              className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none ring-0 transition focus:border-neon-cyan/50"
+            />
+            <datalist id="prediction-home-team-suggestions">
+              {homeSuggestions.map((teamName) => (
+                <option key={teamName} value={teamName} />
+              ))}
+            </datalist>
+          </label>
+
+          <label className="space-y-1 text-xs text-slate-400">
+            <span>Deplasman ara</span>
+            <input
+              value={awayTeamQuery}
+              onChange={(event) => setAwayTeamQuery(event.target.value)}
+              list="prediction-away-team-suggestions"
+              placeholder="Orn: Fenerbahce"
+              className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none ring-0 transition focus:border-neon-purple/50"
+            />
+            <datalist id="prediction-away-team-suggestions">
+              {awaySuggestions.map((teamName) => (
+                <option key={teamName} value={teamName} />
+              ))}
+            </datalist>
+          </label>
+        </div>
+
+        {(homeTeamQuery.trim().length > 0 || awayTeamQuery.trim().length > 0) ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+            <label className="space-y-1 text-xs text-slate-400">
+              <span>Karsilasma secimi</span>
+              <select
+                value={selectedMatchId}
+                onChange={(event) => setSelectedMatchId(event.target.value)}
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none transition focus:border-neon-cyan/50"
+              >
+                <option value="">Tum uygun karsilasmalar ({matchOptions.length})</option>
+                {matchOptions.map((option) => (
+                  <option key={option.matchId} value={option.matchId}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => {
+                setHomeTeamQuery("");
+                setAwayTeamQuery("");
+                setSelectedMatchId("");
+              }}
+              className="rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-white/30 hover:text-white"
+            >
+              Filtreyi sifirla
+            </button>
+          </div>
+        ) : null}
+      </div>
+
       <div className={`grid gap-3 ${sport === "basketball" ? "md:grid-cols-4" : "md:grid-cols-2"} rounded-xl bg-surface/50 border border-white/5 p-4`}>
         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
           <Sparkles className="w-4 h-4 text-neon-cyan" />
           <span className="text-sm text-slate-400">Toplam Tahmin:</span>
-          <span className="text-sm font-semibold text-white">{items.length}</span>
+          <span className="text-sm font-semibold text-white">{filteredItems.length}</span>
         </div>
 
         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
           <Zap className="w-4 h-4 text-neon-green" />
           <span className="text-sm text-slate-400">Yuksek Guven:</span>
-          <span className="text-sm font-semibold text-neon-green">{items.filter((i) => (i.confidenceScore ?? 0) >= 0.7).length}</span>
+          <span className="text-sm font-semibold text-neon-green">{filteredItems.filter((i) => (i.confidenceScore ?? 0) >= 0.7).length}</span>
         </div>
 
         {sport === "basketball" ? (
@@ -666,7 +860,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         </div>
       )}
 
-      {!query.isLoading && !fallbackQuery.isLoading && !(query.isError && fallbackQuery.isError) && items.length === 0 && (
+      {!query.isLoading && !fallbackQuery.isLoading && !(query.isError && fallbackQuery.isError) && filteredItems.length === 0 && (
         <div className="glass-card rounded-2xl p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-white/5 flex items-center justify-center">
             <Target className="w-10 h-10 text-slate-500" />
@@ -684,7 +878,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
 
       <AnimatePresence mode="popLayout">
         <motion.div layout className="grid gap-4 md:grid-cols-2">
-          {items.slice(0, 60).map((item, index) => (
+          {filteredItems.slice(0, 60).map((item, index) => (
             <PredictionCard key={predictionListKey(item, index)} item={item} index={index} sport={sport} />
           ))}
         </motion.div>
