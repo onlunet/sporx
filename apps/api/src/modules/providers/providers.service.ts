@@ -36,6 +36,7 @@ type ProviderRuntimeSettings = {
   maxCallsPerRun?: number;
   retryMax?: number;
   leagueId?: string;
+  leagueIds?: string[];
   season?: string;
   soccerLeagueId?: string;
   basketballLeagueId?: string;
@@ -150,7 +151,10 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     description: "API-SPORTS futbol endpointi (günlük limitli).",
     website: "https://www.api-football.com/",
     defaultConfigs: {
-      dailyLimit: "100"
+      dailyLimit: "100",
+      leagueIds: "203,204",
+      syncDaysBack: "1",
+      syncDaysAhead: "1"
     }
   },
   {
@@ -355,6 +359,7 @@ export class ProvidersService {
       maxCallsPerRun: this.toInt(configs.maxCallsPerRun),
       retryMax: this.toInt(configs.retryMax),
       leagueId: configs.leagueId,
+      leagueIds: this.toStringList(configs.leagueIds),
       season: configs.season,
       soccerLeagueId: configs.soccerLeagueId,
       basketballLeagueId: configs.basketballLeagueId,

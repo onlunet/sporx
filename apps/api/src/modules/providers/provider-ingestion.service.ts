@@ -521,12 +521,23 @@ export class ProviderIngestionService {
       { recordsRead: 0, recordsWritten: 0, errors: 0 }
     );
 
+    let predictionSummary: SyncSummary | null = null;
+    if ((jobType === "syncFixtures" || jobType === "syncResults") && summary.recordsWritten > 0) {
+      try {
+        predictionSummary = await this.generatePredictions(runId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "prediction_auto_generation_failed";
+        this.logger.error(`Automatic prediction generation failed after ${jobType}: ${message}`);
+      }
+    }
+
     return {
-      recordsRead: summary.recordsRead,
-      recordsWritten: summary.recordsWritten,
-      errors: summary.errors,
+      recordsRead: summary.recordsRead + (predictionSummary?.recordsRead ?? 0),
+      recordsWritten: summary.recordsWritten + (predictionSummary?.recordsWritten ?? 0),
+      errors: summary.errors + (predictionSummary?.errors ?? 0),
       logs: {
         providers: results,
+        predictionGeneration: predictionSummary?.logs ?? null,
         runId
       }
     };
@@ -4528,7 +4539,16 @@ export class ProviderIngestionService {
     }
 
     const dailyLimit = settings.dailyLimit ?? 100;
-    const quota = await this.quotaGate(provider.key, 1, dailyLimit);
+    const syncDaysBack = this.parseConfigInt(settings.syncDaysBack, 1);
+    const syncDaysAhead = this.parseConfigInt(settings.syncDaysAhead, 1);
+    const dayOffsets =
+      jobType === "syncResults"
+        ? Array.from({ length: syncDaysBack + 1 }, (_, index) => index - syncDaysBack)
+        : Array.from({ length: syncDaysAhead + 1 }, (_, index) => index);
+    const targetDates = dayOffsets.map((offset) => this.todayDateString(offset));
+    const requestedCalls = Math.max(1, targetDates.length);
+
+    const quota = await this.quotaGate(provider.key, requestedCalls, dailyLimit);
     if (!quota.allowed) {
       await this.logApiCall(`provider/${provider.key}/fixtures`, 429, 0, runId);
       return {
@@ -4539,21 +4559,37 @@ export class ProviderIngestionService {
         details: {
           message: "Günlük API kotası aşıldı. Bu run atlandı.",
           dailyLimit,
+          requestedCalls,
           used: quota.used,
           remaining: quota.remaining
         }
       };
     }
 
-    const dateOffset = jobType === "syncResults" ? -1 : 0;
-    const targetDate = this.todayDateString(dateOffset);
-    const startedAt = Date.now();
-    const response = await this.apiFootballConnector.fetchFixtures(settings.apiKey, targetDate, settings.baseUrl ?? provider.baseUrl ?? undefined);
-    const durationMs = Date.now() - startedAt;
+    const fixtureBuckets: Array<{ date: string; fixtures: Array<Record<string, unknown>> }> = [];
+    for (const targetDate of targetDates) {
+      const startedAt = Date.now();
+      const response = await this.apiFootballConnector.fetchFixtures(
+        settings.apiKey,
+        targetDate,
+        settings.baseUrl ?? provider.baseUrl ?? undefined
+      );
+      const durationMs = Date.now() - startedAt;
+      await this.logApiCall(`provider/${provider.key}/fixtures`, 200, durationMs, runId);
+      fixtureBuckets.push({
+        date: targetDate,
+        fixtures: response.response ?? []
+      });
+    }
 
-    await this.logApiCall(`provider/${provider.key}/fixtures`, 200, durationMs, runId);
-
-    const fixtures = response.response ?? [];
+    const fixtures = fixtureBuckets.flatMap((bucket) => bucket.fixtures);
+    const leagueIdFilters = Array.from(
+      new Set(
+        [settings.leagueId, ...(settings.leagueIds ?? [])]
+          .map((value) => String(value ?? "").trim())
+          .filter((value) => value.length > 0)
+      )
+    );
     const leagueFilter = settings.leagueId?.trim();
     const seasonFilter = settings.season?.trim();
 
@@ -4568,7 +4604,7 @@ export class ProviderIngestionService {
       const score = (fixtureEntry.score as Record<string, unknown> | undefined) ?? {};
       const halfTimeScore = (score.halftime as Record<string, unknown> | undefined) ?? {};
 
-      if (leagueFilter && String(league.id ?? "") !== leagueFilter) {
+      if (leagueIdFilters.length > 0 && !leagueIdFilters.includes(String(league.id ?? "").trim())) {
         continue;
       }
       if (seasonFilter && String(league.season ?? "") !== seasonFilter) {
@@ -4617,9 +4653,11 @@ export class ProviderIngestionService {
     }
 
     await this.createExternalPayload(provider.key, runId, "api_football_fixtures", {
-      targetDate,
+      targetDates,
       jobType,
       dailyLimit,
+      requestedCalls,
+      leagueIdFilters,
       leagueFilter: leagueFilter ?? null,
       seasonFilter: seasonFilter ?? null,
       recordsRead: fixtures.length,
@@ -4633,9 +4671,11 @@ export class ProviderIngestionService {
       recordsWritten: written,
       errors,
       details: {
-        targetDate,
+        targetDates,
         jobType,
         dailyLimit,
+        requestedCalls,
+        leagueIdFilters,
         leagueFilter: leagueFilter ?? null,
         seasonFilter: seasonFilter ?? null
       }
