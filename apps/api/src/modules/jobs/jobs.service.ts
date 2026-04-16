@@ -35,13 +35,15 @@ const JOB_TYPES: JobType[] = [
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
   private readonly isWorker = (process.env.SERVICE_ROLE ?? "api") === "worker";
-  private readonly tickMs = 60_000;
+  private readonly tickMs = this.readSchedulerTickMs();
   private readonly staleThresholdMs = this.readStaleThresholdMs();
+  private readonly staleRecoveryIntervalMs = this.readStaleRecoveryIntervalMs();
   private readonly schedulerLockKey = process.env.SCHEDULER_LOCK_KEY ?? "jobs-scheduler";
   private readonly schedulerLockOwner = `${process.env.HOSTNAME ?? "worker"}:${process.pid}`;
   private readonly schedulerLockTtlMs = this.readSchedulerLockTtlMs();
   private timer: NodeJS.Timeout | null = null;
   private isTicking = false;
+  private lastStaleRecoveryAt = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -54,12 +56,12 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    await this.recoverStaleRuns();
+    await this.recoverStaleRunsIfDue(true);
     await this.ensureDefaultJobs();
-    await this.tick("startup");
+    await this.safeTick("startup");
 
     this.timer = setInterval(() => {
-      void this.tick("interval");
+      void this.safeTick("interval");
     }, this.tickMs);
 
     this.logger.log("Background job scheduler started");
@@ -90,29 +92,78 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      await this.recoverStaleRuns();
+      await this.recoverStaleRunsIfDue(reason === "startup");
 
-      const syncEveryMinutes = await this.resolveSyncIntervalMinutes();
-      const standingsMinutes = await this.resolveSettingMinutes("sync.interval.standingsMinutes", 360);
-      const aliasSyncMinutes = await this.resolveSettingMinutes("sync.interval.aliasMinutes", 360);
-      const teamProfileMinutes = await this.resolveSettingMinutes("sync.interval.teamProfileMinutes", 240);
-      const detailMinutes = await this.resolveSettingMinutes("sync.interval.matchDetailMinutes", 120);
-      const providerHealthMinutes = await this.resolveSettingMinutes("sync.interval.providerHealthMinutes", 30);
-      const oddsPreMatchMinutes = await this.resolveSettingMinutes("sync.interval.oddsPreMatchMinutes", 30);
-      const oddsLiveMinutes = await this.resolveSettingMinutes("sync.interval.oddsLiveMinutes", 5);
-      const oddsClosingMinutes = await this.resolveSettingMinutes("sync.interval.oddsClosingMinutes", 20);
-      const marketAnalysisMinutes = await this.resolveSettingMinutes("sync.interval.marketAnalysisMinutes", 20);
-      await this.ensureRecentRun("syncFixtures", syncEveryMinutes, reason === "startup");
-      await this.ensureRecentRun("syncStandings", standingsMinutes, reason === "startup");
-      await this.ensureRecentRun("generatePredictions", syncEveryMinutes, reason === "startup");
-      await this.ensureRecentRun("providerHealthCheck", providerHealthMinutes, reason === "startup");
-      await this.ensureRecentRun("syncOddsPreMatch", oddsPreMatchMinutes, reason === "startup");
-      await this.ensureRecentRun("syncOddsLive", oddsLiveMinutes, reason === "startup");
-      await this.ensureRecentRun("syncOddsClosing", oddsClosingMinutes, reason === "startup");
-      await this.ensureRecentRun("generateMarketAnalysis", marketAnalysisMinutes, reason === "startup");
-      await this.ensureRecentRun("resolveProviderAliases", aliasSyncMinutes, reason === "startup");
-      await this.ensureRecentRun("enrichTeamProfiles", teamProfileMinutes, reason === "startup");
-      await this.ensureRecentRun("enrichMatchDetails", detailMinutes, reason === "startup");
+      const { syncEveryMinutes, intervals } = await this.resolveScheduleIntervals();
+      const latestRunsByType = await this.loadLatestRunsByType();
+      const forceOnStartup = reason === "startup";
+
+      await this.ensureRecentRun("syncFixtures", syncEveryMinutes, forceOnStartup, latestRunsByType.get("syncFixtures"));
+      await this.ensureRecentRun(
+        "syncStandings",
+        intervals.standingsMinutes,
+        forceOnStartup,
+        latestRunsByType.get("syncStandings")
+      );
+      await this.ensureRecentRun(
+        "generatePredictions",
+        syncEveryMinutes,
+        forceOnStartup,
+        latestRunsByType.get("generatePredictions")
+      );
+      await this.ensureRecentRun(
+        "providerHealthCheck",
+        intervals.providerHealthMinutes,
+        forceOnStartup,
+        latestRunsByType.get("providerHealthCheck")
+      );
+      await this.ensureRecentRun(
+        "syncOddsPreMatch",
+        intervals.oddsPreMatchMinutes,
+        forceOnStartup,
+        latestRunsByType.get("syncOddsPreMatch")
+      );
+      await this.ensureRecentRun(
+        "syncOddsLive",
+        intervals.oddsLiveMinutes,
+        forceOnStartup,
+        latestRunsByType.get("syncOddsLive")
+      );
+      await this.ensureRecentRun(
+        "syncOddsClosing",
+        intervals.oddsClosingMinutes,
+        forceOnStartup,
+        latestRunsByType.get("syncOddsClosing")
+      );
+      await this.ensureRecentRun(
+        "generateMarketAnalysis",
+        intervals.marketAnalysisMinutes,
+        forceOnStartup,
+        latestRunsByType.get("generateMarketAnalysis")
+      );
+      await this.ensureRecentRun(
+        "resolveProviderAliases",
+        intervals.aliasSyncMinutes,
+        forceOnStartup,
+        latestRunsByType.get("resolveProviderAliases")
+      );
+      await this.ensureRecentRun(
+        "enrichTeamProfiles",
+        intervals.teamProfileMinutes,
+        forceOnStartup,
+        latestRunsByType.get("enrichTeamProfiles")
+      );
+      await this.ensureRecentRun(
+        "enrichMatchDetails",
+        intervals.detailMinutes,
+        forceOnStartup,
+        latestRunsByType.get("enrichMatchDetails")
+      );
+    } catch (error) {
+      this.logger.error(
+        "Scheduler tick failed; will retry next cycle",
+        error instanceof Error ? error.stack : undefined
+      );
     } finally {
       await this.cacheService.releaseLock(this.schedulerLockKey, this.schedulerLockOwner);
       this.isTicking = false;
@@ -136,10 +187,27 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async resolveSyncIntervalMinutes() {
-    const [defaultSetting, matchDaySetting, nextDayMatches] = await Promise.all([
-      this.prisma.systemSetting.findUnique({ where: { key: "sync.interval.defaultMinutes" } }),
-      this.prisma.systemSetting.findUnique({ where: { key: "sync.interval.matchDayMinutes" } }),
+  private async resolveScheduleIntervals() {
+    const intervalKeys = [
+      "sync.interval.defaultMinutes",
+      "sync.interval.matchDayMinutes",
+      "sync.interval.standingsMinutes",
+      "sync.interval.aliasMinutes",
+      "sync.interval.teamProfileMinutes",
+      "sync.interval.matchDetailMinutes",
+      "sync.interval.providerHealthMinutes",
+      "sync.interval.oddsPreMatchMinutes",
+      "sync.interval.oddsLiveMinutes",
+      "sync.interval.oddsClosingMinutes",
+      "sync.interval.marketAnalysisMinutes"
+    ] as const;
+
+    const [settings, nextDayMatches] = await Promise.all([
+      this.prisma.systemSetting.findMany({
+        where: {
+          key: { in: [...intervalKeys] }
+        }
+      }),
       this.prisma.match.count({
         where: {
           status: { in: ["scheduled", "live"] },
@@ -151,14 +219,35 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       })
     ]);
 
-    const defaultMinutes = this.settingNumber(defaultSetting?.value, 60);
-    const matchDayMinutes = this.settingNumber(matchDaySetting?.value, 15);
-    return nextDayMatches > 0 ? matchDayMinutes : defaultMinutes;
+    const settingMap = new Map(settings.map((setting) => [setting.key, setting.value] as const));
+    const defaultMinutes = this.settingNumber(settingMap.get("sync.interval.defaultMinutes"), 60);
+    const matchDayMinutes = this.settingNumber(settingMap.get("sync.interval.matchDayMinutes"), 15);
+
+    return {
+      syncEveryMinutes: nextDayMatches > 0 ? matchDayMinutes : defaultMinutes,
+      intervals: {
+        standingsMinutes: this.settingNumber(settingMap.get("sync.interval.standingsMinutes"), 360),
+        aliasSyncMinutes: this.settingNumber(settingMap.get("sync.interval.aliasMinutes"), 360),
+        teamProfileMinutes: this.settingNumber(settingMap.get("sync.interval.teamProfileMinutes"), 240),
+        detailMinutes: this.settingNumber(settingMap.get("sync.interval.matchDetailMinutes"), 120),
+        providerHealthMinutes: this.settingNumber(settingMap.get("sync.interval.providerHealthMinutes"), 30),
+        oddsPreMatchMinutes: this.settingNumber(settingMap.get("sync.interval.oddsPreMatchMinutes"), 30),
+        oddsLiveMinutes: this.settingNumber(settingMap.get("sync.interval.oddsLiveMinutes"), 5),
+        oddsClosingMinutes: this.settingNumber(settingMap.get("sync.interval.oddsClosingMinutes"), 20),
+        marketAnalysisMinutes: this.settingNumber(settingMap.get("sync.interval.marketAnalysisMinutes"), 20)
+      }
+    };
   }
 
-  private async resolveSettingMinutes(key: string, fallback: number) {
-    const setting = await this.prisma.systemSetting.findUnique({ where: { key } });
-    return this.settingNumber(setting?.value, fallback);
+  private async loadLatestRunsByType() {
+    const latestRuns = await this.prisma.ingestionJobRun.findMany({
+      where: {
+        jobType: { in: [...JOB_TYPES] }
+      },
+      orderBy: [{ jobType: "asc" }, { createdAt: "desc" }],
+      distinct: ["jobType"]
+    });
+    return new Map(latestRuns.map((run) => [run.jobType as JobType, run] as const));
   }
 
   private settingNumber(value: unknown, fallback: number) {
@@ -197,6 +286,36 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     return Math.round(parsed) * 60 * 1000;
   }
 
+  private readSchedulerTickMs() {
+    const raw = process.env.SCHEDULER_TICK_MS;
+    const fallback = 180_000;
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 30_000) {
+      return fallback;
+    }
+
+    return Math.round(parsed);
+  }
+
+  private readStaleRecoveryIntervalMs() {
+    const raw = process.env.SCHEDULER_STALE_RECOVERY_INTERVAL_MS;
+    const fallback = 300_000;
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 60_000) {
+      return fallback;
+    }
+
+    return Math.round(parsed);
+  }
+
   private readSchedulerLockTtlMs() {
     const raw = process.env.SCHEDULER_LOCK_TTL_MS;
     const fallback = 55_000;
@@ -212,12 +331,18 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     return Math.round(parsed);
   }
 
-  private async ensureRecentRun(jobType: JobType, maxAgeMinutes: number, forceOnStartup: boolean) {
-    const latest = await this.prisma.ingestionJobRun.findFirst({
-      where: { jobType },
-      orderBy: { createdAt: "desc" }
-    });
-
+  private async ensureRecentRun(
+    jobType: JobType,
+    maxAgeMinutes: number,
+    forceOnStartup: boolean,
+    latest: {
+      id: string;
+      status: IngestionStatus;
+      createdAt: Date;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+    } | undefined
+  ) {
     if (latest && (latest.status === IngestionStatus.queued || latest.status === IngestionStatus.running)) {
       const startedAt = latest.startedAt ?? latest.createdAt;
       const ageMs = Date.now() - startedAt.getTime();
@@ -239,6 +364,26 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Scheduled ingestion run created for ${jobType}: ${run.id}`);
     } catch (error) {
       this.logger.error(`Failed to create scheduled run for ${jobType}`, error instanceof Error ? error.stack : undefined);
+    }
+  }
+
+  private async recoverStaleRunsIfDue(force = false) {
+    const now = Date.now();
+    if (!force && now - this.lastStaleRecoveryAt < this.staleRecoveryIntervalMs) {
+      return;
+    }
+    this.lastStaleRecoveryAt = now;
+    await this.recoverStaleRuns();
+  }
+
+  private async safeTick(reason: "startup" | "interval") {
+    try {
+      await this.tick(reason);
+    } catch (error) {
+      this.logger.error(
+        "Unexpected scheduler error escaped tick()",
+        error instanceof Error ? error.stack : undefined
+      );
     }
   }
 
