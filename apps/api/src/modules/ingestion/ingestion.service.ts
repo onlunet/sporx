@@ -71,6 +71,7 @@ export class IngestionService {
         recordsRead: number;
         recordsWritten: number;
         errors: number;
+        logs: unknown;
       }) => ({
         id: run.id,
         jobType: run.jobType,
@@ -79,7 +80,8 @@ export class IngestionService {
         finishedAt: run.finishedAt,
         recordsRead: run.recordsRead,
         recordsWritten: run.recordsWritten,
-        errors: run.errors
+        errors: run.errors,
+        logs: run.logs
       })
     );
   }

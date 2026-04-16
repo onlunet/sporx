@@ -750,6 +750,21 @@ export class ProviderIngestionService {
     const riskTuningSettings = await this.loadPredictionRiskTuningSettings();
     const fromDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const toDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const matchSelect = {
+      id: true,
+      sportId: true,
+      leagueId: true,
+      homeTeamId: true,
+      awayTeamId: true,
+      status: true,
+      matchDateTimeUTC: true,
+      homeScore: true,
+      awayScore: true,
+      homeElo: true,
+      awayElo: true,
+      form5Home: true,
+      form5Away: true
+    } satisfies Prisma.MatchSelect;
     const activeModel =
       (await this.prisma.modelVersion.findFirst({
         where: { active: true },
@@ -759,55 +774,40 @@ export class ProviderIngestionService {
         orderBy: { createdAt: "desc" }
       }));
 
-    const upcomingCandidates = await this.prisma.match.findMany({
-      where: {
-        status: { in: [MatchStatus.scheduled, MatchStatus.live] },
-        matchDateTimeUTC: { lte: toDate }
-      },
-      include: {
-        sport: true,
-        league: true,
-        homeTeam: true,
-        awayTeam: true
-      },
-      orderBy: { matchDateTimeUTC: "asc" },
-      take: 1500
-    });
-
-    const recentFinishedCandidates = await this.prisma.match.findMany({
-      where: {
-        status: MatchStatus.finished,
-        matchDateTimeUTC: { gte: fromDate, lte: now }
-      },
-      include: {
-        sport: true,
-        league: true,
-        homeTeam: true,
-        awayTeam: true
-      },
-      orderBy: { matchDateTimeUTC: "desc" },
-      take: 600
-    });
-
     const backfillPredictionFilters: Prisma.MatchWhereInput[] = activeModel?.id
       ? [{ prediction: null }, { prediction: { is: { modelVersionId: { not: activeModel.id } } } }]
       : [{ prediction: null }];
 
-    const backfillCandidates = await this.prisma.match.findMany({
-      where: {
-        OR: backfillPredictionFilters,
-        status: MatchStatus.finished,
-        matchDateTimeUTC: { lte: now }
-      },
-      include: {
-        sport: true,
-        league: true,
-        homeTeam: true,
-        awayTeam: true
-      },
-      orderBy: { matchDateTimeUTC: "desc" },
-      take: 1000
-    });
+    const [upcomingCandidates, recentFinishedCandidates, backfillCandidates] = await Promise.all([
+      this.prisma.match.findMany({
+        where: {
+          status: { in: [MatchStatus.scheduled, MatchStatus.live] },
+          matchDateTimeUTC: { lte: toDate }
+        },
+        select: matchSelect,
+        orderBy: { matchDateTimeUTC: "asc" },
+        take: 1500
+      }),
+      this.prisma.match.findMany({
+        where: {
+          status: MatchStatus.finished,
+          matchDateTimeUTC: { gte: fromDate, lte: now }
+        },
+        select: matchSelect,
+        orderBy: { matchDateTimeUTC: "desc" },
+        take: 600
+      }),
+      this.prisma.match.findMany({
+        where: {
+          OR: backfillPredictionFilters,
+          status: MatchStatus.finished,
+          matchDateTimeUTC: { lte: now }
+        },
+        select: matchSelect,
+        orderBy: { matchDateTimeUTC: "desc" },
+        take: 1000
+      })
+    ]);
 
     const candidateMap = new Map<string, (typeof upcomingCandidates)[number]>();
     const pushCandidate = (candidate: (typeof upcomingCandidates)[number]) => {
@@ -826,12 +826,85 @@ export class ProviderIngestionService {
       pushCandidate(match);
     }
 
-    const candidates = Array.from(candidateMap.values());
+    const rawCandidates = Array.from(candidateMap.values());
+    if (rawCandidates.length === 0) {
+      await this.createExternalPayload("internal_prediction_engine", runId, "generated_predictions", {
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 0
+      });
+      await this.logApiCall("provider/internal_prediction_engine/generatePredictions", 200, 0, runId);
+      return {
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 0,
+        logs: {
+          mode: "generatePredictions",
+          modelVersionId: activeModel?.id ?? null,
+          modelName: activeModel?.modelName ?? null,
+          modelVersion: activeModel?.version ?? null
+        }
+      };
+    }
+
+    const sportIds = Array.from(new Set(rawCandidates.map((candidate) => candidate.sportId)));
+    const leagueIds = Array.from(new Set(rawCandidates.map((candidate) => candidate.leagueId)));
     const teamIds = Array.from(
       new Set(
-        candidates.flatMap((candidate) => [candidate.homeTeamId, candidate.awayTeamId])
+        rawCandidates.flatMap((candidate) => [candidate.homeTeamId, candidate.awayTeamId])
       )
     );
+
+    const [sports, leagues, teams] = await Promise.all([
+      this.prisma.sport.findMany({
+        where: { id: { in: sportIds } },
+        select: { id: true, code: true, name: true }
+      }),
+      this.prisma.league.findMany({
+        where: { id: { in: leagueIds } },
+        select: { id: true, name: true, country: true }
+      }),
+      this.prisma.team.findMany({
+        where: { id: { in: teamIds } },
+        select: { id: true, name: true, country: true }
+      })
+    ]);
+
+    const sportById = new Map(sports.map((sport) => [sport.id, sport] as const));
+    const leagueById = new Map(leagues.map((league) => [league.id, league] as const));
+    const teamById = new Map(teams.map((team) => [team.id, team] as const));
+    const skippedMatches: string[] = [];
+
+    const candidates = rawCandidates.flatMap((candidate) => {
+      const sport = sportById.get(candidate.sportId);
+      const league = leagueById.get(candidate.leagueId);
+      const homeTeam = teamById.get(candidate.homeTeamId);
+      const awayTeam = teamById.get(candidate.awayTeamId);
+
+      if (!sport || !league || !homeTeam || !awayTeam) {
+        skippedMatches.push(candidate.id);
+        return [];
+      }
+
+      return [
+        {
+          ...candidate,
+          sportCode: sport.code,
+          leagueName: league.name,
+          homeTeamName: homeTeam.name,
+          awayTeamName: awayTeam.name,
+          homeTeamCountry: homeTeam.country ?? "INT",
+          awayTeamCountry: awayTeam.country ?? "INT"
+        }
+      ];
+    });
+
+    if (skippedMatches.length > 0) {
+      this.logger.warn(
+        `Prediction generation skipped ${skippedMatches.length} matches due to missing relation mapping`
+      );
+    }
+
     const eloBackfillByTeamId = await this.buildTeamEloBackfillMap(teamIds, now);
     const standingEloByTeamId = await this.buildTeamStandingEloMap(teamIds);
 
@@ -866,14 +939,14 @@ export class ProviderIngestionService {
 
     for (const match of candidates) {
       try {
-        if (match.sport.code.toLowerCase() === "basketball") {
+        if (match.sportCode.toLowerCase() === "basketball") {
           const basketball = await this.basketballPredictionEngine.compute({
             matchId: match.id,
             leagueId: match.leagueId,
             homeTeamId: match.homeTeamId,
             awayTeamId: match.awayTeamId,
-            homeTeamName: match.homeTeam.name,
-            awayTeamName: match.awayTeam.name,
+            homeTeamName: match.homeTeamName,
+            awayTeamName: match.awayTeamName,
             kickoffAt: match.matchDateTimeUTC,
             status: match.status,
             homeScore: match.homeScore,
@@ -955,11 +1028,11 @@ export class ProviderIngestionService {
             matchId: match.id,
             kickoffAt: match.matchDateTimeUTC,
             sportCode: "football",
-            leagueName: match.league.name,
-            homeTeamName: match.homeTeam.name,
-            awayTeamName: match.awayTeam.name,
-            homeTeamCountry: match.homeTeam.country ?? "INT",
-            awayTeamCountry: match.awayTeam.country ?? "INT",
+            leagueName: match.leagueName,
+            homeTeamName: match.homeTeamName,
+            awayTeamName: match.awayTeamName,
+            homeTeamCountry: match.homeTeamCountry,
+            awayTeamCountry: match.awayTeamCountry,
             status: match.status,
             homeScore: match.homeScore,
             awayScore: match.awayScore,
@@ -988,7 +1061,7 @@ export class ProviderIngestionService {
           homeElo = homeStandingElo;
           homeEloSource = "standing";
         } else {
-          homeElo = this.teamRatingSeed(match.homeTeam.name, match.homeTeam.country ?? "INT", true);
+          homeElo = this.teamRatingSeed(match.homeTeamName, match.homeTeamCountry, true);
         }
 
         let awayElo = match.awayElo;
@@ -1001,7 +1074,7 @@ export class ProviderIngestionService {
           awayElo = awayStandingElo;
           awayEloSource = "standing";
         } else {
-          awayElo = this.teamRatingSeed(match.awayTeam.name, match.awayTeam.country ?? "INT", false);
+          awayElo = this.teamRatingSeed(match.awayTeamName, match.awayTeamCountry, false);
         }
 
         if (
@@ -1264,7 +1337,7 @@ export class ProviderIngestionService {
           (flag) => !(confidenceScore >= riskTuningSettings.infoFlagSuppressionThreshold && informationalRiskCodes.has(flag.code))
         );
 
-        const summary = `${match.homeTeam.name} - ${match.awayTeam.name}: Ev ${this.toPercent(
+        const summary = `${match.homeTeamName} - ${match.awayTeamName}: Ev ${this.toPercent(
           calibratedProbabilities.home
         )}%, Beraberlik ${this.toPercent(calibratedProbabilities.draw)}%, Deplasman ${this.toPercent(
           calibratedProbabilities.away
