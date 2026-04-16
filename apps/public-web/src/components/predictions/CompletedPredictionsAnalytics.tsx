@@ -166,7 +166,6 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
   const finishedQuery = usePredictionsByType("all", "finished", 180, sport);
 
   const playedItems = useMemo(() => {
-    const now = Date.now();
     const sortRows = (rows: MatchPredictionItem[]) =>
       rows
         .slice()
@@ -176,23 +175,7 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
           return rightTime - leftTime;
         });
 
-    const isPlayedByEvidence = (item: MatchPredictionItem) => {
-      if (item.isPlayed === true || isCompletedMatchStatus(item.matchStatus)) {
-        return true;
-      }
-      const hasScore =
-        item.homeScore !== null &&
-        item.homeScore !== undefined &&
-        item.awayScore !== null &&
-        item.awayScore !== undefined;
-      const kickoffMs = item.matchDateTimeUTC ? new Date(item.matchDateTimeUTC).getTime() : Number.NaN;
-      if (!hasScore || !Number.isFinite(kickoffMs)) {
-        return false;
-      }
-      return kickoffMs <= now - 6 * 60 * 60 * 1000;
-    };
-
-    return sortRows((finishedQuery.data ?? []).filter((item) => isPlayedByEvidence(item)));
+    return sortRows((finishedQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
   }, [finishedQuery.data]);
 
   const evaluatedItems = useMemo(() => playedItems.filter((item) => evaluatePredictionResult(item) !== null), [playedItems]);

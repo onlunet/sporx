@@ -1,16 +1,8 @@
 import { publicContract } from "@sporx/api-contract";
 import { fetchWithSchema } from "../../src/lib/fetch-with-schema";
-import { MetricCard, ConfidenceChart, RecentActivity, SystemStatus } from "../../src/components/dashboard";
-import {
-  LayoutDashboard,
-  Trophy,
-  BrainCircuit,
-  AlertTriangle,
-  TrendingUp,
-  Activity,
-  Server,
-  Clock
-} from "lucide-react";
+import { ConfidenceChart, MetricCard, RecentActivity, SystemStatus } from "../../src/components/dashboard";
+import type { RecentActivityItem } from "../../src/components/dashboard/RecentActivity";
+import { Activity, AlertTriangle, BrainCircuit, Clock, LayoutDashboard, Server, TrendingUp, Trophy } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -30,34 +22,130 @@ const EMPTY_DASHBOARD: DashboardSnapshot = {
   generatedAt: new Date().toISOString()
 };
 
+function normalizeStatus(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isLiveStatus(value: string) {
+  const normalized = normalizeStatus(value);
+  return normalized === "live" || normalized === "inplay" || normalized === "1h" || normalized === "2h" || normalized === "q1" || normalized === "q2" || normalized === "q3" || normalized === "q4";
+}
+
+function isCompletedStatus(value: string) {
+  const normalized = normalizeStatus(value);
+  return (
+    normalized === "finished" ||
+    normalized === "completed" ||
+    normalized === "full_time" ||
+    normalized === "ft" ||
+    normalized === "aet" ||
+    normalized === "pen"
+  );
+}
+
+function safeIsoDate(value?: string, fallback = new Date().toISOString()) {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return fallback;
+  }
+  return parsed.toISOString();
+}
+
 export default async function DashboardPage() {
-  const [dashboardResult, predictionsResult] = await Promise.allSettled([
+  const [dashboardResult, predictionsResult, matchesResult] = await Promise.allSettled([
     fetchWithSchema("/api/v1/analytics/dashboard", publicContract.dashboardResponseSchema, {
       cache: "no-store"
     }),
-    fetchWithSchema("/api/v1/predictions?take=40", publicContract.predictionsResponseSchema, {
+    fetchWithSchema("/api/v1/predictions?status=scheduled,live,finished&take=220", publicContract.predictionsResponseSchema, {
+      cache: "no-store"
+    }),
+    fetchWithSchema("/api/v1/matches?take=80", publicContract.matchesResponseSchema, {
       cache: "no-store"
     })
   ]);
 
   const dashboard = dashboardResult.status === "fulfilled" ? dashboardResult.value.data : EMPTY_DASHBOARD;
   const dashboardUnavailable = dashboardResult.status !== "fulfilled";
+  const predictions = predictionsResult.status === "fulfilled" ? predictionsResult.value.data : [];
+  const matches = matchesResult.status === "fulfilled" ? matchesResult.value.data : [];
 
-  let predictionOverview: {
-    highConfidence: number;
-    mediumConfidence: number;
-    lowConfidence: number;
-  } | null = null;
+  const highConfidence = predictions.filter((item) => item.confidenceScore >= 0.7).length;
+  const mediumConfidence = predictions.filter((item) => item.confidenceScore >= 0.56 && item.confidenceScore < 0.7).length;
+  const lowConfidence = predictions.filter((item) => item.confidenceScore < 0.56).length;
+  const predictionOverview = predictionsResult.status === "fulfilled" ? { highConfidence, mediumConfidence, lowConfidence } : null;
 
-  if (predictionsResult.status === "fulfilled") {
-    const predictions = predictionsResult.value.data;
-    const highConfidence = predictions.filter((item) => item.confidenceScore >= 0.7).length;
-    const mediumConfidence = predictions.filter(
-      (item) => item.confidenceScore >= 0.56 && item.confidenceScore < 0.7
-    ).length;
-    const lowConfidence = predictions.filter((item) => item.confidenceScore < 0.56).length;
-    predictionOverview = { highConfidence, mediumConfidence, lowConfidence };
+  const activityRows: RecentActivityItem[] = [];
+
+  activityRows.push({
+    id: `dashboard-refresh-${dashboard.generatedAt}`,
+    type: "info",
+    message: "Dashboard metrikleri guncellendi.",
+    at: safeIsoDate(dashboard.generatedAt)
+  });
+
+  const liveCount = matches.filter((item) => isLiveStatus(item.status)).length;
+  if (liveCount > 0) {
+    activityRows.push({
+      id: `live-${dashboard.generatedAt}`,
+      type: "info",
+      message: `${liveCount} canli mac takip ediliyor.`,
+      at: safeIsoDate(dashboard.generatedAt)
+    });
   }
+
+  const recentCompletedMatches = matches
+    .filter((item) => isCompletedStatus(item.status) && item.score.home !== null && item.score.away !== null)
+    .sort((left, right) => new Date(right.kickoffAt).getTime() - new Date(left.kickoffAt).getTime())
+    .slice(0, 2);
+
+  for (const match of recentCompletedMatches) {
+    activityRows.push({
+      id: `completed-${match.id}`,
+      type: "success",
+      message: `${match.homeTeam} - ${match.awayTeam} maci ${match.score.home}-${match.score.away} tamamlandi.`,
+      at: safeIsoDate(match.kickoffAt, safeIsoDate(dashboard.generatedAt))
+    });
+  }
+
+  const topHighConfidence = predictions
+    .slice()
+    .sort((left, right) => right.confidenceScore - left.confidenceScore)
+    .filter((item) => item.confidenceScore >= 0.7)
+    .slice(0, 2);
+
+  for (const item of topHighConfidence) {
+    if (!item.homeTeam || !item.awayTeam) {
+      continue;
+    }
+    activityRows.push({
+      id: `high-${item.matchId}-${item.confidenceScore}`,
+      type: "success",
+      message: `Yuksek guvenli tahmin: ${item.homeTeam} - ${item.awayTeam} (%${Math.round(item.confidenceScore * 100)}).`,
+      at: safeIsoDate(dashboard.generatedAt)
+    });
+  }
+
+  const firstLowConfidence = predictions
+    .slice()
+    .sort((left, right) => left.confidenceScore - right.confidenceScore)
+    .find((item) => item.confidenceScore < 0.56 && item.homeTeam && item.awayTeam);
+
+  if (firstLowConfidence) {
+    activityRows.push({
+      id: `low-${firstLowConfidence.matchId}`,
+      type: "warning",
+      message: `Dusuk guven uyarisi: ${firstLowConfidence.homeTeam} - ${firstLowConfidence.awayTeam}.`,
+      at: safeIsoDate(dashboard.generatedAt)
+    });
+  }
+
+  const recentActivities = activityRows
+    .slice()
+    .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
+    .slice(0, 6);
 
   return (
     <div className="space-y-8">
@@ -72,54 +160,26 @@ export default async function DashboardPage() {
             </div>
             <div>
               <h1 className="gradient-text font-display text-3xl font-bold">Panel</h1>
-              <p className="text-sm text-slate-400">Sistem genel bakış ve analitikler</p>
+              <p className="text-sm text-slate-400">Sistem genel bakis ve analitikler</p>
             </div>
           </div>
 
           {dashboardUnavailable ? (
             <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-              Dashboard verisi şu anda sınırlı. Arka plan servisleri toparlandığında metrikler otomatik güncellenir.
+              Dashboard verisi su anda sinirli. Arka plan servisleri toparlandiginda metrikler otomatik guncellenir.
             </div>
           ) : null}
 
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <MetricCard
-              label="Toplam Maç"
-              value={dashboard.matchCount}
-              icon={<Trophy className="h-5 w-5" />}
-              color="cyan"
-              trend="up"
-              trendValue="%12"
-            />
-            <MetricCard
-              label="Tahmin Sayısı"
-              value={dashboard.predictionCount}
-              icon={<BrainCircuit className="h-5 w-5" />}
-              color="purple"
-              trend="up"
-              trendValue="%8"
-            />
-            <MetricCard
-              label="Düşük Güven"
-              value={dashboard.lowConfidenceCount}
-              icon={<AlertTriangle className="h-5 w-5" />}
-              color="amber"
-              trend="down"
-              trendValue="%5"
-            />
-            <MetricCard
-              label="Başarısız Analiz"
-              value={dashboard.failedCount}
-              icon={<TrendingUp className="h-5 w-5" />}
-              color="red"
-              trend="neutral"
-              trendValue="0%"
-            />
+            <MetricCard label="Toplam Mac" value={dashboard.matchCount} icon={<Trophy className="h-5 w-5" />} color="cyan" trend="up" trendValue="%12" />
+            <MetricCard label="Tahmin Sayisi" value={dashboard.predictionCount} icon={<BrainCircuit className="h-5 w-5" />} color="purple" trend="up" trendValue="%8" />
+            <MetricCard label="Dusuk Guven" value={dashboard.lowConfidenceCount} icon={<AlertTriangle className="h-5 w-5" />} color="amber" trend="down" trendValue="%5" />
+            <MetricCard label="Basarisiz Analiz" value={dashboard.failedCount} icon={<TrendingUp className="h-5 w-5" />} color="red" trend="neutral" trendValue="0%" />
           </div>
 
           <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
             <Clock className="h-3.5 w-3.5" />
-            <span>Son güncelleme: {new Date(dashboard.generatedAt).toLocaleString("tr-TR")}</span>
+            <span>Son guncelleme: {new Date(dashboard.generatedAt).toLocaleString("tr-TR")}</span>
           </div>
         </div>
       </div>
@@ -129,16 +189,12 @@ export default async function DashboardPage() {
           <section className="glass-card rounded-2xl p-6">
             <div className="mb-6 flex items-center gap-2">
               <BrainCircuit className="h-5 w-5 text-neon-cyan" />
-              <h2 className="text-lg font-semibold text-white">Tahmin Güven Dağılımı</h2>
+              <h2 className="text-lg font-semibold text-white">Tahmin Guven Dagilimi</h2>
             </div>
             {predictionOverview ? (
-              <ConfidenceChart
-                high={predictionOverview.highConfidence}
-                medium={predictionOverview.mediumConfidence}
-                low={predictionOverview.lowConfidence}
-              />
+              <ConfidenceChart high={predictionOverview.highConfidence} medium={predictionOverview.mediumConfidence} low={predictionOverview.lowConfidence} />
             ) : (
-              <p className="py-8 text-center text-slate-400">Güven dağılımı verisi alınamadı.</p>
+              <p className="py-8 text-center text-slate-400">Guven dagilimi verisi alinamadi.</p>
             )}
           </section>
 
@@ -147,7 +203,7 @@ export default async function DashboardPage() {
               <Activity className="h-5 w-5 text-neon-purple" />
               <h2 className="text-lg font-semibold text-white">Son Aktiviteler</h2>
             </div>
-            <RecentActivity />
+            <RecentActivity items={recentActivities} />
           </section>
         </div>
 

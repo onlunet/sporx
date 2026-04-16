@@ -2,7 +2,12 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MatchPredictionItem, normalizePredictionList } from "../../features/predictions";
+import {
+  MatchPredictionItem,
+  isLiveMatchStatus,
+  normalizeMatchStatus,
+  normalizePredictionList
+} from "../../features/predictions";
 import { LiveMatchCard, LiveStats } from "./";
 import { Radio, RefreshCw, Zap } from "lucide-react";
 import { resolveBrowserApiBase } from "../../lib/api-base-url";
@@ -55,13 +60,24 @@ function withSport(path: string, sport?: SportScope): string {
 async function fetchLiveMatches(sport?: SportScope): Promise<MatchSummary[]> {
   const response = await fetchEnvelope<MatchSummary[]>(withSport("/api/v1/matches?status=live&take=50", sport));
   const data = Array.isArray(response?.data) ? response.data : [];
-  return data.filter((item) => item.status?.toLowerCase() === "live");
+  return data.filter((item) => isLiveMatchStatus(item.status));
 }
 
 async function fetchLivePredictions(sport?: SportScope): Promise<MatchPredictionItem[]> {
   const response = await fetchEnvelope<unknown>(withSport("/api/v1/predictions?status=live", sport));
   const all = normalizePredictionList(response?.data);
-  return all.filter((item) => (item.matchStatus ?? "").toLowerCase() === "live");
+  return all.filter((item) => {
+    const normalized = normalizeMatchStatus(item.matchStatus);
+    if (isLiveMatchStatus(normalized)) {
+      return true;
+    }
+    const hasLiveScore =
+      item.homeScore !== null &&
+      item.homeScore !== undefined &&
+      item.awayScore !== null &&
+      item.awayScore !== undefined;
+    return hasLiveScore;
+  });
 }
 
 function normalizeScore(value: number | null | undefined): number | null {

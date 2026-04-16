@@ -526,14 +526,11 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
   const halfTimeAwayScore = halfTimeAwayScoreRaw === undefined ? null : Math.round(halfTimeAwayScoreRaw);
   const matchDateTimeUTC = asString(record.matchDateTimeUTC);
   const matchStatus = asString(record.matchStatus) ?? asString(record.status);
-  const nowMs = Date.now();
-  const kickoffMs = matchDateTimeUTC ? new Date(matchDateTimeUTC).getTime() : undefined;
-  const hasScore = homeScore !== null && awayScore !== null;
   const normalizedStatus = normalizeMatchStatus(matchStatus);
   const hasKnownStatus = normalizedStatus.length > 0;
   const explicitPlayed = asBoolean(record.isPlayed);
 
-  // Completed analytics should only include truly finished matches.
+  // Keep completion strict: only explicit completion signals can mark a match as played.
   const inferredPlayed = (() => {
     if (isCompletedMatchStatus(normalizedStatus)) {
       return true;
@@ -547,12 +544,7 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
     if (explicitPlayed !== undefined) {
       return explicitPlayed;
     }
-    const scoreSuggestsHistoricCompletion =
-      hasScore &&
-      kickoffMs !== undefined &&
-      Number.isFinite(kickoffMs) &&
-      kickoffMs <= nowMs - 6 * 60 * 60 * 1000;
-    return scoreSuggestsHistoricCompletion;
+    return false;
   })();
 
   const probabilities =

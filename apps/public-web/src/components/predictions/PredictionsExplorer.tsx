@@ -184,39 +184,34 @@ function predictionListKey(item: MatchPredictionItem, index: number) {
   return `${item.matchId}-${item.predictionType}-${linePart}-${marketPart}-${selectionPart}-${index}`;
 }
 
-function isPredictionPlayed(item: MatchPredictionItem) {
+function isPredictionCompleted(item: MatchPredictionItem) {
   const normalizedStatus = normalizeMatchStatus(item.matchStatus);
-  const hasScore = item.homeScore !== null && item.homeScore !== undefined && item.awayScore !== null && item.awayScore !== undefined;
-  const kickoff = item.matchDateTimeUTC ? new Date(item.matchDateTimeUTC).getTime() : undefined;
-  const now = Date.now();
-  const isHistoric = kickoff !== undefined && Number.isFinite(kickoff) && kickoff <= now - 6 * 60 * 60 * 1000;
-
-  if (isLiveMatchStatus(normalizedStatus)) {
-    return false;
-  }
   if (isCompletedMatchStatus(normalizedStatus)) {
     return true;
+  }
+  if (isLiveMatchStatus(normalizedStatus)) {
+    return false;
   }
   if (normalizedStatus.length > 0) {
     return false;
   }
-  if (item.isPlayed === true) {
-    return true;
-  }
-  if (hasScore && isHistoric) {
-    return true;
-  }
-  return false;
+  return item.isPlayed === true;
 }
 
 function resolveMatchState(item: MatchPredictionItem) {
   const normalizedStatus = normalizeMatchStatus(item.matchStatus);
-  const isPlayed = isPredictionPlayed(item);
+  const isCompleted = isPredictionCompleted(item);
+  const hasLiveScore =
+    item.homeScore !== null &&
+    item.homeScore !== undefined &&
+    item.awayScore !== null &&
+    item.awayScore !== undefined &&
+    !isCompleted;
 
-  if (isLiveMatchStatus(normalizedStatus)) {
+  if (isLiveMatchStatus(normalizedStatus) || hasLiveScore) {
     return { label: "Oynaniyor", className: "bg-red-500/10 text-red-300 border-red-500/30", isPlayed: false };
   }
-  if (isPlayed) {
+  if (isCompleted) {
     return { label: "Tamamlandi", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30", isPlayed: true };
   }
   if (normalizedStatus === "postponed") {
@@ -499,13 +494,13 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
   const requestedTake = scope === "completed" ? 260 : 120;
   const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
-  const sourceItems = query.data ?? [];
+  const sourceItems = query.data;
   const items = useMemo(() => {
-    const sorted = sortPredictions(sourceItems, scope);
+    const sorted = sortPredictions(sourceItems ?? [], scope);
     if (scope === "completed") {
-      return sorted.filter((item) => isPredictionPlayed(item));
+      return sorted.filter((item) => isPredictionCompleted(item));
     }
-    return sorted.filter((item) => !isPredictionPlayed(item));
+    return sorted.filter((item) => !isPredictionCompleted(item));
   }, [scope, sourceItems]);
 
   const normalizedHomeQuery = useMemo(() => normalizeText(homeTeamQuery), [homeTeamQuery]);
