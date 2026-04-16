@@ -127,7 +127,13 @@ export function TeamSelector({ label, name, teams, defaultValue, excludedTeamId,
       </label>
 
       <div className="relative">
-        <div className="relative">
+        <div
+          className="relative"
+          role="combobox"
+          aria-expanded={isOpen}
+          aria-haspopup="listbox"
+          aria-controls={`${name}-suggestions`}
+        >
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             ref={inputRef}
@@ -145,8 +151,7 @@ export function TeamSelector({ label, name, teams, defaultValue, excludedTeamId,
             autoComplete="off"
             className={`w-full rounded-xl border py-3 pl-10 pr-4 text-white placeholder-slate-500 outline-none transition-all focus:ring-2 ${colorClasses[color]}`}
             aria-label={label}
-            aria-expanded={isOpen}
-            aria-controls={`${name}-suggestions`}
+            aria-autocomplete="list"
           />
         </div>
 
@@ -155,6 +160,7 @@ export function TeamSelector({ label, name, teams, defaultValue, excludedTeamId,
         {isOpen ? (
           <div
             id={`${name}-suggestions`}
+            role="listbox"
             className="absolute z-20 mt-2 max-h-72 w-full overflow-auto rounded-xl border border-white/10 bg-abyss/95 p-1 shadow-2xl backdrop-blur"
           >
             {suggestions.length > 0 ? (
@@ -166,6 +172,8 @@ export function TeamSelector({ label, name, teams, defaultValue, excludedTeamId,
                     event.preventDefault();
                     handleSelect(team);
                   }}
+                  role="option"
+                  aria-selected={team.id === selectedTeamId}
                   className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-white/10 ${
                     team.id === selectedTeamId ? "bg-white/10 text-white" : "text-slate-300"
                   }`}
@@ -187,4 +195,3 @@ export function TeamSelector({ label, name, teams, defaultValue, excludedTeamId,
     </div>
   );
 }
-

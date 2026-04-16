@@ -22,10 +22,17 @@ function buildUpstreamCandidates() {
     }
     const normalized = trimTrailingSlash(raw.trim());
     if (normalized.length > 0) {
-      unique.add(normalized);
-      if (normalized.startsWith("https://")) {
-        unique.add(`http://${normalized.slice("https://".length)}`);
+      if (normalized.startsWith("http://")) {
+        unique.add(`https://${normalized.slice("http://".length)}`);
+        unique.add(normalized);
+        continue;
       }
+      if (normalized.startsWith("https://")) {
+        unique.add(normalized);
+        unique.add(`http://${normalized.slice("https://".length)}`);
+        continue;
+      }
+      unique.add(normalized);
     }
   }
 
@@ -48,7 +55,10 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
   const proxyHeaders = new Headers(request.headers);
   proxyHeaders.delete("host");
   proxyHeaders.delete("content-length");
-  proxyHeaders.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
+  const forwardedProtoHeader = request.headers.get("x-forwarded-proto");
+  const effectiveProto =
+    forwardedProtoHeader?.split(",")[0]?.trim() || request.nextUrl.protocol.replace(":", "");
+  proxyHeaders.set("x-forwarded-proto", effectiveProto);
   if (request.headers.get("host")) {
     proxyHeaders.set("x-forwarded-host", request.headers.get("host") as string);
   }

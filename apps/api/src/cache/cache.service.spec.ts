@@ -1,4 +1,5 @@
 const redisMock = {
+  on: jest.fn(),
   get: jest.fn(),
   set: jest.fn(),
   sadd: jest.fn(),
@@ -48,4 +49,3 @@ describe("CacheService", () => {
     await expect(cache.releaseLock("jobs", "owner-1")).resolves.toBe(true);
   });
 });
-
