@@ -23,7 +23,6 @@ function sportLabel(sport?: "football" | "basketball") {
 
 export function LeaguePredictionPerformance({ sport }: LeaguePredictionPerformanceProps = {}) {
   const finishedQuery = usePredictionsByType("all", "finished", 300, sport);
-  const fallbackQuery = usePredictionsByType("all", undefined, 300, sport);
 
   const completedItems = useMemo(() => {
     const sortRows = (rows: MatchPredictionItem[]) =>
@@ -35,16 +34,12 @@ export function LeaguePredictionPerformance({ sport }: LeaguePredictionPerforman
           return rightTime - leftTime;
         });
 
-    const fromFinished = sortRows((finishedQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
-    if (fromFinished.length > 0) {
-      return fromFinished;
-    }
-    return sortRows((fallbackQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
-  }, [fallbackQuery.data, finishedQuery.data]);
+    return sortRows((finishedQuery.data ?? []).filter((item) => isCompletedMatchStatus(item.matchStatus)));
+  }, [finishedQuery.data]);
 
   const report = useMemo(() => buildLeaguePredictionPerformanceReport(completedItems), [completedItems]);
-  const isLoading = finishedQuery.isLoading || fallbackQuery.isLoading;
-  const isError = finishedQuery.isError && fallbackQuery.isError && completedItems.length === 0;
+  const isLoading = finishedQuery.isLoading;
+  const isError = finishedQuery.isError && completedItems.length === 0;
   const sportPrefix = sport ? `/${sport}` : "/football";
 
   if (isLoading && completedItems.length === 0) {
@@ -206,4 +201,3 @@ export function LeaguePredictionPerformance({ sport }: LeaguePredictionPerforman
     </div>
   );
 }
-

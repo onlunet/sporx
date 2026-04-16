@@ -92,7 +92,6 @@ function SidebarItem({ link, active }: { link: SidebarLink; active: boolean }) {
     <motion.div variants={itemVariants}>
       <Link
         href={link.href}
-        prefetch={false}
         className={`
           group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200
           ${active ? "text-white" : "text-slate-400 hover:text-white hover:bg-white/5"}
@@ -138,7 +137,7 @@ export function PublicSidebar() {
   return (
     <aside className="sticky top-0 flex h-screen w-72 flex-col border-r border-white/5 bg-depth/80 backdrop-blur-xl">
       <div className="border-b border-white/5 p-6">
-        <Link href="/" prefetch={false} className="group flex items-center gap-3">
+        <Link href="/" className="group flex items-center gap-3">
           <div className="relative">
             <div className="absolute inset-0 rounded-full bg-neon-cyan/20 blur-xl transition-all group-hover:bg-neon-cyan/30" />
             <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-neon-cyan to-neon-purple">

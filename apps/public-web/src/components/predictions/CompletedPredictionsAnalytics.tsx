@@ -164,7 +164,6 @@ function toPercent(value: number, digits = 1) {
 
 export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAnalyticsProps = {}) {
   const finishedQuery = usePredictionsByType("all", "finished", 180, sport);
-  const fallbackQuery = usePredictionsByType("all", "finished,scheduled,live,postponed,cancelled", 260, sport);
 
   const playedItems = useMemo(() => {
     const now = Date.now();
@@ -193,13 +192,8 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
       return kickoffMs <= now - 6 * 60 * 60 * 1000;
     };
 
-    const fromFinished = sortRows((finishedQuery.data ?? []).filter((item) => isPlayedByEvidence(item)));
-    if (fromFinished.length > 0) {
-      return fromFinished;
-    }
-
-    return sortRows((fallbackQuery.data ?? []).filter((item) => isPlayedByEvidence(item)));
-  }, [fallbackQuery.data, finishedQuery.data]);
+    return sortRows((finishedQuery.data ?? []).filter((item) => isPlayedByEvidence(item)));
+  }, [finishedQuery.data]);
 
   const evaluatedItems = useMemo(() => playedItems.filter((item) => evaluatePredictionResult(item) !== null), [playedItems]);
   const notEvaluatedItems = useMemo(() => playedItems.filter((item) => evaluatePredictionResult(item) === null), [playedItems]);
@@ -352,8 +346,8 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
     };
   }, [evaluatedItems, sport]);
 
-  const isLoading = finishedQuery.isLoading || fallbackQuery.isLoading;
-  const isError = finishedQuery.isError && fallbackQuery.isError && playedItems.length === 0;
+  const isLoading = finishedQuery.isLoading;
+  const isError = finishedQuery.isError && playedItems.length === 0;
 
   if (isLoading && playedItems.length === 0) {
     return (

@@ -134,9 +134,7 @@ export function useMatchPredictions(matchId: string, initialData?: MatchPredicti
     enabled: matchId.length > 0,
     retry: 1,
     staleTime: 60_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
     initialData
   });
 }
@@ -164,9 +162,7 @@ export function useMatchCommentary(matchId: string, enabled = true) {
     enabled: enabled && matchId.length > 0,
     retry: 1,
     staleTime: 60_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true
+    refetchOnWindowFocus: false
   });
 }
 
@@ -189,10 +185,8 @@ export function usePredictionsByType(
     ],
     queryFn: () => fetchPredictions({ predictionType, status, take, sport, includeMarketAnalysis: includeMarket }),
     retry: 1,
-    staleTime: 60_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true
+    staleTime: 120_000,
+    refetchOnWindowFocus: false
   });
 
   const filtered = useMemo(() => filterPredictionsByType(query.data ?? [], predictionType), [predictionType, query.data]);

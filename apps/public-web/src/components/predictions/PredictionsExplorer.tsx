@@ -497,19 +497,9 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
   const filters = useMemo(() => getFilters(sport), [sport]);
   const completedLink = sport ? `/${sport}/predictions/completed` : "/football/predictions/completed";
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
-  const fallbackStatus =
-    scope === "completed" ? "finished,scheduled,live,postponed,cancelled" : "scheduled,live,finished,postponed,cancelled";
   const requestedTake = scope === "completed" ? 260 : 120;
-  const fallbackTake = scope === "completed" ? 520 : 220;
   const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
-  const fallbackQuery = usePredictionsByType(activeFilter, fallbackStatus, fallbackTake, sport);
-  const sourceItems = useMemo(() => {
-    const primary = query.data ?? [];
-    if (primary.length > 0) {
-      return primary;
-    }
-    return fallbackQuery.data ?? [];
-  }, [fallbackQuery.data, query.data]);
+  const sourceItems = query.data ?? [];
   const items = useMemo(() => {
     const sorted = sortPredictions(sourceItems, scope);
     if (scope === "completed") {
@@ -835,7 +825,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         ) : null}
       </div>
 
-      {(query.isLoading || fallbackQuery.isLoading) && (
+      {query.isLoading && (
         <div className="grid gap-4 md:grid-cols-2">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="glass-card rounded-2xl p-5 h-48 animate-pulse">
@@ -850,7 +840,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         </div>
       )}
 
-      {query.isError && fallbackQuery.isError && (
+      {query.isError && (
         <div className="glass-card rounded-2xl p-8 text-center border-neon-red/20">
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-neon-red/10 flex items-center justify-center">
             <ShieldAlert className="w-8 h-8 text-neon-red" />
@@ -860,7 +850,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         </div>
       )}
 
-      {!query.isLoading && !fallbackQuery.isLoading && !(query.isError && fallbackQuery.isError) && filteredItems.length === 0 && (
+      {!query.isLoading && !query.isError && filteredItems.length === 0 && (
         <div className="glass-card rounded-2xl p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-white/5 flex items-center justify-center">
             <Target className="w-10 h-10 text-slate-500" />
