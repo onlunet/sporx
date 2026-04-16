@@ -98,6 +98,13 @@ export class IngestionQueueService {
     this.workerStarted = true;
 
     const url = process.env.REDIS_URL ?? "redis://localhost:6379";
+    const role = (process.env.SERVICE_ROLE ?? "api").toLowerCase();
+    const fallbackConcurrency = role === "worker" ? 1 : 1;
+    const parsedConcurrency = Number(process.env.INGESTION_WORKER_CONCURRENCY ?? fallbackConcurrency);
+    const concurrency =
+      Number.isFinite(parsedConcurrency) && parsedConcurrency > 0
+        ? Math.max(1, Math.min(8, Math.floor(parsedConcurrency)))
+        : fallbackConcurrency;
     const worker = new Worker(
       "ingestion",
       async (job) => {
@@ -107,7 +114,7 @@ export class IngestionQueueService {
         }
         await this.processRun(runId, String(job.name));
       },
-      { connection: { url }, concurrency: 4 }
+      { connection: { url }, concurrency }
     );
 
     worker.on("completed", (job) => {
@@ -130,6 +137,6 @@ export class IngestionQueueService {
       }
     });
 
-    this.logger.log("Ingestion worker started");
+    this.logger.log(`Ingestion worker started (concurrency=${concurrency}, role=${role})`);
   }
 }

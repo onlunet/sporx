@@ -38,12 +38,15 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ApiResponseInterceptor());
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  try {
-    const ingestionQueue = app.get(IngestionQueueService);
-    await ingestionQueue.startWorker();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown ingestion worker startup error";
-    console.error(`[api] embedded ingestion worker start failed: ${message}`);
+  const enableEmbeddedWorker = (process.env.ENABLE_EMBEDDED_INGESTION_WORKER ?? "false").toLowerCase() === "true";
+  if (enableEmbeddedWorker) {
+    try {
+      const ingestionQueue = app.get(IngestionQueueService);
+      await ingestionQueue.startWorker();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown ingestion worker startup error";
+      console.error(`[api] embedded ingestion worker start failed: ${message}`);
+    }
   }
 
   const port = Number(process.env.PORT ?? 4000);
