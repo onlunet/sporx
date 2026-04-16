@@ -257,6 +257,17 @@ function toMatchStatus(value: unknown): MatchStatus {
   return MatchStatus.scheduled;
 }
 
+const PREDICTION_MATCH_SELECT = {
+  status: true,
+  matchDateTimeUTC: true,
+  homeScore: true,
+  awayScore: true,
+  homeTeam: { select: { name: true } },
+  awayTeam: { select: { name: true } },
+  league: { select: { id: true, name: true, code: true } },
+  sport: { select: { code: true } }
+} as const;
+
 function buildFallbackExpandedItem(input: {
   matchId: string;
   modelVersionId: string | null;
@@ -363,8 +374,8 @@ export class PredictionsService {
       return cached;
     }
 
-    let data:
-      | Array<{
+	    let data:
+	      | Array<{
           matchId: string;
           modelVersionId: string | null;
           probabilities: unknown;
@@ -377,27 +388,17 @@ export class PredictionsService {
           avoidReason: string | null;
           updatedAt: Date;
           createdAt: Date;
-          match: {
-            sport: { code: string };
-            status: MatchStatus;
-            matchDateTimeUTC: Date;
-            homeScore: number | null;
-            awayScore: number | null;
-            halfTimeHomeScore: number | null;
-            halfTimeAwayScore: number | null;
-            q1HomeScore: number | null;
-            q1AwayScore: number | null;
-            q2HomeScore: number | null;
-            q2AwayScore: number | null;
-            q3HomeScore: number | null;
-            q3AwayScore: number | null;
-            q4HomeScore: number | null;
-            q4AwayScore: number | null;
-            homeTeam: { name: string };
-            awayTeam: { name: string };
-            league: { id: string; name: string; code: string | null } | null;
-          };
-        }>
+	          match: {
+	            sport: { code: string } | null;
+	            status: MatchStatus;
+	            matchDateTimeUTC: Date;
+	            homeScore: number | null;
+	            awayScore: number | null;
+	            homeTeam: { name: string };
+	            awayTeam: { name: string };
+	            league: { id: string; name: string; code: string | null } | null;
+	          };
+	        }>
       | [] = [];
 
     try {
@@ -448,31 +449,31 @@ export class PredictionsService {
       }
 
       const matchIds = relevantMatches.map((item) => item.id);
-      data = await queryWithTimeout(
-        this.prisma.prediction.findMany({
-          where: { matchId: { in: matchIds } },
-          orderBy: { createdAt: "desc" },
-          include: { match: { include: { sport: true, homeTeam: true, awayTeam: true, league: true } } },
-          take: Math.max(take * 2, 100)
-        }),
-        12000
-      );
+	      data = await queryWithTimeout(
+	        this.prisma.prediction.findMany({
+	          where: { matchId: { in: matchIds } },
+	          orderBy: { createdAt: "desc" },
+	          include: { match: { select: PREDICTION_MATCH_SELECT } },
+	          take: Math.max(take * 2, 100)
+	        }),
+	        12000
+	      );
 
       if (data.length === 0) {
-        data = await queryWithTimeout(
-          this.prisma.prediction.findMany({
-            where: {
-              match: {
-                status: { in: effectiveStatuses },
-                ...(sportCode ? { sport: { code: sportCode } } : {})
-              }
-            },
-            orderBy: { updatedAt: "desc" },
-            include: { match: { include: { sport: true, homeTeam: true, awayTeam: true, league: true } } },
-            take: Math.max(take * 3, 120)
-          }),
-          12000
-        ).catch(() => []);
+	        data = await queryWithTimeout(
+	          this.prisma.prediction.findMany({
+	            where: {
+	              match: {
+	                status: { in: effectiveStatuses },
+	                ...(sportCode ? { sport: { code: sportCode } } : {})
+	              }
+	            },
+	            orderBy: { updatedAt: "desc" },
+	            include: { match: { select: PREDICTION_MATCH_SELECT } },
+	            take: Math.max(take * 3, 120)
+	          }),
+	          12000
+	        ).catch(() => []);
       }
     } catch {
       const stale = await this.cache.get<unknown[]>(stableCacheKey);
@@ -602,16 +603,7 @@ export class PredictionsService {
 
     const rows = await this.prisma.prediction.findMany({
       where: { matchId },
-      include: {
-        match: {
-          include: {
-            sport: true,
-            homeTeam: true,
-            awayTeam: true,
-            league: true
-          }
-        }
-      },
+      include: { match: { select: PREDICTION_MATCH_SELECT } },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       take: 5
     });
