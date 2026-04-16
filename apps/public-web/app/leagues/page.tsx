@@ -3,8 +3,12 @@ import { fetchWithSchema } from '../../src/lib/fetch-with-schema';
 import { LeagueCard, LeagueStats } from '../../src/components/leagues';
 import { Globe, Search } from 'lucide-react';
 
+export const dynamic = 'force-dynamic';
+
 export default async function LeaguesPage() {
-  const response = await fetchWithSchema('/api/v1/leagues', publicContract.leaguesResponseSchema);
+  const response = await fetchWithSchema('/api/v1/leagues', publicContract.leaguesResponseSchema, {
+    cache: 'no-store'
+  });
   const leagues = response.data;
   
   return (
