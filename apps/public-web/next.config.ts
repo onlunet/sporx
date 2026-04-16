@@ -4,6 +4,10 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@sporx/ui", "@sporx/api-contract"],
   async redirects() {
+    if (process.env.FORCE_HTTP_SSLIP_REDIRECT !== "1") {
+      return [];
+    }
+
     return [
       {
         source: "/:path*",
