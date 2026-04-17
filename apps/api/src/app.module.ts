@@ -31,6 +31,7 @@ import { SystemModule } from "./modules/system/system.module";
 import { HealthModule } from "./modules/health/health.module";
 import { OddsModule } from "./modules/odds/odds.module";
 import { BankrollModule } from "./modules/bankroll/bankroll.module";
+import { ResearchLabModule } from "./modules/research-lab/research-lab.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { CacheModule } from "./cache/cache.module";
 
@@ -73,7 +74,8 @@ import { CacheModule } from "./cache/cache.module";
     SystemModule,
     HealthModule,
     OddsModule,
-    BankrollModule
+    BankrollModule,
+    ResearchLabModule
   ]
 })
 export class AppModule {}

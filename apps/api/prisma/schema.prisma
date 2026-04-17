@@ -172,6 +172,51 @@ enum SimulationRunStatus {
   cancelled
 }
 
+enum ResearchRunStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+  pruned
+}
+
+enum TuningSearchType {
+  GRID
+  RANDOM
+  OPTUNA_COMPAT
+}
+
+enum StrategyObjective {
+  LOG_GROWTH
+  ROI
+  YIELD
+  MIN_MAX_DRAWDOWN
+  SHARPE
+  CALIBRATION_QUALITY
+  RISK_OF_RUIN
+  COMPOSITE
+}
+
+enum PolicyCandidateStatus {
+  DRAFT
+  CANDIDATE
+  UNDER_REVIEW
+  APPROVED_FOR_SHADOW
+  APPROVED_FOR_CANARY
+  REJECTED
+  RETIRED
+}
+
+enum PolicyPromotionDecisionStatus {
+  APPROVE_SHADOW
+  APPROVE_CANARY
+  REQUIRE_MORE_EVIDENCE
+  REJECT
+  FORCE_APPROVE
+  FORCE_REJECT
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -244,6 +289,7 @@ model League {
   rolloutAssignments RolloutAssignment[]
   labelCollectionRuns LabelCollectionRun[]
   modelHealthSnapshots ModelHealthSnapshot[]
+  policyAliases     PolicyAlias[]
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
 
@@ -1829,6 +1875,410 @@ model ModelHealthSnapshot {
   @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
   @@index([modelVersionId, createdAt])
   @@map("model_health_snapshots")
+}
+
+model ResearchProject {
+  id           String               @id @default(uuid())
+  key          String               @unique
+  name         String
+  description  String?
+  sportCode    String               @default("football") @map("sport")
+  active       Boolean              @default(true)
+  metadataJson Json?                @map("metadata_jsonb")
+  createdAt    DateTime             @default(now()) @map("created_at")
+  updatedAt    DateTime             @updatedAt @map("updated_at")
+  experiments  ResearchExperiment[]
+  tags         ExperimentTag[]
+  notes        ExperimentNote[]
+  candidates   PolicyCandidate[]
+  runs         ResearchRun[]
+
+  @@index([sportCode, active, createdAt])
+  @@map("research_projects")
+}
+
+model ResearchExperiment {
+  id                       String                @id @default(uuid())
+  projectId                String                @map("project_id")
+  key                      String
+  name                     String
+  description              String?
+  objective                StrategyObjective
+  objectiveDefinitionJson  Json                  @map("objective_definition_jsonb")
+  seed                     Int?
+  status                   ResearchRunStatus     @default(queued)
+  dataWindowStart          DateTime?             @map("data_window_start")
+  dataWindowEnd            DateTime?             @map("data_window_end")
+  sportCode                String                @default("football") @map("sport")
+  marketScopeJson          Json?                 @map("market_scope_jsonb")
+  horizonScopeJson         Json?                 @map("horizon_scope_jsonb")
+  leagueScopeJson          Json?                 @map("league_scope_jsonb")
+  featureSetVersion        String?               @map("feature_set_version")
+  notes                    String?
+  createdAt                DateTime              @default(now()) @map("created_at")
+  updatedAt                DateTime              @updatedAt @map("updated_at")
+  project                  ResearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs                     ResearchRun[]
+  configSets               StrategyConfigSet[]
+  searchSpaces             TuningSearchSpace[]
+  tags                     ExperimentTag[]
+  notesLog                 ExperimentNote[]
+  policyCandidates         PolicyCandidate[]
+
+  @@unique([projectId, key])
+  @@index([projectId, createdAt])
+  @@index([sportCode, status, createdAt])
+  @@map("research_experiments")
+}
+
+model StrategyConfigSet {
+  id               String                  @id @default(uuid())
+  experimentId     String                  @map("experiment_id")
+  key              String
+  name             String
+  description      String?
+  scopeJson        Json?                   @map("scope_jsonb")
+  isActive         Boolean                 @default(true) @map("is_active")
+  currentVersionId String?                 @map("current_version_id")
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+  experiment       ResearchExperiment      @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  currentVersion   StrategyConfigVersion?  @relation("StrategyConfigCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         StrategyConfigVersion[] @relation("StrategyConfigVersions")
+  researchRuns     ResearchRun[]
+
+  @@unique([experimentId, key])
+  @@index([experimentId, isActive, createdAt])
+  @@map("strategy_config_sets")
+}
+
+model StrategyConfigVersion {
+  id                  String              @id @default(uuid())
+  configSetId         String              @map("config_set_id")
+  version             Int
+  label               String
+  configHash          String              @map("config_hash")
+  configJson          Json                @map("config_jsonb")
+  immutable           Boolean             @default(true)
+  createdAt           DateTime            @default(now()) @map("created_at")
+  configSet           StrategyConfigSet   @relation("StrategyConfigVersions", fields: [configSetId], references: [id], onDelete: Cascade)
+  currentForConfigSet StrategyConfigSet[] @relation("StrategyConfigCurrentVersion")
+  researchRuns        ResearchRun[]
+  tuningTrials        TuningTrial[]
+  policyCandidates    PolicyCandidate[]
+
+  @@unique([configSetId, version])
+  @@index([configSetId, createdAt])
+  @@index([configHash])
+  @@map("strategy_config_versions")
+}
+
+model TuningSearchSpace {
+  id              String             @id @default(uuid())
+  experimentId    String             @map("experiment_id")
+  key             String
+  version         Int
+  searchType      TuningSearchType   @map("search_type")
+  searchSpaceJson Json               @map("search_space_jsonb")
+  constraintsJson Json?              @map("constraints_jsonb")
+  seed            Int?
+  isActive        Boolean            @default(true) @map("is_active")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+  experiment      ResearchExperiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  researchRuns    ResearchRun[]
+  policyCandidates PolicyCandidate[]
+
+  @@unique([experimentId, key, version])
+  @@index([experimentId, isActive, createdAt])
+  @@map("tuning_search_spaces")
+}
+
+model ResearchRun {
+  id                       String                @id @default(uuid())
+  projectId                String                @map("project_id")
+  experimentId             String                @map("experiment_id")
+  strategyConfigSetId      String?               @map("strategy_config_set_id")
+  strategyConfigVersionId  String?               @map("strategy_config_version_id")
+  searchSpaceId            String?               @map("search_space_id")
+  runKey                   String                @unique @map("run_key")
+  status                   ResearchRunStatus     @default(queued)
+  dataWindowStart          DateTime              @map("data_window_start")
+  dataWindowEnd            DateTime              @map("data_window_end")
+  sportCode                String                @default("football") @map("sport")
+  leagueScopeJson          Json?                 @map("league_scope_jsonb")
+  marketScopeJson          Json?                 @map("market_scope_jsonb")
+  horizonScopeJson         Json?                 @map("horizon_scope_jsonb")
+  objectiveMetric          String                @map("objective_metric")
+  secondaryMetricsJson     Json?                 @map("secondary_metrics_jsonb")
+  seed                     Int?
+  datasetHashesJson        Json                  @map("dataset_hashes_jsonb")
+  featureSetVersion        String?               @map("feature_set_version")
+  modelRefsJson            Json?                 @map("model_refs_jsonb")
+  policyRefsJson           Json?                 @map("policy_refs_jsonb")
+  bankrollProfile          String?               @map("bankroll_profile")
+  notes                    String?
+  tagsJson                 Json?                 @map("tags_jsonb")
+  metricsJson              Json?                 @map("metrics_jsonb")
+  startedAt                DateTime?             @map("started_at")
+  completedAt              DateTime?             @map("completed_at")
+  createdAt                DateTime              @default(now()) @map("created_at")
+  updatedAt                DateTime              @updatedAt @map("updated_at")
+  project                  ResearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  experiment               ResearchExperiment    @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  strategyConfigSet        StrategyConfigSet?    @relation(fields: [strategyConfigSetId], references: [id], onDelete: SetNull)
+  strategyConfigVersion    StrategyConfigVersion? @relation(fields: [strategyConfigVersionId], references: [id], onDelete: SetNull)
+  searchSpace              TuningSearchSpace?    @relation(fields: [searchSpaceId], references: [id], onDelete: SetNull)
+  artifacts                ResearchRunArtifact[]
+  tuningTrials             TuningTrial[]
+  robustnessRuns           RobustnessTestRun[]
+  segmentScorecards        SegmentScorecard[]
+  policyCandidates         PolicyCandidate[]
+  notesLog                 ExperimentNote[]
+  promotionRequests        PolicyPromotionRequest[]
+
+  @@index([projectId, experimentId, createdAt])
+  @@index([sportCode, status, createdAt])
+  @@map("research_runs")
+}
+
+model ResearchRunArtifact {
+  id            String      @id @default(uuid())
+  researchRunId String      @map("research_run_id")
+  artifactType  String      @map("artifact_type")
+  artifactKey   String      @map("artifact_key")
+  artifactUri   String?     @map("artifact_uri")
+  metadataJson  Json?       @map("metadata_jsonb")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  researchRun   ResearchRun @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+
+  @@unique([researchRunId, artifactKey])
+  @@index([researchRunId, artifactType, createdAt])
+  @@map("research_run_artifacts")
+}
+
+model TuningTrial {
+  id                      String                 @id @default(uuid())
+  researchRunId           String                 @map("research_run_id")
+  strategyConfigVersionId String?                @map("strategy_config_version_id")
+  trialNumber             Int                    @map("trial_number")
+  trialKey                String                 @unique @map("trial_key")
+  status                  ResearchRunStatus      @default(queued)
+  configHash              String                 @map("config_hash")
+  configJson              Json                   @map("config_jsonb")
+  seed                    Int?
+  pruned                  Boolean                @default(false)
+  pruneReason             String?                @map("prune_reason")
+  metricsJson             Json?                  @map("metrics_jsonb")
+  startedAt               DateTime?              @map("started_at")
+  completedAt             DateTime?              @map("completed_at")
+  createdAt               DateTime               @default(now()) @map("created_at")
+  updatedAt               DateTime               @updatedAt @map("updated_at")
+  researchRun             ResearchRun            @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  strategyConfigVersion   StrategyConfigVersion? @relation(fields: [strategyConfigVersionId], references: [id], onDelete: SetNull)
+  metrics                 TuningTrialMetric[]
+  artifacts               TuningTrialArtifact[]
+  policyCandidates        PolicyCandidate[]
+
+  @@unique([researchRunId, trialNumber])
+  @@index([researchRunId, status, createdAt])
+  @@index([configHash])
+  @@map("tuning_trials")
+}
+
+model TuningTrialMetric {
+  id            String      @id @default(uuid())
+  tuningTrialId String      @map("tuning_trial_id")
+  metricKey     String      @map("metric_key")
+  metricValue   Float       @map("metric_value")
+  isPrimary     Boolean     @default(false) @map("is_primary")
+  detailsJson   Json?       @map("details_jsonb")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  tuningTrial   TuningTrial @relation(fields: [tuningTrialId], references: [id], onDelete: Cascade)
+
+  @@unique([tuningTrialId, metricKey])
+  @@index([metricKey, createdAt])
+  @@map("tuning_trial_metrics")
+}
+
+model TuningTrialArtifact {
+  id            String      @id @default(uuid())
+  tuningTrialId String      @map("tuning_trial_id")
+  artifactType  String      @map("artifact_type")
+  artifactKey   String      @map("artifact_key")
+  artifactUri   String?     @map("artifact_uri")
+  metadataJson  Json?       @map("metadata_jsonb")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  tuningTrial   TuningTrial @relation(fields: [tuningTrialId], references: [id], onDelete: Cascade)
+
+  @@unique([tuningTrialId, artifactKey])
+  @@index([tuningTrialId, artifactType, createdAt])
+  @@map("tuning_trial_artifacts")
+}
+
+model RobustnessTestRun {
+  id              String               @id @default(uuid())
+  researchRunId   String               @map("research_run_id")
+  status          ResearchRunStatus    @default(queued)
+  robustnessScore Float?               @map("robustness_score")
+  summaryJson     Json?                @map("summary_jsonb")
+  flagsJson       Json?                @map("flags_jsonb")
+  startedAt       DateTime?            @map("started_at")
+  completedAt     DateTime?            @map("completed_at")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  researchRun     ResearchRun          @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  results         RobustnessTestResult[]
+  policyCandidates PolicyCandidate[]
+
+  @@index([researchRunId, status, createdAt])
+  @@map("robustness_test_runs")
+}
+
+model RobustnessTestResult {
+  id                String            @id @default(uuid())
+  robustnessTestRunId String          @map("robustness_test_run_id")
+  checkName          String           @map("check_name")
+  passed             Boolean
+  score              Float?
+  detailsJson        Json?            @map("details_jsonb")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  robustnessTestRun  RobustnessTestRun @relation(fields: [robustnessTestRunId], references: [id], onDelete: Cascade)
+
+  @@index([robustnessTestRunId, checkName])
+  @@map("robustness_test_results")
+}
+
+model SegmentScorecard {
+  id             String      @id @default(uuid())
+  researchRunId  String      @map("research_run_id")
+  segmentType    String      @map("segment_type")
+  segmentKey     String      @map("segment_key")
+  metricsJson    Json        @map("metrics_jsonb")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  researchRun    ResearchRun @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+
+  @@index([researchRunId, segmentType, createdAt])
+  @@map("segment_scorecards")
+}
+
+model PolicyCandidate {
+  id                      String                  @id @default(uuid())
+  projectId               String                  @map("project_id")
+  experimentId            String                  @map("experiment_id")
+  researchRunId           String                  @map("research_run_id")
+  bestTrialId             String?                 @map("best_trial_id")
+  strategyConfigVersionId String?                 @map("strategy_config_version_id")
+  searchSpaceId           String?                 @map("search_space_id")
+  robustnessTestRunId     String?                 @map("robustness_test_run_id")
+  key                     String                  @unique
+  status                  PolicyCandidateStatus   @default(DRAFT)
+  summaryJson             Json?                   @map("summary_jsonb")
+  objectiveDefinitionJson Json?                   @map("objective_definition_jsonb")
+  datasetHashesJson       Json?                   @map("dataset_hashes_jsonb")
+  immutable               Boolean                 @default(true)
+  createdAt               DateTime                @default(now()) @map("created_at")
+  updatedAt               DateTime                @updatedAt @map("updated_at")
+  project                 ResearchProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  experiment              ResearchExperiment      @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  researchRun             ResearchRun             @relation(fields: [researchRunId], references: [id], onDelete: Cascade)
+  bestTrial               TuningTrial?            @relation(fields: [bestTrialId], references: [id], onDelete: SetNull)
+  strategyConfigVersion   StrategyConfigVersion?  @relation(fields: [strategyConfigVersionId], references: [id], onDelete: SetNull)
+  searchSpace             TuningSearchSpace?      @relation(fields: [searchSpaceId], references: [id], onDelete: SetNull)
+  robustnessTestRun       RobustnessTestRun?      @relation(fields: [robustnessTestRunId], references: [id], onDelete: SetNull)
+  promotionRequests       PolicyPromotionRequest[]
+  promotionDecisions      PolicyPromotionDecision[]
+  policyAliases           PolicyAlias[]
+
+  @@index([projectId, experimentId, status, createdAt])
+  @@index([researchRunId, createdAt])
+  @@map("policy_candidates")
+}
+
+model PolicyAlias {
+  id                String          @id @default(uuid())
+  sportCode         String          @default("football") @map("sport")
+  leagueId          String?         @map("league_id")
+  market            String?
+  horizon           String?
+  aliasKey          String          @map("alias_key")
+  policyCandidateId String?         @map("policy_candidate_id")
+  isActive          Boolean         @default(true) @map("is_active")
+  metadataJson      Json?           @map("metadata_jsonb")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  league            League?         @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  policyCandidate   PolicyCandidate? @relation(fields: [policyCandidateId], references: [id], onDelete: SetNull)
+
+  @@unique([sportCode, leagueId, market, horizon, aliasKey])
+  @@index([sportCode, isActive, createdAt])
+  @@map("policy_aliases")
+}
+
+model PolicyPromotionRequest {
+  id                String       @id @default(uuid())
+  policyCandidateId String       @map("policy_candidate_id")
+  researchRunId     String?      @map("research_run_id")
+  requestedBy       String       @default("system") @map("requested_by")
+  reason            String?
+  evidenceJson      Json?        @map("evidence_jsonb")
+  status            String       @default("queued")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  decidedAt         DateTime?    @map("decided_at")
+  policyCandidate   PolicyCandidate @relation(fields: [policyCandidateId], references: [id], onDelete: Cascade)
+  researchRun       ResearchRun? @relation(fields: [researchRunId], references: [id], onDelete: SetNull)
+  decisions         PolicyPromotionDecision[]
+
+  @@index([policyCandidateId, createdAt])
+  @@index([status, createdAt])
+  @@map("policy_promotion_requests")
+}
+
+model PolicyPromotionDecision {
+  id                     String                       @id @default(uuid())
+  policyPromotionRequestId String                     @unique @map("policy_promotion_request_id")
+  policyCandidateId      String                       @map("policy_candidate_id")
+  decisionStatus         PolicyPromotionDecisionStatus @map("decision_status")
+  decisionReasonsJson    Json                         @map("decision_reasons_jsonb")
+  actor                  String                       @default("system")
+  createdAt              DateTime                     @default(now()) @map("created_at")
+  effectiveAt            DateTime?                    @map("effective_at")
+  policyPromotionRequest PolicyPromotionRequest       @relation(fields: [policyPromotionRequestId], references: [id], onDelete: Cascade)
+  policyCandidate        PolicyCandidate              @relation(fields: [policyCandidateId], references: [id], onDelete: Cascade)
+
+  @@index([policyCandidateId, createdAt])
+  @@index([decisionStatus, createdAt])
+  @@map("policy_promotion_decisions")
+}
+
+model ExperimentNote {
+  id           String              @id @default(uuid())
+  projectId    String?             @map("project_id")
+  experimentId String?             @map("experiment_id")
+  researchRunId String?            @map("research_run_id")
+  author       String              @default("system")
+  noteText     String              @map("note_text")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  project      ResearchProject?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  experiment   ResearchExperiment? @relation(fields: [experimentId], references: [id], onDelete: SetNull)
+  researchRun  ResearchRun?        @relation(fields: [researchRunId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, experimentId, createdAt])
+  @@index([researchRunId, createdAt])
+  @@map("experiment_notes")
+}
+
+model ExperimentTag {
+  id           String              @id @default(uuid())
+  projectId    String?             @map("project_id")
+  experimentId String?             @map("experiment_id")
+  tag          String
+  createdAt    DateTime            @default(now()) @map("created_at")
+  project      ResearchProject?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  experiment   ResearchExperiment? @relation(fields: [experimentId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, experimentId, tag])
+  @@index([tag, createdAt])
+  @@map("experiment_tags")
 }
 
 model BankrollAccount {
