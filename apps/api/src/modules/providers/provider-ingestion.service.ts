@@ -1,4 +1,5 @@
 ﻿import { Injectable, Logger } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { MatchStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
@@ -180,6 +181,19 @@ export class ProviderIngestionService {
 
   private clampNumeric(value: number, min: number, max: number) {
     return Math.max(min, Math.min(max, value));
+  }
+
+  private toNumber(value: unknown, fallback = 0) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return fallback;
   }
 
   private async loadPredictionRiskTuningSettings(): Promise<PredictionRiskTuningSettings> {
@@ -954,7 +968,7 @@ export class ProviderIngestionService {
             now
           });
 
-          await this.prisma.prediction.upsert({
+          const storedPrediction = await this.prisma.prediction.upsert({
             where: { matchId: match.id },
             update: {
               modelVersionId: activeModel?.id ?? null,
@@ -994,6 +1008,36 @@ export class ProviderIngestionService {
               dataSource: "generated"
             }
           });
+
+          const calibratedBasketball = this.toRecord(basketball.calibratedProbabilities) ?? {};
+          const homeWinProbability = this.toNumber(calibratedBasketball.home, 0.5);
+          const awayWinProbability = this.toNumber(calibratedBasketball.away, 0.5);
+          const pickProbability = Math.max(homeWinProbability, awayWinProbability);
+
+          try {
+            await this.writePublishedPredictionRun({
+              matchId: match.id,
+              matchStatus: match.status,
+              market: "moneyline",
+              line: null,
+              modelVersionId: storedPrediction.modelVersionId ?? activeModel?.id ?? null,
+              probability: pickProbability,
+              confidence: basketball.confidenceScore,
+              riskFlags: basketball.riskFlags,
+              explanation: {
+                summary: basketball.summary,
+                avoidReason: basketball.avoidReason,
+                selectedSide: homeWinProbability >= awayWinProbability ? "home" : "away"
+              }
+            });
+          } catch (error) {
+            this.logger.warn(
+              `prediction_runs write skipped for basketball match ${match.id}: ${
+                error instanceof Error ? error.message : "unknown"
+              }`
+            );
+          }
+
           written += 1;
           continue;
         }
@@ -1354,7 +1398,7 @@ export class ProviderIngestionService {
               ? "Degiskenlik yuksek, kesin sonuc beklentisi onerilmez."
               : null;
 
-        await this.prisma.prediction.upsert({
+        const storedPrediction = await this.prisma.prediction.upsert({
           where: { matchId: match.id },
           update: {
             modelVersionId: activeModel?.id ?? null,
@@ -1394,6 +1438,41 @@ export class ProviderIngestionService {
             dataSource: "generated"
           }
         });
+
+        const homeWinProbability = this.toNumber(calibratedProbabilities.home, 0.34);
+        const drawProbability = this.toNumber(calibratedProbabilities.draw, 0.33);
+        const awayWinProbability = this.toNumber(calibratedProbabilities.away, 0.33);
+        const pickProbability = Math.max(homeWinProbability, drawProbability, awayWinProbability);
+
+        try {
+          await this.writePublishedPredictionRun({
+            matchId: match.id,
+            matchStatus: match.status,
+            market: "match_outcome",
+            line: null,
+            modelVersionId: storedPrediction.modelVersionId ?? activeModel?.id ?? null,
+            probability: pickProbability,
+            confidence: confidenceScore,
+            riskFlags: uniqueRiskFlags,
+            explanation: {
+              summary,
+              avoidReason,
+              selectedSide:
+                pickProbability === homeWinProbability
+                  ? "home"
+                  : pickProbability === drawProbability
+                    ? "draw"
+                    : "away"
+            }
+          });
+        } catch (error) {
+          this.logger.warn(
+            `prediction_runs write skipped for football match ${match.id}: ${
+              error instanceof Error ? error.message : "unknown"
+            }`
+          );
+        }
+
         written += 1;
       } catch (error) {
         errors += 1;
@@ -2518,6 +2597,190 @@ export class ProviderIngestionService {
     });
   }
 
+  private hashPayload(payload: unknown) {
+    return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
+  }
+
+  private toDateOrNull(value: unknown) {
+    if (value instanceof Date && Number.isFinite(value.getTime())) {
+      return value;
+    }
+    if (typeof value === "string" || typeof value === "number") {
+      const parsed = new Date(value);
+      if (Number.isFinite(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  private providerSourcePriority(providerKey: string) {
+    const normalized = providerKey.trim().toLowerCase();
+    if (normalized === "football_data") {
+      return 100;
+    }
+    if (normalized === "api_football") {
+      return 95;
+    }
+    if (normalized === "the_sports_db") {
+      return 88;
+    }
+    if (normalized === "sportapi_ai") {
+      return 86;
+    }
+    if (normalized === "api_basketball" || normalized === "api_nba") {
+      return 84;
+    }
+    if (normalized === "ball_dont_lie") {
+      return 80;
+    }
+    return 75;
+  }
+
+  private predictionHorizonByStatus(status: MatchStatus) {
+    if (status === MatchStatus.finished) {
+      return "post_match";
+    }
+    if (status === MatchStatus.live) {
+      return "in_play";
+    }
+    return "pre_match";
+  }
+
+  private lineKey(line?: number | null) {
+    if (line === null || line === undefined || !Number.isFinite(line)) {
+      return "na";
+    }
+    return Number(line).toFixed(2);
+  }
+
+  private async writeCanonicalMatchRevision(
+    matchId: string,
+    sourcePriority: number,
+    mergedPayload: Record<string, unknown>
+  ) {
+    const payloadHash = this.hashPayload(mergedPayload);
+    const latest = await this.prisma.canonicalMatchRevision.findFirst({
+      where: { matchId },
+      orderBy: { revisionNo: "desc" },
+      select: { id: true, revisionNo: true, payloadHash: true }
+    });
+
+    if (latest?.payloadHash === payloadHash) {
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (latest) {
+        await tx.canonicalMatchRevision.update({
+          where: { id: latest.id },
+          data: { validTo: new Date() }
+        });
+      }
+
+      await tx.canonicalMatchRevision.create({
+        data: {
+          matchId,
+          revisionNo: (latest?.revisionNo ?? 0) + 1,
+          sourcePriority,
+          validFrom: new Date(),
+          validTo: null,
+          payloadHash,
+          mergedJson: mergedPayload as Prisma.InputJsonValue
+        }
+      });
+    });
+  }
+
+  private async writePublishedPredictionRun(input: {
+    matchId: string;
+    matchStatus: MatchStatus;
+    market: string;
+    line?: number | null;
+    modelVersionId?: string | null;
+    probability: number;
+    confidence: number;
+    riskFlags: unknown;
+    explanation: Record<string, unknown>;
+  }) {
+    const normalizedProbability = Number.isFinite(input.probability)
+      ? Math.max(0.0001, Math.min(0.9999, Number(input.probability.toFixed(6))))
+      : 0.5;
+    const normalizedConfidence = Number.isFinite(input.confidence)
+      ? Math.max(0, Math.min(1, Number(input.confidence.toFixed(6))))
+      : 0.5;
+    const line = input.line === undefined || input.line === null ? null : Number(input.line.toFixed(2));
+    const lineKey = this.lineKey(line);
+    const horizon = this.predictionHorizonByStatus(input.matchStatus);
+
+    const [featureSnapshot, oddsSnapshot] = await Promise.all([
+      this.prisma.featureSnapshot.findFirst({
+        where: { matchId: input.matchId, horizon },
+        orderBy: { generatedAt: "desc" },
+        select: { id: true }
+      }),
+      this.prisma.oddsSnapshotV2.findFirst({
+        where: {
+          matchId: input.matchId,
+          market: input.market,
+          ...(line === null ? { line: null } : { line })
+        },
+        orderBy: { collectedAt: "desc" },
+        select: { id: true, normalizedProb: true }
+      })
+    ]);
+
+    const marketProbability = oddsSnapshot?.normalizedProb ?? null;
+    const edge =
+      marketProbability !== null ? Number((normalizedProbability - marketProbability).toFixed(6)) : null;
+    const fairOdds = Number((1 / normalizedProbability).toFixed(6));
+
+    const run = await this.prisma.predictionRun.create({
+      data: {
+        matchId: input.matchId,
+        market: input.market,
+        line,
+        lineKey,
+        horizon,
+        featureSnapshotId: featureSnapshot?.id ?? null,
+        oddsSnapshotId: oddsSnapshot?.id ?? null,
+        modelVersionId: input.modelVersionId ?? null,
+        calibrationVersionId: null,
+        probability: normalizedProbability,
+        fairOdds,
+        edge,
+        confidence: normalizedConfidence,
+        riskFlagsJson: (input.riskFlags ?? []) as Prisma.InputJsonValue,
+        explanationJson: input.explanation as Prisma.InputJsonValue
+      }
+    });
+
+    await this.prisma.publishedPrediction.upsert({
+      where: {
+        matchId_market_lineKey_horizon: {
+          matchId: input.matchId,
+          market: input.market,
+          lineKey,
+          horizon
+        }
+      },
+      update: {
+        line,
+        predictionRunId: run.id,
+        publishedAt: new Date()
+      },
+      create: {
+        matchId: input.matchId,
+        market: input.market,
+        line,
+        lineKey,
+        horizon,
+        predictionRunId: run.id,
+        publishedAt: new Date()
+      }
+    });
+  }
+
   private async createExternalPayload(providerKey: string, runId: string, entityType: string, payload: Record<string, unknown>) {
     await this.prisma.externalSourcePayload.create({
       data: {
@@ -2527,6 +2790,31 @@ export class ProviderIngestionService {
         payload: payload as Prisma.InputJsonValue
       }
     });
+
+    const sourceUpdatedAt =
+      this.toDateOrNull(payload.updatedAt) ??
+      this.toDateOrNull(payload.lastUpdatedAt) ??
+      this.toDateOrNull(payload.sourceUpdatedAt);
+
+    try {
+      await this.prisma.rawProviderPayload.create({
+        data: {
+          provider: providerKey,
+          entityType,
+          providerEntityId: runId,
+          sourceUpdatedAt,
+          pulledAt: new Date(),
+          payloadHash: this.hashPayload(payload),
+          payloadJson: payload as Prisma.InputJsonValue
+        }
+      });
+    } catch (error) {
+      this.logger.warn(
+        `raw_provider_payloads write skipped for ${providerKey}/${entityType}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`
+      );
+    }
   }
 
   private async upsertMatchFromExternal(input: MatchSeedInput) {
@@ -2864,6 +3152,42 @@ export class ProviderIngestionService {
         mappingConfidence: 0.95
       }
     });
+
+    try {
+      await this.writeCanonicalMatchRevision(match.id, this.providerSourcePriority(input.providerKey), {
+        providerKey: input.providerKey,
+        providerMatchKey: input.providerMatchKey,
+        sportCode: input.sportCode,
+        leagueId: league.id,
+        seasonId: season.id,
+        homeTeamId: homeTeam.id,
+        awayTeamId: awayTeam.id,
+        matchDateTimeUTC: input.kickoffAt.toISOString(),
+        status: merged.status,
+        score: {
+          home: merged.homeScore,
+          away: merged.awayScore,
+          halfTimeHome: merged.halfTimeHomeScore,
+          halfTimeAway: merged.halfTimeAwayScore
+        },
+        ratings: {
+          homeElo: merged.homeElo,
+          awayElo: merged.awayElo,
+          form5Home: merged.form5Home,
+          form5Away: merged.form5Away
+        },
+        source: {
+          dataSource: input.dataSource,
+          importedAt: now.toISOString()
+        }
+      });
+    } catch (error) {
+      this.logger.warn(
+        `canonical_match_revisions write skipped for match ${match.id}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`
+      );
+    }
 
     return match.id;
   }

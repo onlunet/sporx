@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma, Provider } from "@prisma/client";
 import { CacheService } from "../../cache/cache.service";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -96,6 +96,10 @@ export class OddsIngestionService {
     });
   }
 
+  private hashPayload(payload: unknown) {
+    return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
+  }
+
   private async createPayload(providerKey: string, entityType: string, payload: Prisma.InputJsonValue) {
     await this.prisma.externalSourcePayload.create({
       data: {
@@ -104,6 +108,22 @@ export class OddsIngestionService {
         payload
       }
     });
+
+    try {
+      await this.prisma.rawProviderPayload.create({
+        data: {
+          provider: providerKey,
+          entityType,
+          providerEntityId: null,
+          sourceUpdatedAt: null,
+          pulledAt: new Date(),
+          payloadHash: this.hashPayload(payload),
+          payloadJson: payload
+        }
+      });
+    } catch {
+      // Backward-compatible fallback when v2 pipeline tables are not present yet.
+    }
   }
 
   private extractEvents(rawEvents: Array<Record<string, unknown>>): SimpleEvent[] {
@@ -444,6 +464,27 @@ export class OddsIngestionService {
           isClosingCandidate: entry.isClosingCandidate
         }))
       });
+
+      try {
+        await this.prisma.oddsSnapshotV2.createMany({
+          data: normalizedEntries.map((entry) => ({
+            id: randomUUID(),
+            matchId: entry.matchId,
+            provider: provider.key,
+            bookmaker: entry.bookmaker,
+            market: entry.marketType,
+            line: entry.line,
+            selection: entry.selectionKey,
+            decimalOdds: entry.oddsValue,
+            rawImpliedProb: entry.impliedProbability,
+            normalizedProb: entry.fairProbability ?? entry.impliedProbability,
+            shinProb: null,
+            collectedAt: entry.capturedAt
+          }))
+        });
+      } catch {
+        // Backward-compatible fallback when v2 pipeline tables are not present yet.
+      }
     }
 
     await this.createPayload(provider.key, "odds_snapshots", {

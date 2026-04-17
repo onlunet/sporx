@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { Prisma, MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
@@ -45,6 +46,43 @@ export class MatchContextEnrichmentService {
     }
     const normalized = hash / 10000;
     return Number((min + (max - min) * normalized).toFixed(3));
+  }
+
+  private hashPayload(payload: unknown) {
+    return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
+  }
+
+  private horizonByStatus(status: MatchStatus) {
+    if (status === MatchStatus.finished) {
+      return "post_match";
+    }
+    if (status === MatchStatus.live) {
+      return "in_play";
+    }
+    return "pre_match";
+  }
+
+  private async writeFeatureSnapshotV2(input: UpsertContextInput, features: Record<string, unknown>) {
+    const horizon = this.horizonByStatus(input.status);
+    const now = new Date();
+    const cutoffAt = input.status === MatchStatus.scheduled && input.kickoffAt.getTime() > now.getTime() ? now : input.kickoffAt;
+    const featureHash = this.hashPayload(features);
+
+    try {
+      await this.prisma.featureSnapshot.create({
+        data: {
+          matchId: input.matchId,
+          horizon,
+          featureSetVersion: "context_enrichment_v1",
+          cutoffAt,
+          generatedAt: now,
+          featureHash,
+          featuresJson: features as Prisma.InputJsonValue
+        }
+      });
+    } catch {
+      // Backward-compatible fallback when v2 pipeline tables are not present yet.
+    }
   }
 
   private toRecord(value: unknown): Record<string, unknown> | null {
@@ -333,6 +371,8 @@ export class MatchContextEnrichmentService {
           features: features as Prisma.InputJsonValue
         }
       });
+
+      await this.writeFeatureSnapshotV2(input, features);
 
       return features;
     } catch (error) {
