@@ -2135,6 +2135,84 @@ export class ProviderIngestionService {
     return Math.round(parsed);
   }
 
+  private parseScorePair(value: unknown) {
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    const normalized = value.trim();
+    if (normalized.length === 0) {
+      return null;
+    }
+
+    const match = normalized.match(/(\d+)\s*[-:]\s*(\d+)/);
+    if (!match) {
+      return null;
+    }
+
+    const home = this.toNullableScore(match[1]);
+    const away = this.toNullableScore(match[2]);
+    if (home === null || away === null) {
+      return null;
+    }
+
+    return { home, away };
+  }
+
+  private readHalfTimeScorePair(row: Record<string, unknown>) {
+    const directHome = this.readHalfTimeScore(row, "home");
+    const directAway = this.readHalfTimeScore(row, "away");
+    if (directHome !== null && directAway !== null) {
+      return { home: directHome, away: directAway };
+    }
+
+    const nestedCandidates = [
+      row.halfTime,
+      row.halftime,
+      row.half_time,
+      row.ht,
+      row.ht_score,
+      row.htScore,
+      row.firstHalf,
+      row.first_half,
+      row.firstHalfScore,
+      row.first_half_score
+    ];
+
+    for (const candidate of nestedCandidates) {
+      const nested = this.toRecord(candidate);
+      if (!nested) {
+        continue;
+      }
+      const nestedHome = this.toNullableScore(nested.home) ?? this.readHalfTimeScore(nested, "home");
+      const nestedAway = this.toNullableScore(nested.away) ?? this.readHalfTimeScore(nested, "away");
+      if (nestedHome !== null && nestedAway !== null) {
+        return { home: nestedHome, away: nestedAway };
+      }
+    }
+
+    const stringCandidates = [
+      row.strHTScore,
+      row.strHalfTime,
+      row.strHalfScore,
+      row.half_time_score,
+      row.halftime_score,
+      row.ht_score
+    ];
+
+    for (const candidate of stringCandidates) {
+      const parsed = this.parseScorePair(candidate);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return {
+      home: directHome,
+      away: directAway
+    };
+  }
+
   private readHalfTimeScore(row: Record<string, unknown>, side: "home" | "away") {
     const keyCandidates =
       side === "home"
@@ -2144,7 +2222,11 @@ export class ProviderIngestionService {
             "ht_home_score",
             "half_time_home_score",
             "score_ht_home",
-            "home_half_score"
+            "home_half_score",
+            "intHomeScoreHT",
+            "intHomeScore1stHalf",
+            "home_ht",
+            "homeHalfTimeScore"
           ]
         : [
             "away_ht_score",
@@ -2152,7 +2234,11 @@ export class ProviderIngestionService {
             "ht_away_score",
             "half_time_away_score",
             "score_ht_away",
-            "away_half_score"
+            "away_half_score",
+            "intAwayScoreHT",
+            "intAwayScore1stHalf",
+            "away_ht",
+            "awayHalfTimeScore"
           ];
 
     for (const key of keyCandidates) {
@@ -2239,7 +2325,33 @@ export class ProviderIngestionService {
 
   async rewindFootballResultsCheckpoints(daysBack: number) {
     const safeDaysBack = Math.max(1, Math.min(365, Math.trunc(daysBack)));
-    const cursor = this.todayDateString(-safeDaysBack);
+    const defaultCursor = this.todayDateString(-safeDaysBack);
+    const fromDate = new Date(`${defaultCursor}T00:00:00.000Z`);
+    const oldestMissingHalfTime = await this.prisma.match.findFirst({
+      where: {
+        sport: { code: "football" },
+        status: MatchStatus.finished,
+        matchDateTimeUTC: { gte: fromDate },
+        OR: [{ halfTimeHomeScore: null }, { halfTimeAwayScore: null }]
+      },
+      orderBy: { matchDateTimeUTC: "asc" },
+      select: { matchDateTimeUTC: true }
+    });
+
+    const missingHalfTimeCount = await this.prisma.match.count({
+      where: {
+        sport: { code: "football" },
+        status: MatchStatus.finished,
+        matchDateTimeUTC: { gte: fromDate },
+        OR: [{ halfTimeHomeScore: null }, { halfTimeAwayScore: null }]
+      }
+    });
+
+    const oldestMissingCursor =
+      oldestMissingHalfTime !== null
+        ? new Date(oldestMissingHalfTime.matchDateTimeUTC.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : null;
+    const cursor = oldestMissingCursor && oldestMissingCursor < defaultCursor ? oldestMissingCursor : defaultCursor;
     const activeProviders = await this.providersService.listActiveApiProviders();
     const providerKeys = activeProviders.map((provider) => provider.key);
 
@@ -2250,7 +2362,9 @@ export class ProviderIngestionService {
     return {
       cursor,
       daysBack: safeDaysBack,
-      providers: providerKeys
+      providers: providerKeys,
+      missingHalfTimeCount,
+      oldestMissingHalfTimeAt: oldestMissingHalfTime?.matchDateTimeUTC ?? null
     };
   }
 
@@ -3161,6 +3275,10 @@ export class ProviderIngestionService {
           const scoreObj = (raw.score as Record<string, unknown> | undefined) ?? {};
           const fullTimeObj = (scoreObj.fullTime as Record<string, unknown> | undefined) ?? {};
           const halfTimeObj = (scoreObj.halfTime as Record<string, unknown> | undefined) ?? {};
+          const halfTimeFromNested = this.readHalfTimeScorePair(halfTimeObj);
+          const halfTimeFromScore = this.readHalfTimeScorePair(scoreObj);
+          const halfTimeHomeScore = halfTimeFromNested.home ?? halfTimeFromScore.home;
+          const halfTimeAwayScore = halfTimeFromNested.away ?? halfTimeFromScore.away;
 
           const kickoffAt = this.parseEventDate(raw.utcDate);
           const homeTeamName = String(homeTeamObj.name ?? "").trim();
@@ -3190,8 +3308,8 @@ export class ProviderIngestionService {
             status: this.footballStatus(String(raw.status ?? "SCHEDULED")),
             homeScore: this.toNullableScore(fullTimeObj.home),
             awayScore: this.toNullableScore(fullTimeObj.away),
-            halfTimeHomeScore: this.toNullableScore(halfTimeObj.home),
-            halfTimeAwayScore: this.toNullableScore(halfTimeObj.away),
+            halfTimeHomeScore,
+            halfTimeAwayScore,
             refereeName,
             dataSource: provider.key
           });
@@ -3818,6 +3936,7 @@ export class ProviderIngestionService {
           ? this.footballStatus(String(event.strStatus ?? "SCHEDULED"))
           : this.basketballStatus(String(event.strStatus ?? "Scheduled"));
       const refereeName = typeof event.strReferee === "string" && event.strReferee.trim().length > 0 ? String(event.strReferee) : null;
+      const halfTimePair = this.readHalfTimeScorePair(event);
 
       await this.upsertMatchFromExternal({
         providerId: provider.id,
@@ -3835,6 +3954,8 @@ export class ProviderIngestionService {
         status,
         homeScore: this.toNullableScore(event.intHomeScore),
         awayScore: this.toNullableScore(event.intAwayScore),
+        halfTimeHomeScore: halfTimePair.home,
+        halfTimeAwayScore: halfTimePair.away,
         refereeName,
         dataSource: provider.key
       });
@@ -4676,6 +4797,11 @@ export class ProviderIngestionService {
       const goals = (fixtureEntry.goals as Record<string, unknown> | undefined) ?? {};
       const score = (fixtureEntry.score as Record<string, unknown> | undefined) ?? {};
       const halfTimeScore = (score.halftime as Record<string, unknown> | undefined) ?? {};
+      const halfTimeFromNested = this.readHalfTimeScorePair(halfTimeScore);
+      const halfTimeFromScore = this.readHalfTimeScorePair(score);
+      const halfTimeFromFixture = this.readHalfTimeScorePair(fixtureEntry);
+      const halfTimeHomeScore = halfTimeFromNested.home ?? halfTimeFromScore.home ?? halfTimeFromFixture.home;
+      const halfTimeAwayScore = halfTimeFromNested.away ?? halfTimeFromScore.away ?? halfTimeFromFixture.away;
 
       if (leagueIdFilters.length > 0 && !leagueIdFilters.includes(String(league.id ?? "").trim())) {
         continue;
@@ -4717,8 +4843,8 @@ export class ProviderIngestionService {
         status: this.footballStatus(String((fixture.status as Record<string, unknown> | undefined)?.short ?? "SCHEDULED")),
         homeScore: this.toNullableScore(goals.home),
         awayScore: this.toNullableScore(goals.away),
-        halfTimeHomeScore: this.toNullableScore(halfTimeScore.home),
-        halfTimeAwayScore: this.toNullableScore(halfTimeScore.away),
+        halfTimeHomeScore,
+        halfTimeAwayScore,
         refereeName,
         dataSource: provider.key
       });
