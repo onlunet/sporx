@@ -13,12 +13,12 @@ export default async function LeaguesPage() {
   
   return (
     <div className='space-y-8'>
-      <div className='relative overflow-hidden rounded-3xl bg-gradient-to-br from-surface via-abyss to-void border border-white/10 p-8'>
+      <div className='relative overflow-hidden rounded-3xl bg-gradient-to-br from-surface via-abyss to-void border border-white/10 p-4 sm:p-6 lg:p-8'>
         <div className='absolute top-0 right-0 w-96 h-96 bg-neon-purple/10 rounded-full blur-[100px] pointer-events-none' />
         <div className='absolute bottom-0 left-0 w-64 h-64 bg-neon-cyan/10 rounded-full blur-[80px] pointer-events-none' />
         
         <div className='relative'>
-          <div className='flex items-center gap-3 mb-3'>
+          <div className='flex flex-col sm:flex-row sm:items-center gap-3 mb-3'>
             <div className='w-12 h-12 rounded-xl bg-gradient-to-br from-neon-purple to-neon-cyan flex items-center justify-center'>
               <Globe className='w-6 h-6 text-void' />
             </div>

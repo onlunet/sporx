@@ -10,7 +10,7 @@ export function LeagueStats({ leagues }: LeagueStatsProps) {
   const internationalLeagues = leagues.filter(l => !l.country).length;
   
   return (
-    <div className='grid grid-cols-3 gap-4'>
+    <div className='grid grid-cols-1 sm:grid-cols-3 gap-4'>
       <div className='glass-card rounded-xl p-4 text-center'>
         <div className='w-10 h-10 mx-auto mb-2 rounded-lg bg-neon-cyan/20 flex items-center justify-center'>
           <Trophy className='w-5 h-5 text-neon-cyan' />

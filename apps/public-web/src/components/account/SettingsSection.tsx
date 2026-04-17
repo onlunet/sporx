@@ -9,7 +9,7 @@ interface SettingItemProps {
 
 function SettingItem({ icon, label, description, action }: SettingItemProps) {
   return (
-    <div className='flex items-center justify-between py-4 border-b border-white/5 last:border-0'>
+    <div className='flex flex-col sm:flex-row sm:items-center justify-between py-4 border-b border-white/5 last:border-0 gap-3'>
       <div className='flex items-center gap-3'>
         <div className='w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center'>
           {icon}

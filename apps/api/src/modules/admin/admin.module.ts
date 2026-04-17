@@ -15,9 +15,11 @@ import { IngestionModule } from "../ingestion/ingestion.module";
 import { HistoricalImportModule } from "../historical-import/historical-import.module";
 import { ProvidersModule } from "../providers/providers.module";
 import { TeamsModule } from "../teams/teams.module";
+import { CalibrationModule } from "../calibration/calibration.module";
+import { PredictionsModule } from "../predictions/predictions.module";
 
 @Module({
-  imports: [IngestionModule, HistoricalImportModule, ProvidersModule, TeamsModule],
+  imports: [IngestionModule, HistoricalImportModule, ProvidersModule, TeamsModule, CalibrationModule, PredictionsModule],
   controllers: [
     AdminIngestionController,
     AdminImportController,

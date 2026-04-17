@@ -40,7 +40,7 @@ export class AnalyticsService {
         `
         SELECT
           GREATEST(COALESCE((SELECT reltuples FROM pg_class WHERE oid = to_regclass('"Match"')), 0), 0)::bigint AS "matchCount",
-          GREATEST(COALESCE((SELECT reltuples FROM pg_class WHERE oid = to_regclass('"Prediction"')), 0), 0)::bigint AS "predictionCount",
+          GREATEST(COALESCE((SELECT reltuples FROM pg_class WHERE oid = to_regclass('published_predictions')), 0), 0)::bigint AS "predictionCount",
           GREATEST(COALESCE((SELECT reltuples FROM pg_class WHERE oid = to_regclass('"FailedPredictionAnalysis"')), 0), 0)::bigint AS "failedCount"
       `
       );
@@ -62,9 +62,16 @@ export class AnalyticsService {
   private async estimateLowConfidenceCount(predictionCount: number) {
     try {
       const sample = await queryWithTimeout(
-        this.prisma.prediction.findMany({
-          select: { isLowConfidence: true },
-          orderBy: { createdAt: "desc" },
+        this.prisma.publishedPrediction.findMany({
+          select: {
+            predictionRun: {
+              select: {
+                confidence: true,
+                explanationJson: true
+              }
+            }
+          },
+          orderBy: { publishedAt: "desc" },
           take: 1000
         }),
         1200
@@ -73,7 +80,19 @@ export class AnalyticsService {
       if (sample.length === 0) {
         return 0;
       }
-      const lowSample = sample.reduce((acc, row) => acc + (row.isLowConfidence ? 1 : 0), 0);
+      const lowSample = sample.reduce((acc, row) => {
+        const explanation =
+          row.predictionRun.explanationJson &&
+          typeof row.predictionRun.explanationJson === "object" &&
+          !Array.isArray(row.predictionRun.explanationJson)
+            ? (row.predictionRun.explanationJson as Record<string, unknown>)
+            : null;
+        const explanationLowConfidence = explanation && typeof explanation.isLowConfidence === "boolean"
+          ? explanation.isLowConfidence
+          : null;
+        const lowConfidence = explanationLowConfidence ?? row.predictionRun.confidence < 0.54;
+        return acc + (lowConfidence ? 1 : 0);
+      }, 0);
       const ratio = lowSample / sample.length;
       return Math.max(0, Math.round(predictionCount * ratio));
     } catch {
@@ -82,7 +101,7 @@ export class AnalyticsService {
   }
 
   async dashboard() {
-    const cacheKey = "analytics:dashboard:v2";
+    const cacheKey = "analytics:dashboard:v3";
     const cached = await this.cache.get<unknown>(cacheKey);
     if (cached) {
       return cached;
@@ -92,8 +111,17 @@ export class AnalyticsService {
       const estimated = await this.estimateTableCounts();
       const [matchCountResult, predictionCountResult, lowConfidenceResult, failedCountResult] = await Promise.allSettled([
         queryWithTimeout(this.prisma.match.count(), 1400),
-        queryWithTimeout(this.prisma.prediction.count(), 1400),
-        queryWithTimeout(this.prisma.prediction.count({ where: { isLowConfidence: true } }), 1400),
+        queryWithTimeout(this.prisma.publishedPrediction.count(), 1400),
+        queryWithTimeout(
+          this.prisma.publishedPrediction.count({
+            where: {
+              predictionRun: {
+                confidence: { lt: 0.54 }
+              }
+            }
+          }),
+          1400
+        ),
         queryWithTimeout(this.prisma.failedPredictionAnalysis.count(), 1400)
       ]);
 

@@ -76,3 +76,51 @@ Script kontrol eder:
 Mixed-content hatasını önlemek için production ortamında:
 - `INTERNAL_API_URL=https://<api-domain>`
 - `NEXT_PUBLIC_API_URL=` (boş bırak)
+
+## Point-in-time prediction flow (football)
+Yeni akış immutable ve replay-safe olacak şekilde aşağıdaki sırayı izler:
+1. `ingestRaw`
+2. `canonicalMerge`
+3. `featureSnapshot`
+4. `oddsSnapshot`
+5. `lineupSnapshot`
+6. `eventEnrichment`
+7. `marketConsensus`
+8. `predictionRun`
+9. `metaModelRefine`
+10. `calibrateScore`
+11. `candidateBuild`
+12. `selectionScore`
+13. `abstainFilter`
+14. `conflictResolution`
+15. `publishDecision`
+16. `publicPublish`
+17. `invalidateCache`
+
+`prediction_runs` immutable tutulur, public taraf sadece `published_predictions` pointer kaynağından okunur.
+
+## Publish Selection Engine (v1 deterministic)
+- Amaç: model olasılığı ile public yayını ayırmak, düşük kaliteli tahminleri açıklanabilir şekilde abstain etmek.
+- Strategy profilleri:
+  - `CONSERVATIVE`
+  - `BALANCED`
+  - `AGGRESSIVE`
+- Temel ayarlar (`system_settings`):
+  - `selection_engine_enabled`
+  - `selection_engine_shadow_mode`
+  - `strategy_profile_default`
+  - `selection_engine_emergency_rollback`
+
+### Karar kayıtları
+- `prediction_candidates`: immutable aday satırları
+- `publish_decisions`: nihai karar (`APPROVED`, `ABSTAINED`, `SUPPRESSED`, `BLOCKED`, `MANUALLY_FORCED`)
+- `abstain_reason_logs`: deterministik gerekçeler
+- `manual_publish_overrides`: force/block override kayıtları
+- `policy_evaluation_snapshots`: policy değerlendirme izi
+
+### Public davranış
+- Public API varsayılan olarak sadece:
+  - `APPROVED`
+  - `MANUALLY_FORCED`
+  kararına bağlı yayımları döner.
+- Shadow mode açıkken selector kararı loglanır; üretim akışı kesintisiz devam eder.

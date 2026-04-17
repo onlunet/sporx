@@ -1,10 +1,11 @@
 import { Injectable } from "@nestjs/common";
-import { MatchStatus } from "@prisma/client";
+import { MatchStatus, PublishDecisionStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { OddsService } from "../odds/odds.service";
 import { ExpandedPredictionItem } from "./prediction-markets.util";
 import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
+import { PipelineRolloutService } from "./pipeline-rollout.service";
 
 type ListPredictionsParams = {
   status?: string;
@@ -28,6 +29,11 @@ const MATCH_STATUS_SET = new Set<MatchStatus>([
   MatchStatus.postponed,
   MatchStatus.cancelled
 ]);
+
+const FINAL_PUBLISH_DECISION_STATUSES: PublishDecisionStatus[] = [
+  PublishDecisionStatus.APPROVED,
+  PublishDecisionStatus.MANUALLY_FORCED
+];
 
 const PREDICTION_TYPE_SET = new Set([
   "fullTimeResult",
@@ -270,6 +276,231 @@ const PREDICTION_MATCH_SELECT = {
   sport: { select: { code: true } }
 } as const;
 
+type PublishedPredictionRecord = {
+  matchId: string;
+  market: string;
+  line: number | null;
+  lineKey: string;
+  horizon: string;
+  publishedAt: Date;
+  predictionRun: {
+    modelVersionId: string | null;
+    probability: number;
+    confidence: number;
+    riskFlagsJson: unknown;
+    explanationJson: unknown;
+    createdAt: Date;
+  };
+  match: {
+    sport: { code: string } | null;
+    status: MatchStatus;
+    matchDateTimeUTC: Date;
+    homeScore: number | null;
+    awayScore: number | null;
+    halfTimeHomeScore: number | null;
+    halfTimeAwayScore: number | null;
+    q1HomeScore: number | null;
+    q1AwayScore: number | null;
+    q2HomeScore: number | null;
+    q2AwayScore: number | null;
+    q3HomeScore: number | null;
+    q3AwayScore: number | null;
+    q4HomeScore: number | null;
+    q4AwayScore: number | null;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+    league: { id: string; name: string; code: string | null } | null;
+  };
+};
+
+type LegacyPredictionRecord = {
+  matchId: string;
+  modelVersionId: string | null;
+  probabilities: unknown;
+  calibratedProbabilities: unknown;
+  rawProbabilities: unknown;
+  expectedScore: unknown;
+  confidenceScore: number;
+  summary: string;
+  riskFlags: unknown;
+  avoidReason: string | null;
+  updatedAt: Date;
+  match: {
+    sport: { code: string } | null;
+    status: MatchStatus;
+    matchDateTimeUTC: Date;
+    homeScore: number | null;
+    awayScore: number | null;
+    halfTimeHomeScore: number | null;
+    halfTimeAwayScore: number | null;
+    q1HomeScore: number | null;
+    q1AwayScore: number | null;
+    q2HomeScore: number | null;
+    q2AwayScore: number | null;
+    q3HomeScore: number | null;
+    q3AwayScore: number | null;
+    q4HomeScore: number | null;
+    q4AwayScore: number | null;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+    league: { id: string; name: string; code: string | null } | null;
+  };
+};
+
+type NormalizedPredictionRow = {
+  matchId: string;
+  modelVersionId: string | null;
+  probabilities: unknown;
+  calibratedProbabilities: unknown;
+  rawProbabilities: unknown;
+  expectedScore: unknown;
+  confidenceScore: number;
+  summary: string;
+  riskFlags: unknown;
+  avoidReason: string | null;
+  updatedAt: Date;
+  match: LegacyPredictionRecord["match"];
+};
+
+const PUBLISHED_PREDICTION_INCLUDE = {
+  predictionRun: {
+    select: {
+      modelVersionId: true,
+      probability: true,
+      confidence: true,
+      riskFlagsJson: true,
+      explanationJson: true,
+      createdAt: true
+    }
+  },
+  match: {
+    select: {
+      ...PREDICTION_MATCH_SELECT,
+      q1HomeScore: true,
+      q1AwayScore: true,
+      q2HomeScore: true,
+      q2AwayScore: true,
+      q3HomeScore: true,
+      q3AwayScore: true,
+      q4HomeScore: true,
+      q4AwayScore: true
+    }
+  }
+} as const;
+
+const LEGACY_PREDICTION_INCLUDE = {
+  match: {
+    select: {
+      ...PREDICTION_MATCH_SELECT,
+      q1HomeScore: true,
+      q1AwayScore: true,
+      q2HomeScore: true,
+      q2AwayScore: true,
+      q3HomeScore: true,
+      q3AwayScore: true,
+      q4HomeScore: true,
+      q4AwayScore: true
+    }
+  }
+} as const;
+
+function normalizeOutcomeFromSide(side: "home" | "draw" | "away", probability: number) {
+  const clamped = Math.max(0.0001, Math.min(0.9999, Number(probability.toFixed(6))));
+  const rest = Math.max(0.0001, 1 - clamped);
+  if (side === "home") {
+    const draw = Number((rest * 0.36).toFixed(4));
+    const away = Number((1 - clamped - draw).toFixed(4));
+    return { home: Number(clamped.toFixed(4)), draw, away };
+  }
+  if (side === "draw") {
+    const home = Number((rest * 0.5).toFixed(4));
+    const away = Number((1 - clamped - home).toFixed(4));
+    return { home, draw: Number(clamped.toFixed(4)), away };
+  }
+  const draw = Number((rest * 0.36).toFixed(4));
+  const home = Number((1 - clamped - draw).toFixed(4));
+  return { home, draw, away: Number(clamped.toFixed(4)) };
+}
+
+function fallbackProbabilitiesByMarket(
+  market: string,
+  probability: number,
+  explanation: Record<string, unknown> | null
+) {
+  const selectedSideRaw = explanation && typeof explanation.selectedSide === "string" ? explanation.selectedSide : "home";
+  const selectedSide =
+    selectedSideRaw === "away" || selectedSideRaw === "draw" || selectedSideRaw === "home"
+      ? selectedSideRaw
+      : "home";
+  if (market === "moneyline") {
+    const clamped = Math.max(0.0001, Math.min(0.9999, Number(probability.toFixed(6))));
+    const away = Number((1 - clamped).toFixed(4));
+    return {
+      home: Number(clamped.toFixed(4)),
+      away
+    };
+  }
+  return normalizeOutcomeFromSide(selectedSide, probability);
+}
+
+function normalizePublishedRow(row: PublishedPredictionRecord) {
+  const explanation = asRecord(row.predictionRun.explanationJson);
+  const probabilitiesFromExplanation = explanation ? explanation.probabilities : null;
+  const calibratedFromExplanation = explanation ? explanation.calibratedProbabilities : null;
+  const rawFromExplanation = explanation ? explanation.rawProbabilities : null;
+  const expectedScoreFromExplanation = explanation ? explanation.expectedScore : null;
+  const summaryFromExplanation = explanation && typeof explanation.summary === "string" ? explanation.summary : "";
+  const avoidReasonFromExplanation =
+    explanation && typeof explanation.avoidReason === "string" ? explanation.avoidReason : null;
+
+  const fallbackProbabilities = fallbackProbabilitiesByMarket(
+    row.market,
+    row.predictionRun.probability,
+    explanation
+  );
+
+  const probabilities = probabilitiesFromExplanation ?? calibratedFromExplanation ?? fallbackProbabilities;
+  const calibratedProbabilities = calibratedFromExplanation ?? probabilities;
+  const rawProbabilities = rawFromExplanation ?? probabilities;
+  const expectedScore = expectedScoreFromExplanation ?? null;
+  const summary =
+    summaryFromExplanation.length > 0
+      ? summaryFromExplanation
+      : `${row.match.homeTeam.name} - ${row.match.awayTeam.name}: published ${row.market} tahmini.`;
+
+  return {
+    matchId: row.matchId,
+    modelVersionId: row.predictionRun.modelVersionId,
+    probabilities,
+    calibratedProbabilities,
+    rawProbabilities,
+    expectedScore,
+    confidenceScore: row.predictionRun.confidence,
+    summary,
+    riskFlags: row.predictionRun.riskFlagsJson,
+    avoidReason: avoidReasonFromExplanation,
+    updatedAt: row.publishedAt ?? row.predictionRun.createdAt,
+    match: row.match
+  };
+}
+
+function normalizeLegacyRow(row: LegacyPredictionRecord) {
+  return {
+    matchId: row.matchId,
+    modelVersionId: row.modelVersionId,
+    probabilities: row.probabilities,
+    calibratedProbabilities: row.calibratedProbabilities,
+    rawProbabilities: row.rawProbabilities,
+    expectedScore: row.expectedScore,
+    confidenceScore: row.confidenceScore,
+    summary: row.summary,
+    riskFlags: row.riskFlags,
+    avoidReason: row.avoidReason,
+    updatedAt: row.updatedAt,
+    match: row.match
+  };
+}
+
 function buildFallbackExpandedItem(input: {
   matchId: string;
   modelVersionId: string | null;
@@ -352,141 +583,106 @@ export class PredictionsService {
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
     private readonly oddsService: OddsService,
-    private readonly predictionStrategyRegistry: PredictionSportStrategyRegistry
+    private readonly predictionStrategyRegistry: PredictionSportStrategyRegistry,
+    private readonly pipelineRolloutService: PipelineRolloutService
   ) {}
 
-  async list(params?: ListPredictionsParams) {
-    const statuses = parseStatusFilter(params?.status);
-    const sportCode = parseSportFilter(params?.sport);
-    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
-    const predictionType = parsePredictionType(params?.predictionType);
-    const line = parseLine(params?.line);
-    const take = parseTake(params?.take, statuses !== undefined);
-    const includeMarketAnalysis = params?.includeMarketAnalysis === true;
-    const statusKey = effectiveStatuses.join("|");
-    const typeKey = predictionType ?? "all";
-    const sportKey = sportCode ?? "all";
-    const lineKey = line === undefined ? "all" : String(line);
-    const takeKey = String(take);
-    const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v8:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
-    const stableCacheKey = `${cacheKey}:stable`;
-    const cached = await this.cache.get<unknown[]>(cacheKey);
-    if (cached) {
-      return cached;
-    }
+  private async resolvePublicSource(seed: string) {
+    return this.pipelineRolloutService.resolveSource({
+      seed,
+      isInternalRequest: false
+    });
+  }
 
-	    let data:
-	      | Array<{
-          matchId: string;
-          modelVersionId: string | null;
-          probabilities: unknown;
-          calibratedProbabilities: unknown;
-          rawProbabilities: unknown;
-          expectedScore: unknown;
-          confidenceScore: number;
-          summary: string;
-          riskFlags: unknown;
-          avoidReason: string | null;
-          updatedAt: Date;
-          createdAt: Date;
-	          match: {
-	            sport: { code: string } | null;
-	            status: MatchStatus;
-	            matchDateTimeUTC: Date;
-	            homeScore: number | null;
-	            awayScore: number | null;
-	            homeTeam: { name: string };
-	            awayTeam: { name: string };
-	            league: { id: string; name: string; code: string | null } | null;
-	          };
-	        }>
-      | [] = [];
-
-    try {
-      const targetTake = Math.max(take, 60);
-      const relevantMatches =
-        effectiveStatuses.length === 1
-          ? await queryWithTimeout(
-              this.prisma.match.findMany({
-                where: {
-                  status: { in: effectiveStatuses },
-                  ...(sportCode ? { sport: { code: sportCode } } : {})
-                },
-                select: { id: true, matchDateTimeUTC: true },
-                orderBy: { matchDateTimeUTC: "desc" },
-                take: targetTake
-              }),
-              12000
+  private async fetchLegacyRows(
+    effectiveStatuses: MatchStatus[],
+    sportCode: "football" | "basketball" | undefined,
+    take: number
+  ): Promise<LegacyPredictionRecord[]> {
+    const targetTake = Math.max(take, 60);
+    const relevantMatches =
+      effectiveStatuses.length === 1
+        ? await queryWithTimeout(
+            this.prisma.match.findMany({
+              where: {
+                status: { in: effectiveStatuses },
+                ...(sportCode ? { sport: { code: sportCode } } : {})
+              },
+              select: { id: true, matchDateTimeUTC: true },
+              orderBy: { matchDateTimeUTC: "desc" },
+              take: targetTake
+            }),
+            12000
+          )
+        : (
+            await Promise.all(
+              effectiveStatuses.map(async (status) => {
+                try {
+                  return await queryWithTimeout(
+                    this.prisma.match.findMany({
+                      where: {
+                        status,
+                        ...(sportCode ? { sport: { code: sportCode } } : {})
+                      },
+                      select: { id: true, matchDateTimeUTC: true },
+                      orderBy: { matchDateTimeUTC: "desc" },
+                      take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
+                    }),
+                    9000
+                  );
+                } catch {
+                  return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
+                }
+              })
             )
-          : (
-              await Promise.all(
-                effectiveStatuses.map(async (status) => {
-                  try {
-                    return await queryWithTimeout(
-                      this.prisma.match.findMany({
-                        where: {
-                          status,
-                          ...(sportCode ? { sport: { code: sportCode } } : {})
-                        },
-                        select: { id: true, matchDateTimeUTC: true },
-                        orderBy: { matchDateTimeUTC: "desc" },
-                        take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
-                      }),
-                      9000
-                    );
-                  } catch {
-                    return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
-                  }
-                })
-              )
-            )
-              .flat()
-              .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
-              .slice(0, targetTake);
+          )
+            .flat()
+            .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
+            .slice(0, targetTake);
 
-      if (relevantMatches.length === 0) {
-        await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);
-        return [];
-      }
-
-      const matchIds = relevantMatches.map((item) => item.id);
-	      data = await queryWithTimeout(
-	        this.prisma.prediction.findMany({
-	          where: { matchId: { in: matchIds } },
-	          orderBy: { createdAt: "desc" },
-	          include: { match: { select: PREDICTION_MATCH_SELECT } },
-	          take: Math.max(take * 2, 100)
-	        }),
-	        12000
-	      );
-
-      if (data.length === 0) {
-	        data = await queryWithTimeout(
-	          this.prisma.prediction.findMany({
-	            where: {
-	              match: {
-	                status: { in: effectiveStatuses },
-	                ...(sportCode ? { sport: { code: sportCode } } : {})
-	              }
-	            },
-	            orderBy: { updatedAt: "desc" },
-	            include: { match: { select: PREDICTION_MATCH_SELECT } },
-	            take: Math.max(take * 3, 120)
-	          }),
-	          12000
-	        ).catch(() => []);
-      }
-    } catch {
-      const stale = await this.cache.get<unknown[]>(stableCacheKey);
-      if (stale) {
-        await this.cache.set(cacheKey, stale, 12, ["predictions", "market-analysis"]);
-        return stale;
-      }
+    if (relevantMatches.length === 0) {
       return [];
     }
 
-    const expanded = data.flatMap((item) => {
+    const matchIds = relevantMatches.map((item) => item.id);
+    let rows = await queryWithTimeout(
+      this.prisma.prediction.findMany({
+        where: {
+          matchId: { in: matchIds },
+          match: {
+            status: { in: effectiveStatuses },
+            ...(sportCode ? { sport: { code: sportCode } } : {})
+          }
+        },
+        orderBy: { updatedAt: "desc" },
+        include: LEGACY_PREDICTION_INCLUDE,
+        take: Math.max(take * 2, 100)
+      }),
+      12000
+    );
+
+    if (rows.length === 0) {
+      rows = await queryWithTimeout(
+        this.prisma.prediction.findMany({
+          where: {
+            match: {
+              status: { in: effectiveStatuses },
+              ...(sportCode ? { sport: { code: sportCode } } : {})
+            }
+          },
+          orderBy: { updatedAt: "desc" },
+          include: LEGACY_PREDICTION_INCLUDE,
+          take: Math.max(take * 3, 120)
+        }),
+        12000
+      ).catch(() => []);
+    }
+
+    return rows as LegacyPredictionRecord[];
+  }
+
+  private expandRows(normalizedRows: NormalizedPredictionRow[]) {
+    return normalizedRows.flatMap((item) => {
       const matchRecord = (item.match as Record<string, unknown> | null) ?? null;
       const safeUpdatedAt =
         item.updatedAt instanceof Date && Number.isFinite(item.updatedAt.getTime()) ? item.updatedAt : new Date();
@@ -564,6 +760,138 @@ export class PredictionsService {
         ];
       }
     });
+  }
+
+  async list(params?: ListPredictionsParams) {
+    const statuses = parseStatusFilter(params?.status);
+    const sportCode = parseSportFilter(params?.sport);
+    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
+    const predictionType = parsePredictionType(params?.predictionType);
+    const line = parseLine(params?.line);
+    const take = parseTake(params?.take, statuses !== undefined);
+    const includeMarketAnalysis = params?.includeMarketAnalysis === true;
+    const statusKey = effectiveStatuses.join("|");
+    const typeKey = predictionType ?? "all";
+    const sportKey = sportCode ?? "all";
+    const lineKey = line === undefined ? "all" : String(line);
+    const takeKey = String(take);
+    const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
+    const source = await this.resolvePublicSource(
+      `${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`
+    );
+    const cacheKey = `predictions:list:v10:${source}:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const stableCacheKey = `${cacheKey}:stable`;
+    const cached = await this.cache.get<unknown[]>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    let normalizedRows: NormalizedPredictionRow[] = [];
+
+    try {
+      if (source === "legacy") {
+        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take);
+        normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      } else {
+        const targetTake = Math.max(take, 60);
+        const relevantMatches =
+          effectiveStatuses.length === 1
+            ? await queryWithTimeout(
+                this.prisma.match.findMany({
+                  where: {
+                    status: { in: effectiveStatuses },
+                    ...(sportCode ? { sport: { code: sportCode } } : {})
+                  },
+                  select: { id: true, matchDateTimeUTC: true },
+                  orderBy: { matchDateTimeUTC: "desc" },
+                  take: targetTake
+                }),
+                12000
+              )
+            : (
+                await Promise.all(
+                  effectiveStatuses.map(async (status) => {
+                    try {
+                      return await queryWithTimeout(
+                        this.prisma.match.findMany({
+                          where: {
+                            status,
+                            ...(sportCode ? { sport: { code: sportCode } } : {})
+                          },
+                          select: { id: true, matchDateTimeUTC: true },
+                          orderBy: { matchDateTimeUTC: "desc" },
+                          take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
+                        }),
+                        9000
+                      );
+                    } catch {
+                      return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
+                    }
+                  })
+                )
+              )
+                .flat()
+                .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
+                .slice(0, targetTake);
+
+        if (relevantMatches.length === 0) {
+          await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);
+          return [];
+        }
+
+        const matchIds = relevantMatches.map((item) => item.id);
+        let rows = await queryWithTimeout(
+          this.prisma.publishedPrediction.findMany({
+            where: {
+              OR: [
+                { publishDecision: { is: null } },
+                { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+              ],
+              matchId: { in: matchIds },
+              match: {
+                status: { in: effectiveStatuses },
+                ...(sportCode ? { sport: { code: sportCode } } : {})
+              }
+            },
+            orderBy: { publishedAt: "desc" },
+            include: PUBLISHED_PREDICTION_INCLUDE,
+            take: Math.max(take * 2, 100)
+          }),
+          12000
+        );
+
+        if (rows.length === 0) {
+          rows = await queryWithTimeout(
+            this.prisma.publishedPrediction.findMany({
+              where: {
+                OR: [
+                  { publishDecision: { is: null } },
+                  { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+                ],
+                match: {
+                  status: { in: effectiveStatuses },
+                  ...(sportCode ? { sport: { code: sportCode } } : {})
+                }
+              },
+              orderBy: { publishedAt: "desc" },
+              include: PUBLISHED_PREDICTION_INCLUDE,
+              take: Math.max(take * 3, 120)
+            }),
+            12000
+          ).catch(() => []);
+        }
+
+        normalizedRows = rows.map((row) => normalizePublishedRow(row));
+      }
+    } catch {
+      const stale = await this.cache.get<unknown[]>(stableCacheKey);
+      if (stale) {
+        await this.cache.set(cacheKey, stale, 12, ["predictions", "market-analysis"]);
+        return stale;
+      }
+      return [];
+    }
+    const expanded = this.expandRows(normalizedRows);
 
     const payload = predictionType
       ? expanded.filter((item) => item.predictionType === predictionType)
@@ -602,101 +930,38 @@ export class PredictionsService {
     const predictionType = parsePredictionType(params?.predictionType);
     const line = parseLine(params?.line);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
+    const source = await this.resolvePublicSource(`match:${matchId}:${predictionType ?? "all"}:${line ?? "all"}`);
 
-    const rows = await this.prisma.prediction.findMany({
-      where: { matchId },
-      include: { match: { select: PREDICTION_MATCH_SELECT } },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-      take: 5
-    });
-    if (rows.length === 0) {
+    const normalizedRows: NormalizedPredictionRow[] =
+      source === "legacy"
+        ? (
+            await this.prisma.prediction.findMany({
+              where: { matchId },
+              include: LEGACY_PREDICTION_INCLUDE,
+              orderBy: [{ updatedAt: "desc" }],
+              take: 20
+            })
+          ).map((row) => normalizeLegacyRow(row as LegacyPredictionRecord))
+        : (
+            await this.prisma.publishedPrediction.findMany({
+              where: {
+                matchId,
+                OR: [
+                  { publishDecision: { is: null } },
+                  { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+                ]
+              },
+              include: PUBLISHED_PREDICTION_INCLUDE,
+              orderBy: [{ publishedAt: "desc" }],
+              take: 20
+            })
+          ).map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
+
+    if (normalizedRows.length === 0) {
       return [];
     }
 
-    const expanded = rows.flatMap((row) => {
-      const matchRecord = (row.match as Record<string, unknown> | null) ?? null;
-      const rawMatchDateTime = matchRecord?.matchDateTimeUTC;
-      const safeUpdatedAt =
-        row.updatedAt instanceof Date && Number.isFinite(row.updatedAt.getTime()) ? row.updatedAt : new Date();
-      const matchDateTime =
-        rawMatchDateTime instanceof Date && Number.isFinite(rawMatchDateTime.getTime())
-          ? rawMatchDateTime
-          : new Date(safeUpdatedAt.getTime() + 2 * 60 * 60 * 1000);
-      const sportCodeRaw = (matchRecord?.sport as Record<string, unknown> | null)?.code;
-      const sportCode = typeof sportCodeRaw === "string" && sportCodeRaw.trim().length > 0 ? sportCodeRaw : "football";
-      const homeTeamName = safeTeamName((matchRecord?.homeTeam as Record<string, unknown> | null)?.name, "Bilinmeyen Ev Takim");
-      const awayTeamName = safeTeamName((matchRecord?.awayTeam as Record<string, unknown> | null)?.name, "Bilinmeyen Deplasman Takim");
-      const league = safeLeague(matchRecord?.league);
-      const status = toMatchStatus(matchRecord?.status);
-
-      try {
-        const strategy = this.predictionStrategyRegistry.forSport(sportCode);
-
-        return strategy.expand({
-          matchId: row.matchId,
-          modelVersionId: row.modelVersionId,
-          probabilities: row.probabilities,
-          calibratedProbabilities: row.calibratedProbabilities,
-          rawProbabilities: row.rawProbabilities,
-          expectedScore: row.expectedScore,
-          confidenceScore: row.confidenceScore,
-          summary: row.summary,
-          riskFlags: row.riskFlags,
-          avoidReason: row.avoidReason,
-          updatedAt: safeUpdatedAt,
-          match: {
-            homeTeam: {
-              name: homeTeamName
-            },
-            awayTeam: {
-              name: awayTeamName
-            },
-            league,
-            matchDateTimeUTC: matchDateTime,
-            status,
-            homeScore: typeof matchRecord?.homeScore === "number" ? matchRecord.homeScore : null,
-            awayScore: typeof matchRecord?.awayScore === "number" ? matchRecord.awayScore : null,
-            halfTimeHomeScore: typeof matchRecord?.halfTimeHomeScore === "number" ? matchRecord.halfTimeHomeScore : null,
-            halfTimeAwayScore: typeof matchRecord?.halfTimeAwayScore === "number" ? matchRecord.halfTimeAwayScore : null,
-            q1HomeScore: typeof matchRecord?.q1HomeScore === "number" ? matchRecord.q1HomeScore : null,
-            q1AwayScore: typeof matchRecord?.q1AwayScore === "number" ? matchRecord.q1AwayScore : null,
-            q2HomeScore: typeof matchRecord?.q2HomeScore === "number" ? matchRecord.q2HomeScore : null,
-            q2AwayScore: typeof matchRecord?.q2AwayScore === "number" ? matchRecord.q2AwayScore : null,
-            q3HomeScore: typeof matchRecord?.q3HomeScore === "number" ? matchRecord.q3HomeScore : null,
-            q3AwayScore: typeof matchRecord?.q3AwayScore === "number" ? matchRecord.q3AwayScore : null,
-            q4HomeScore: typeof matchRecord?.q4HomeScore === "number" ? matchRecord.q4HomeScore : null,
-            q4AwayScore: typeof matchRecord?.q4AwayScore === "number" ? matchRecord.q4AwayScore : null
-          }
-        });
-      } catch {
-        return [
-          buildFallbackExpandedItem({
-            matchId: row.matchId,
-            modelVersionId: row.modelVersionId,
-            probabilities: row.probabilities,
-            calibratedProbabilities: row.calibratedProbabilities,
-            rawProbabilities: row.rawProbabilities,
-            expectedScore: row.expectedScore,
-            confidenceScore: row.confidenceScore,
-            summary: row.summary,
-            riskFlags: row.riskFlags,
-            avoidReason: row.avoidReason,
-            updatedAt: safeUpdatedAt,
-            homeTeam: homeTeamName,
-            awayTeam: awayTeamName,
-            leagueId: league?.id,
-            leagueName: league?.name,
-            leagueCode: league?.code,
-            matchDateTimeUTC: matchDateTime,
-            status,
-            homeScore: typeof matchRecord?.homeScore === "number" ? matchRecord.homeScore : null,
-            awayScore: typeof matchRecord?.awayScore === "number" ? matchRecord.awayScore : null,
-            halfTimeHomeScore: typeof matchRecord?.halfTimeHomeScore === "number" ? matchRecord.halfTimeHomeScore : null,
-            halfTimeAwayScore: typeof matchRecord?.halfTimeAwayScore === "number" ? matchRecord.halfTimeAwayScore : null
-          })
-        ];
-      }
-    });
+    const expanded = this.expandRows(normalizedRows);
 
     const filteredByType = predictionType
       ? expanded.filter((item) => item.predictionType === predictionType)
@@ -721,14 +986,34 @@ export class PredictionsService {
     return this.oddsService.attachMarketAnalysis(deduped, includeMarketAnalysis, line).catch(() => deduped);
   }
 
-  highConfidence() {
-    return this.prisma.prediction.findMany({
+  async highConfidence() {
+    const source = await this.resolvePublicSource("high-confidence");
+    if (source === "legacy") {
+      const rows = await this.prisma.prediction.findMany({
+        where: {
+          confidenceScore: { gte: 0.7 }
+        },
+        include: LEGACY_PREDICTION_INCLUDE,
+        orderBy: { updatedAt: "desc" },
+        take: 50
+      });
+      return rows.map((row) => normalizeLegacyRow(row as LegacyPredictionRecord));
+    }
+
+    const rows = await this.prisma.publishedPrediction.findMany({
       where: {
-        confidenceScore: { gte: 0.7 },
-        isLowConfidence: false
+        OR: [
+          { publishDecision: { is: null } },
+          { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+        ],
+        predictionRun: {
+          confidence: { gte: 0.7 }
+        }
       },
-      orderBy: { confidenceScore: "desc" },
+      include: PUBLISHED_PREDICTION_INCLUDE,
+      orderBy: { publishedAt: "desc" },
       take: 50
     });
+    return rows.map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
   }
 }

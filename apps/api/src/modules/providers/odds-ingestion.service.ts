@@ -539,7 +539,7 @@ export class OddsIngestionService {
   }
 
   private async generateMarketAnalysisSnapshots(matchIds?: string[]) {
-    const predictions = await this.prisma.prediction.findMany({
+    const published = await this.prisma.publishedPrediction.findMany({
       where: {
         ...(matchIds && matchIds.length > 0 ? { matchId: { in: matchIds } } : {}),
         match: {
@@ -547,6 +547,16 @@ export class OddsIngestionService {
         }
       },
       include: {
+        predictionRun: {
+          select: {
+            modelVersionId: true,
+            probability: true,
+            confidence: true,
+            riskFlagsJson: true,
+            explanationJson: true,
+            createdAt: true
+          }
+        },
         match: {
           include: {
             homeTeam: true,
@@ -554,42 +564,93 @@ export class OddsIngestionService {
           }
         }
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { publishedAt: "desc" },
       take: 400
     });
 
-    if (predictions.length === 0) {
+    if (published.length === 0) {
       return { recordsRead: 0, recordsWritten: 0, errors: 0 };
     }
 
-    const predictionRows = predictions.flatMap((prediction) =>
-      expandPredictionMarkets({
-        matchId: prediction.matchId,
-        modelVersionId: prediction.modelVersionId,
-        probabilities: prediction.probabilities,
-        calibratedProbabilities: prediction.calibratedProbabilities,
-        rawProbabilities: prediction.rawProbabilities,
-        expectedScore: prediction.expectedScore,
-        confidenceScore: prediction.confidenceScore,
-        summary: prediction.summary,
-        riskFlags: prediction.riskFlags,
-        avoidReason: prediction.avoidReason,
-        updatedAt: prediction.updatedAt,
+    const normalizeOutcomeFromSide = (side: "home" | "draw" | "away", probability: number) => {
+      const clamped = Math.max(0.0001, Math.min(0.9999, Number(probability.toFixed(6))));
+      const rest = Math.max(0.0001, 1 - clamped);
+      if (side === "home") {
+        const draw = Number((rest * 0.36).toFixed(4));
+        const away = Number((1 - clamped - draw).toFixed(4));
+        return { home: Number(clamped.toFixed(4)), draw, away };
+      }
+      if (side === "draw") {
+        const home = Number((rest * 0.5).toFixed(4));
+        const away = Number((1 - clamped - home).toFixed(4));
+        return { home, draw: Number(clamped.toFixed(4)), away };
+      }
+      const draw = Number((rest * 0.36).toFixed(4));
+      const home = Number((1 - clamped - draw).toFixed(4));
+      return { home, draw, away: Number(clamped.toFixed(4)) };
+    };
+
+    const predictionRows = published.flatMap((entry) => {
+      const explanation =
+        entry.predictionRun.explanationJson &&
+        typeof entry.predictionRun.explanationJson === "object" &&
+        !Array.isArray(entry.predictionRun.explanationJson)
+          ? (entry.predictionRun.explanationJson as Record<string, unknown>)
+          : null;
+      const selectedSideRaw =
+        explanation && typeof explanation.selectedSide === "string" ? explanation.selectedSide : "home";
+      const selectedSide =
+        selectedSideRaw === "home" || selectedSideRaw === "draw" || selectedSideRaw === "away"
+          ? selectedSideRaw
+          : "home";
+      const probabilitiesFromExplanation =
+        explanation && explanation.probabilities && typeof explanation.probabilities === "object"
+          ? explanation.probabilities
+          : null;
+      const fallbackProbabilities =
+        entry.market === "moneyline"
+          ? {
+              home: Number(entry.predictionRun.probability.toFixed(4)),
+              away: Number((1 - entry.predictionRun.probability).toFixed(4))
+            }
+          : normalizeOutcomeFromSide(selectedSide, entry.predictionRun.probability);
+      const calibrated = probabilitiesFromExplanation ?? fallbackProbabilities;
+      const raw = explanation && explanation.rawProbabilities ? explanation.rawProbabilities : calibrated;
+      const expectedScore = explanation && explanation.expectedScore ? explanation.expectedScore : null;
+      const summary =
+        explanation && typeof explanation.summary === "string" && explanation.summary.length > 0
+          ? explanation.summary
+          : `${entry.match.homeTeam.name} - ${entry.match.awayTeam.name}: published ${entry.market}.`;
+      const avoidReason =
+        explanation && typeof explanation.avoidReason === "string" ? explanation.avoidReason : null;
+
+      return expandPredictionMarkets({
+        matchId: entry.matchId,
+        modelVersionId: entry.predictionRun.modelVersionId,
+        probabilities: calibrated,
+        calibratedProbabilities: calibrated,
+        rawProbabilities: raw,
+        expectedScore,
+        confidenceScore: entry.predictionRun.confidence,
+        summary,
+        riskFlags: entry.predictionRun.riskFlagsJson,
+        avoidReason,
+        updatedAt: entry.publishedAt ?? entry.predictionRun.createdAt,
         match: {
-          homeTeam: { name: prediction.match.homeTeam.name },
-          awayTeam: { name: prediction.match.awayTeam.name },
-          matchDateTimeUTC: prediction.match.matchDateTimeUTC,
-          status: prediction.match.status,
-          homeScore: prediction.match.homeScore,
-          awayScore: prediction.match.awayScore,
-          halfTimeHomeScore: prediction.match.halfTimeHomeScore,
-          halfTimeAwayScore: prediction.match.halfTimeAwayScore
+          homeTeam: { name: entry.match.homeTeam.name },
+          awayTeam: { name: entry.match.awayTeam.name },
+          matchDateTimeUTC: entry.match.matchDateTimeUTC,
+          status: entry.match.status,
+          homeScore: entry.match.homeScore,
+          awayScore: entry.match.awayScore,
+          halfTimeHomeScore: entry.match.halfTimeHomeScore,
+          halfTimeAwayScore: entry.match.halfTimeAwayScore
         }
       }).map((item) => ({
         item,
-        predictionUpdatedAt: prediction.updatedAt
-      }))
-    );
+        predictionUpdatedAt: entry.publishedAt ?? entry.predictionRun.createdAt
+      }));
+    });
 
     const supported = predictionRows.filter((row) => this.marketTypeFromPredictionType(row.item.predictionType) !== null);
     if (supported.length === 0) {

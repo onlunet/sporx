@@ -44,7 +44,7 @@ export class IngestionService {
       }
     });
 
-    await this.queue.enqueue(jobType, { runId: run.id, jobType });
+    await this.queue.enqueuePipeline(jobType, { runId: run.id, jobType });
     this.queue.runInlineFallback(run.id, jobType);
 
     return {

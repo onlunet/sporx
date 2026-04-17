@@ -149,21 +149,21 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
 
   return (
     <div className="space-y-8">
-      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-surface via-abyss to-void p-8">
+      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-surface via-abyss to-void p-4 sm:p-6 lg:p-8">
         <div className="pointer-events-none absolute right-0 top-0 h-96 w-96 rounded-full bg-neon-red/10 blur-[100px]" />
         <div className="pointer-events-none absolute bottom-0 left-0 h-64 w-64 rounded-full bg-neon-cyan/10 blur-[80px]" />
 
         <div className="relative">
-          <div className="mb-6 flex items-center justify-between">
+          <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="relative">
                 <div className="absolute inset-0 animate-pulse rounded-full bg-neon-red/30 blur-xl" />
-                <div className="relative flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-neon-red to-neon-amber">
+                <div className="relative flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-gradient-to-br from-neon-red to-neon-amber">
                   <Radio className="h-6 w-6 text-white" />
                 </div>
               </div>
               <div>
-                <h1 className="font-display text-3xl font-bold">
+                <h1 className="font-display text-2xl sm:text-3xl font-bold">
                   <span className="text-white">Canli</span> <span className="text-neon-red">{sportLabel} Merkezi</span>
                 </h1>
                 <p className="text-sm text-slate-400">Gercek zamanli skorlar ve tahminler</p>
@@ -196,7 +196,7 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
       ) : null}
 
       {isError ? (
-        <div className="glass-card rounded-2xl border-neon-red/30 p-8 text-center">
+        <div className="glass-card rounded-2xl border-neon-red/30 p-6 sm:p-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-neon-red/20">
             <Zap className="h-8 w-8 text-neon-red" />
           </div>
@@ -206,7 +206,7 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
       ) : null}
 
       {!isLoading && !isError && rows.length === 0 ? (
-        <div className="glass-card rounded-2xl p-12 text-center">
+        <div className="glass-card rounded-2xl p-8 sm:p-12 text-center">
           <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
             <Radio className="h-10 w-10 text-slate-600" />
           </div>

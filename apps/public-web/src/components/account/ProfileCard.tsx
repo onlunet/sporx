@@ -3,7 +3,7 @@
 export function ProfileCard() {
   return (
     <div className='glass-card rounded-2xl p-6'>
-      <div className='flex items-center gap-4'>
+      <div className='flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left'>
         <div className='relative'>
           <div className='w-20 h-20 rounded-2xl bg-gradient-to-br from-neon-cyan to-neon-purple flex items-center justify-center'>
             <User className='w-10 h-10 text-white' />
@@ -12,11 +12,11 @@ export function ProfileCard() {
             <Shield className='w-3.5 h-3.5 text-void' />
           </div>
         </div>
-        <div className='flex-1'>
+        <div className='flex-1 w-full'>
           <h2 className='text-xl font-bold text-white'>Misafir Kullanıcı</h2>
           <p className='text-sm text-slate-400'>SPORX AI Üyesi</p>
 
-          <div className='flex items-center gap-4 mt-3'>
+          <div className='flex flex-col sm:flex-row items-center sm:items-start gap-2 sm:gap-4 mt-3'>
             <div className='flex items-center gap-1.5 text-xs text-slate-500'>
               <Mail className='w-3.5 h-3.5' />
               <span>misafir@sporx.ai</span>

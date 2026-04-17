@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Shield, Activity, Clock, TrendingUp, Zap } from 'lucide-react';
+import { Shield, Activity } from 'lucide-react';
 
 interface LiveMatchCardProps {
   match: {
@@ -26,31 +26,31 @@ export function LiveMatchCard({ match }: LiveMatchCardProps) {
   
   return (
     <Link href={`/matches/${match.id}`}>
-      <article className='group relative overflow-hidden rounded-2xl bg-gradient-to-br from-surface/80 to-abyss/90 border border-neon-red/20 hover:border-neon-red/50 transition-all duration-500'>
+      <article className='group relative overflow-hidden rounded-xl sm:rounded-2xl bg-gradient-to-br from-surface/80 to-abyss/90 border border-neon-red/20 hover:border-neon-red/50 transition-all duration-500'>
         <div className='absolute inset-0 bg-gradient-to-br from-neon-red/5 via-transparent to-neon-cyan/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500' />        
         <div className='absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-neon-red via-neon-amber to-neon-cyan animate-pulse' />
         
-        <div className='relative p-5'>
-          <div className='flex items-center justify-between mb-4'>
-            <span className='text-xs text-slate-400'>{match.leagueName}</span>            
+        <div className='relative p-3 sm:p-5'>
+          <div className='flex items-center justify-between mb-3 sm:mb-4'>
+            <span className='text-[11px] sm:text-xs text-slate-400 truncate max-w-[60%]'>{match.leagueName}</span>            
             <div className='flex items-center gap-1.5'>
               <span className='w-2 h-2 rounded-full bg-neon-red animate-pulse' />
-              <span className='text-xs font-bold text-neon-red'>CANLI</span>
+              <span className='text-[11px] sm:text-xs font-bold text-neon-red'>CANLI</span>
             </div>
           </div>
           
-          <div className='flex items-center justify-between gap-4'>
-            <div className='flex-1 text-center'>
-              <div className='w-12 h-12 mx-auto mb-2 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center'>
-                <Shield className='w-6 h-6 text-slate-400' />
+          <div className='flex items-center justify-between gap-2 sm:gap-4'>
+            <div className='flex-1 text-center min-w-0'>
+              <div className='w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-1.5 sm:mb-2 rounded-lg sm:rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center'>
+                <Shield className='w-5 h-5 sm:w-6 sm:h-6 text-slate-400' />
               </div>              
-              <span className='text-sm font-medium text-slate-200'>{match.homeTeam}</span>
+              <span className='text-xs sm:text-sm font-medium text-slate-200'>{match.homeTeam}</span>
             </div>
             
             <div className='flex-shrink-0 text-center'>
-              <div className='text-4xl font-bold font-display tracking-wider'>
+              <div className='text-2xl sm:text-4xl font-bold font-display tracking-wider'>
                 <span className='text-white'>{scoreHome}</span>
-                <span className='text-slate-600 mx-2'>:</span>
+                <span className='text-slate-600 mx-1 sm:mx-2'>:</span>
                 <span className='text-white'>{scoreAway}</span>
               </div>              
               <div className='mt-1 flex items-center justify-center gap-1 text-[10px] text-neon-red'>
@@ -59,16 +59,16 @@ export function LiveMatchCard({ match }: LiveMatchCardProps) {
               </div>
             </div>
             
-            <div className='flex-1 text-center'>
-              <div className='w-12 h-12 mx-auto mb-2 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center'>
-                <Shield className='w-6 h-6 text-slate-400' />
+            <div className='flex-1 text-center min-w-0'>
+              <div className='w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-1.5 sm:mb-2 rounded-lg sm:rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center'>
+                <Shield className='w-5 h-5 sm:w-6 sm:h-6 text-slate-400' />
               </div>              
-              <span className='text-sm font-medium text-slate-200'>{match.awayTeam}</span>
+              <span className='text-xs sm:text-sm font-medium text-slate-200'>{match.awayTeam}</span>
             </div>
           </div>
           
           {probs && (
-            <div className='mt-4 pt-4 border-t border-white/5'>
+            <div className='mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-white/5'>
               <div className='flex items-center justify-between text-xs'>
                 <div className='text-center'>
                   <div className='text-neon-cyan font-bold'>%{Math.round((probs.home ?? 0) * 100)}</div>

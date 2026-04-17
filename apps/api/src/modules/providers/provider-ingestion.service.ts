@@ -1,6 +1,6 @@
 ﻿import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
-import { MatchStatus, Prisma } from "@prisma/client";
+import { MatchStatus, PlayerAvailabilityStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { FootballDataConnector, FootballDataHttpError } from "./football-data.connector";
@@ -16,6 +16,7 @@ import { PredictionEngineService } from "../predictions/prediction-engine.servic
 import { AdvancedPredictionEngineService } from "../predictions/advanced-prediction-engine.service";
 import { BasketballPredictionEngineService } from "../predictions/basketball/basketball-prediction-engine.service";
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
+import { PredictionRunPublisherService } from "./prediction-run-publisher.service";
 
 type SyncSummary = {
   recordsRead: number;
@@ -45,6 +46,39 @@ type TheSportsDbTeamCandidate = {
   strTeamShort: string | null;
   intFormedYear: number | null;
   strAlternate: string | null;
+};
+
+type TheSportsDbCanonicalLineupPlayer = {
+  playerName: string;
+  position: string | null;
+  jerseyNumber: number | null;
+  availability: PlayerAvailabilityStatus;
+  isStarter: boolean;
+  sortOrder: number;
+};
+
+type TheSportsDbCanonicalLineupCandidate = {
+  teamId: string;
+  teamName: string;
+  formation: string | null;
+  players: TheSportsDbCanonicalLineupPlayer[];
+  sourceUpdatedAt: Date | null;
+  payload: Record<string, unknown>;
+};
+
+type TheSportsDbEventStatsProjection = {
+  possession: number | null;
+  shots: number | null;
+  shotsOnTarget: number | null;
+  fouls: number | null;
+  corners: number | null;
+  yellowCards: number | null;
+  redCards: number | null;
+  tempo: number | null;
+  offenseScore: number | null;
+  defenseScore: number | null;
+  setPieceScore: number | null;
+  transitionScore: number | null;
 };
 
 const ENRICHMENT_JOB_TYPES = ["resolveProviderAliases", "enrichTeamProfiles", "enrichMatchDetails"] as const;
@@ -115,7 +149,8 @@ export class ProviderIngestionService {
     private readonly predictionEngine: PredictionEngineService,
     private readonly advancedPredictionEngine: AdvancedPredictionEngineService,
     private readonly basketballPredictionEngine: BasketballPredictionEngineService,
-    private readonly matchContextEnrichment: MatchContextEnrichmentService
+    private readonly matchContextEnrichment: MatchContextEnrichmentService,
+    private readonly predictionRunPublisher: PredictionRunPublisherService
   ) {}
 
   private supportsProviderFetch(jobType: string) {
@@ -789,8 +824,40 @@ export class ProviderIngestionService {
       }));
 
     const backfillPredictionFilters: Prisma.MatchWhereInput[] = activeModel?.id
-      ? [{ prediction: null }, { prediction: { is: { modelVersionId: { not: activeModel.id } } } }]
-      : [{ prediction: null }];
+      ? [
+          {
+            publishedPredictions: {
+              none: {
+                market: "match_outcome",
+                lineKey: "na",
+                horizon: "post_match"
+              }
+            }
+          },
+          {
+            publishedPredictions: {
+              some: {
+                market: "match_outcome",
+                lineKey: "na",
+                horizon: "post_match",
+                predictionRun: {
+                  modelVersionId: { not: activeModel.id }
+                }
+              }
+            }
+          }
+        ]
+      : [
+          {
+            publishedPredictions: {
+              none: {
+                market: "match_outcome",
+                lineKey: "na",
+                horizon: "post_match"
+              }
+            }
+          }
+        ];
 
     const [upcomingCandidates, recentFinishedCandidates, backfillCandidates] = await Promise.all([
       this.prisma.match.findMany({
@@ -968,66 +1035,35 @@ export class ProviderIngestionService {
             now
           });
 
-          const storedPrediction = await this.prisma.prediction.upsert({
-            where: { matchId: match.id },
-            update: {
-              modelVersionId: activeModel?.id ?? null,
-              probabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
-              expectedScore: basketball.expectedScore as Prisma.InputJsonValue,
-              rawProbabilities: basketball.rawProbabilities as Prisma.InputJsonValue,
-              calibratedProbabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
-              rawConfidenceScore: basketball.rawConfidenceScore,
-              calibratedConfidenceScore: basketball.calibratedConfidenceScore,
-              confidenceScore: basketball.confidenceScore,
-              summary: basketball.summary,
-              riskFlags: basketball.riskFlags as Prisma.InputJsonValue,
-              isRecommended: basketball.isRecommended,
-              isLowConfidence: basketball.isLowConfidence,
-              avoidReason: basketball.avoidReason,
-              updatedByProcess: "generate_predictions_job",
-              importedAt: new Date(),
-              dataSource: "generated"
-            },
-            create: {
-              matchId: match.id,
-              modelVersionId: activeModel?.id ?? null,
-              probabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
-              expectedScore: basketball.expectedScore as Prisma.InputJsonValue,
-              rawProbabilities: basketball.rawProbabilities as Prisma.InputJsonValue,
-              calibratedProbabilities: basketball.calibratedProbabilities as Prisma.InputJsonValue,
-              rawConfidenceScore: basketball.rawConfidenceScore,
-              calibratedConfidenceScore: basketball.calibratedConfidenceScore,
-              confidenceScore: basketball.confidenceScore,
-              summary: basketball.summary,
-              riskFlags: basketball.riskFlags as Prisma.InputJsonValue,
-              isRecommended: basketball.isRecommended,
-              isLowConfidence: basketball.isLowConfidence,
-              avoidReason: basketball.avoidReason,
-              updatedByProcess: "generate_predictions_job",
-              importedAt: new Date(),
-              dataSource: "generated"
-            }
-          });
-
           const calibratedBasketball = this.toRecord(basketball.calibratedProbabilities) ?? {};
           const homeWinProbability = this.toNumber(calibratedBasketball.home, 0.5);
           const awayWinProbability = this.toNumber(calibratedBasketball.away, 0.5);
           const pickProbability = Math.max(homeWinProbability, awayWinProbability);
+          const selectedSide = homeWinProbability >= awayWinProbability ? "home" : "away";
 
           try {
-            await this.writePublishedPredictionRun({
+            await this.predictionRunPublisher.publish({
               matchId: match.id,
               matchStatus: match.status,
+              kickoffAt: match.matchDateTimeUTC,
               market: "moneyline",
               line: null,
-              modelVersionId: storedPrediction.modelVersionId ?? activeModel?.id ?? null,
+              selection: selectedSide,
+              modelVersionId: activeModel?.id ?? null,
               probability: pickProbability,
               confidence: basketball.confidenceScore,
               riskFlags: basketball.riskFlags,
               explanation: {
                 summary: basketball.summary,
                 avoidReason: basketball.avoidReason,
-                selectedSide: homeWinProbability >= awayWinProbability ? "home" : "away"
+                selectedSide,
+                probabilities: basketball.calibratedProbabilities,
+                calibratedProbabilities: basketball.calibratedProbabilities,
+                rawProbabilities: basketball.rawProbabilities,
+                expectedScore: basketball.expectedScore,
+                isRecommended: basketball.isRecommended,
+                isLowConfidence: basketball.isLowConfidence,
+                dataSource: "generated"
               }
             });
           } catch (error) {
@@ -1297,6 +1333,9 @@ export class ProviderIngestionService {
             : null;
         const aliasConfidence =
           context && typeof context.thesportsdbAliasConfidence === "number" ? Number(context.thesportsdbAliasConfidence) : null;
+        const hasLineupCoverage =
+          (lineupCertaintyScore !== null && lineupCertaintyScore >= 0.55) ||
+          (lineupCoverage !== null && lineupCoverage >= 0.4);
 
         if (weatherImpactScore !== null && weatherImpactScore > 0.28) {
           calibratedConfidenceScore = Number(Math.max(0.3, calibratedConfidenceScore - 0.03).toFixed(4));
@@ -1398,71 +1437,41 @@ export class ProviderIngestionService {
               ? "Degiskenlik yuksek, kesin sonuc beklentisi onerilmez."
               : null;
 
-        const storedPrediction = await this.prisma.prediction.upsert({
-          where: { matchId: match.id },
-          update: {
-            modelVersionId: activeModel?.id ?? null,
-            probabilities: calibratedProbabilities as Prisma.InputJsonValue,
-            expectedScore: expectedScore as Prisma.InputJsonValue,
-            rawProbabilities: rawProbabilities as Prisma.InputJsonValue,
-            calibratedProbabilities: calibratedProbabilities as Prisma.InputJsonValue,
-            rawConfidenceScore,
-            calibratedConfidenceScore,
-            confidenceScore,
-            summary,
-            riskFlags: uniqueRiskFlags as Prisma.InputJsonValue,
-            isRecommended: confidenceScore >= 0.6 && !isLowConfidence,
-            isLowConfidence,
-            avoidReason,
-            updatedByProcess: "generate_predictions_job",
-            importedAt: new Date(),
-            dataSource: "generated"
-          },
-          create: {
-            matchId: match.id,
-            modelVersionId: activeModel?.id ?? null,
-            probabilities: calibratedProbabilities as Prisma.InputJsonValue,
-            expectedScore: expectedScore as Prisma.InputJsonValue,
-            rawProbabilities: rawProbabilities as Prisma.InputJsonValue,
-            calibratedProbabilities: calibratedProbabilities as Prisma.InputJsonValue,
-            rawConfidenceScore,
-            calibratedConfidenceScore,
-            confidenceScore,
-            summary,
-            riskFlags: uniqueRiskFlags as Prisma.InputJsonValue,
-            isRecommended: confidenceScore >= 0.6 && !isLowConfidence,
-            isLowConfidence,
-            avoidReason,
-            updatedByProcess: "generate_predictions_job",
-            importedAt: new Date(),
-            dataSource: "generated"
-          }
-        });
-
         const homeWinProbability = this.toNumber(calibratedProbabilities.home, 0.34);
         const drawProbability = this.toNumber(calibratedProbabilities.draw, 0.33);
         const awayWinProbability = this.toNumber(calibratedProbabilities.away, 0.33);
         const pickProbability = Math.max(homeWinProbability, drawProbability, awayWinProbability);
 
         try {
-          await this.writePublishedPredictionRun({
+          const selectedSide =
+            pickProbability === homeWinProbability
+              ? "home"
+              : pickProbability === drawProbability
+                ? "draw"
+                : "away";
+          await this.predictionRunPublisher.publish({
             matchId: match.id,
             matchStatus: match.status,
+            kickoffAt: match.matchDateTimeUTC,
+            hasLineup: hasLineupCoverage,
             market: "match_outcome",
             line: null,
-            modelVersionId: storedPrediction.modelVersionId ?? activeModel?.id ?? null,
+            selection: selectedSide,
+            modelVersionId: activeModel?.id ?? null,
             probability: pickProbability,
             confidence: confidenceScore,
             riskFlags: uniqueRiskFlags,
             explanation: {
               summary,
               avoidReason,
-              selectedSide:
-                pickProbability === homeWinProbability
-                  ? "home"
-                  : pickProbability === drawProbability
-                    ? "draw"
-                    : "away"
+              selectedSide,
+              probabilities: calibratedProbabilities,
+              calibratedProbabilities,
+              rawProbabilities,
+              expectedScore,
+              isRecommended: confidenceScore >= 0.6 && !isLowConfidence,
+              isLowConfidence,
+              dataSource: "generated"
             }
           });
         } catch (error) {
@@ -1702,6 +1711,907 @@ export class ProviderIngestionService {
     }
     const asRecord = this.toRecord(value);
     return asRecord ? [asRecord] : [];
+  }
+
+  private readFirstStringValue(record: Record<string, unknown> | null, keys: string[]) {
+    if (!record) {
+      return null;
+    }
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value !== "string") {
+        continue;
+      }
+      const token = value.trim();
+      if (token.length > 0) {
+        return token;
+      }
+    }
+    return null;
+  }
+
+  private parseRosterValue(value: unknown) {
+    const rawEntries: string[] = [];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === "string") {
+          rawEntries.push(entry);
+          continue;
+        }
+        const record = this.toRecord(entry);
+        if (!record) {
+          continue;
+        }
+        const named =
+          this.readFirstStringValue(record, ["name", "player", "strPlayer", "fullName", "displayName", "strPlayerName"]) ??
+          null;
+        if (named) {
+          rawEntries.push(named);
+        }
+      }
+    } else if (typeof value === "string") {
+      const normalized = value.replace(/\r/g, "\n");
+      const splitByPrimary = normalized.split(/[;\n|]+/g).map((item) => item.trim());
+      if (splitByPrimary.filter((item) => item.length > 0).length <= 1) {
+        rawEntries.push(...normalized.split(/\s*,\s*/g));
+      } else {
+        rawEntries.push(...splitByPrimary);
+      }
+    } else {
+      const record = this.toRecord(value);
+      if (record) {
+        const named = this.readFirstStringValue(record, ["name", "player", "strPlayer", "fullName", "displayName"]);
+        if (named) {
+          rawEntries.push(named);
+        }
+      }
+    }
+
+    const output: Array<{ playerName: string; jerseyNumber: number | null }> = [];
+    const seen = new Set<string>();
+    for (const rawEntry of rawEntries) {
+      const parsed = this.parsePlayerRosterEntry(rawEntry);
+      if (!parsed) {
+        continue;
+      }
+      const dedupKey = this.normalizeAlias(parsed.playerName);
+      if (dedupKey.length === 0 || seen.has(dedupKey)) {
+        continue;
+      }
+      seen.add(dedupKey);
+      output.push(parsed);
+    }
+
+    return output;
+  }
+
+  private parsePlayerRosterEntry(rawEntry: string) {
+    const compact = rawEntry.replace(/\s+/g, " ").trim();
+    if (compact.length === 0) {
+      return null;
+    }
+    if (["n/a", "none", "-", "null", "undefined", "tbc"].includes(compact.toLowerCase())) {
+      return null;
+    }
+
+    const jerseyMatch = compact.match(/^#?(\d{1,2})[\.\-:\s]+(.+)$/);
+    const jerseyNumber = jerseyMatch ? Number(jerseyMatch[1]) : null;
+    let playerName = (jerseyMatch ? jerseyMatch[2] : compact)
+      .replace(/\((c|captain|gk|goalkeeper|sub)\)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (playerName.length === 0) {
+      return null;
+    }
+
+    const cleanupMatch = playerName.match(/^([^()]+)\((inj|out|susp|bench)\)$/i);
+    if (cleanupMatch) {
+      playerName = cleanupMatch[1].trim();
+    }
+
+    if (playerName.length < 2) {
+      return null;
+    }
+    return { playerName, jerseyNumber };
+  }
+
+  private buildLineupPlayersFromTheSportsDb(
+    event: Record<string, unknown> | null,
+    side: "Home" | "Away",
+    timeline: Array<Record<string, unknown>>,
+    homeTeamName: string,
+    awayTeamName: string
+  ) {
+    const players: TheSportsDbCanonicalLineupPlayer[] = [];
+    const seen = new Set<string>();
+    let sortOrder = 1;
+    const sideLabel = side.toLowerCase();
+
+    const pushEntries = (
+      entries: Array<{ playerName: string; jerseyNumber: number | null }>,
+      options: {
+        position: string | null;
+        availability: PlayerAvailabilityStatus;
+        isStarter: boolean;
+      }
+    ) => {
+      for (const entry of entries) {
+        const dedupKey = this.normalizeAlias(entry.playerName);
+        if (dedupKey.length === 0 || seen.has(dedupKey)) {
+          continue;
+        }
+        seen.add(dedupKey);
+        players.push({
+          playerName: entry.playerName,
+          jerseyNumber: entry.jerseyNumber,
+          position: options.position,
+          availability: options.availability,
+          isStarter: options.isStarter,
+          sortOrder
+        });
+        sortOrder += 1;
+      }
+    };
+
+    const startersConfig: Array<{ keys: string[]; position: string }> = [
+      {
+        keys: [`str${side}LineupGoalkeeper`, `str${side}LineupGoalkeepers`, `${sideLabel}LineupGoalkeeper`],
+        position: "Goalkeeper"
+      },
+      {
+        keys: [`str${side}LineupDefense`, `str${side}LineupDefence`, `str${side}LineupDefenders`, `${sideLabel}LineupDefense`],
+        position: "Defender"
+      },
+      {
+        keys: [`str${side}LineupMidfield`, `str${side}LineupMidfielder`, `str${side}LineupMidfielders`, `${sideLabel}LineupMidfield`],
+        position: "Midfielder"
+      },
+      {
+        keys: [`str${side}LineupForward`, `str${side}LineupForwards`, `str${side}LineupAttack`, `${sideLabel}LineupForward`],
+        position: "Forward"
+      }
+    ];
+
+    for (const config of startersConfig) {
+      for (const key of config.keys) {
+        const entries = this.parseRosterValue(event?.[key]);
+        if (entries.length === 0) {
+          continue;
+        }
+        pushEntries(entries, {
+          position: config.position,
+          availability: PlayerAvailabilityStatus.AVAILABLE,
+          isStarter: true
+        });
+      }
+    }
+
+    const benchKeys = [
+      `str${side}LineupSubstitutes`,
+      `str${side}LineupBench`,
+      `${sideLabel}LineupSubstitutes`,
+      `${sideLabel}LineupBench`
+    ];
+    for (const key of benchKeys) {
+      const entries = this.parseRosterValue(event?.[key]);
+      if (entries.length === 0) {
+        continue;
+      }
+      pushEntries(entries, {
+        position: "Substitute",
+        availability: PlayerAvailabilityStatus.BENCH,
+        isStarter: false
+      });
+    }
+
+    const injuredKeys = [`str${side}LineupInjured`, `str${side}LineupUnavailable`, `str${side}Injuries`, `${sideLabel}LineupInjured`];
+    for (const key of injuredKeys) {
+      const entries = this.parseRosterValue(event?.[key]);
+      if (entries.length === 0) {
+        continue;
+      }
+      pushEntries(entries, {
+        position: null,
+        availability: PlayerAvailabilityStatus.OUT,
+        isStarter: false
+      });
+    }
+
+    const suspendedKeys = [`str${side}LineupSuspended`, `str${side}Suspended`, `${sideLabel}LineupSuspended`];
+    for (const key of suspendedKeys) {
+      const entries = this.parseRosterValue(event?.[key]);
+      if (entries.length === 0) {
+        continue;
+      }
+      pushEntries(entries, {
+        position: null,
+        availability: PlayerAvailabilityStatus.SUSPENDED,
+        isStarter: false
+      });
+    }
+
+    if (players.filter((row) => row.isStarter).length > 0) {
+      return players;
+    }
+
+    const homeAlias = this.normalizeAlias(homeTeamName);
+    const awayAlias = this.normalizeAlias(awayTeamName);
+    const targetAlias = side === "Home" ? homeAlias : awayAlias;
+    const oppositeAlias = side === "Home" ? awayAlias : homeAlias;
+    for (const timelineItem of timeline) {
+      const combined = `${String(timelineItem.strTimeline ?? "")} ${String(timelineItem.strTimelineDetail ?? "")}`.toLowerCase();
+      if (!combined.includes("lineup") && !combined.includes("starting")) {
+        continue;
+      }
+      const marker = this.normalizeAlias(
+        `${String(timelineItem.strTeam ?? "")} ${String(timelineItem.strTimelineDetail ?? "")}`
+      );
+      if (targetAlias.length > 0 && marker.length > 0) {
+        if (!marker.includes(targetAlias)) {
+          if (marker.includes(oppositeAlias)) {
+            continue;
+          }
+        }
+      }
+      const entry = this.parsePlayerRosterEntry(
+        String(timelineItem.strPlayer ?? timelineItem.strPlayerIn ?? timelineItem.strTimelineDetail ?? "").trim()
+      );
+      if (!entry) {
+        continue;
+      }
+      pushEntries([entry], {
+        position: null,
+        availability: PlayerAvailabilityStatus.AVAILABLE,
+        isStarter: true
+      });
+    }
+
+    return players;
+  }
+
+  private buildTheSportsDbCanonicalLineupCandidates(params: {
+    providerEventId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeamName: string;
+    awayTeamName: string;
+    event: Record<string, unknown> | null;
+    timeline: Array<Record<string, unknown>>;
+  }): TheSportsDbCanonicalLineupCandidate[] {
+    const updatedAt =
+      this.toDateOrNull(params.event?.dateUpdated) ??
+      this.toDateOrNull(params.event?.strTimestamp) ??
+      this.toDateOrNull(params.event?.dateEvent);
+    const homeFormation =
+      this.readFirstStringValue(params.event, ["strHomeFormation", "strHomeLineupFormation", "homeFormation"]) ?? null;
+    const awayFormation =
+      this.readFirstStringValue(params.event, ["strAwayFormation", "strAwayLineupFormation", "awayFormation"]) ?? null;
+
+    const homePlayers = this.buildLineupPlayersFromTheSportsDb(
+      params.event,
+      "Home",
+      params.timeline,
+      params.homeTeamName,
+      params.awayTeamName
+    );
+    const awayPlayers = this.buildLineupPlayersFromTheSportsDb(
+      params.event,
+      "Away",
+      params.timeline,
+      params.homeTeamName,
+      params.awayTeamName
+    );
+
+    const candidates: TheSportsDbCanonicalLineupCandidate[] = [];
+    if (homePlayers.length > 0) {
+      candidates.push({
+        teamId: params.homeTeamId,
+        teamName: params.homeTeamName,
+        formation: homeFormation,
+        players: homePlayers,
+        sourceUpdatedAt: updatedAt,
+        payload: {
+          providerEventId: params.providerEventId,
+          side: "home",
+          formation: homeFormation,
+          players: homePlayers
+        }
+      });
+    }
+    if (awayPlayers.length > 0) {
+      candidates.push({
+        teamId: params.awayTeamId,
+        teamName: params.awayTeamName,
+        formation: awayFormation,
+        players: awayPlayers,
+        sourceUpdatedAt: updatedAt,
+        payload: {
+          providerEventId: params.providerEventId,
+          side: "away",
+          formation: awayFormation,
+          players: awayPlayers
+        }
+      });
+    }
+    return candidates;
+  }
+
+  private async persistTheSportsDbCanonicalLineups(params: {
+    provider: ProviderRecord;
+    matchId: string;
+    providerEventId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeamName: string;
+    awayTeamName: string;
+    event: Record<string, unknown> | null;
+    timeline: Array<Record<string, unknown>>;
+  }) {
+    const candidates = this.buildTheSportsDbCanonicalLineupCandidates({
+      providerEventId: params.providerEventId,
+      homeTeamId: params.homeTeamId,
+      awayTeamId: params.awayTeamId,
+      homeTeamName: params.homeTeamName,
+      awayTeamName: params.awayTeamName,
+      event: params.event,
+      timeline: params.timeline
+    });
+    if (candidates.length === 0) {
+      return { lineupRowsWritten: 0, lineupPlayersWritten: 0 };
+    }
+
+    const now = new Date();
+    let lineupRowsWritten = 0;
+    let lineupPlayersWritten = 0;
+
+    for (const candidate of candidates) {
+      const lineupHash = this.hashPayload({
+        providerEventId: params.providerEventId,
+        teamId: candidate.teamId,
+        formation: candidate.formation,
+        players: candidate.players.map((player) => ({
+          n: player.playerName,
+          p: player.position,
+          j: player.jerseyNumber,
+          a: player.availability,
+          s: player.isStarter,
+          o: player.sortOrder
+        }))
+      });
+      const existing = await this.prisma.canonicalLineup.findFirst({
+        where: {
+          matchId: params.matchId,
+          teamId: candidate.teamId,
+          providerKey: params.providerEventId,
+          lineupHash
+        },
+        select: { id: true }
+      });
+      if (existing) {
+        continue;
+      }
+
+      const roster = await this.prisma.player.findMany({
+        where: { teamId: candidate.teamId },
+        select: { id: true, fullName: true }
+      });
+      const rosterMap = new Map<string, string>();
+      for (const player of roster) {
+        const key = this.normalizeAlias(player.fullName);
+        if (key.length === 0 || rosterMap.has(key)) {
+          continue;
+        }
+        rosterMap.set(key, player.id);
+      }
+
+      const createdLineup = await this.prisma.canonicalLineup.create({
+        data: {
+          matchId: params.matchId,
+          teamId: candidate.teamId,
+          providerId: params.provider.id,
+          providerKey: params.providerEventId,
+          formation: candidate.formation,
+          sourceUpdatedAt: candidate.sourceUpdatedAt,
+          pulledAt: now,
+          lineupHash,
+          payloadJson: {
+            provider: params.provider.key,
+            providerEventId: params.providerEventId,
+            teamId: candidate.teamId,
+            teamName: candidate.teamName,
+            formation: candidate.formation,
+            payload: candidate.payload
+          } as Prisma.InputJsonValue
+        }
+      });
+      lineupRowsWritten += 1;
+
+      if (candidate.players.length > 0) {
+        const createManyRows = candidate.players.map((player) => ({
+          canonicalLineupId: createdLineup.id,
+          playerId: rosterMap.get(this.normalizeAlias(player.playerName)) ?? null,
+          playerName: player.playerName,
+          position: player.position,
+          jerseyNumber: player.jerseyNumber,
+          availability: player.availability,
+          isStarter: player.isStarter,
+          sortOrder: player.sortOrder
+        }));
+        await this.prisma.canonicalLineupPlayerAvailability.createMany({
+          data: createManyRows
+        });
+        lineupPlayersWritten += createManyRows.length;
+      }
+    }
+
+    return { lineupRowsWritten, lineupPlayersWritten };
+  }
+
+  private parseTheSportsDbStatNumber(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return null;
+    }
+    const compact = value.trim();
+    if (compact.length === 0) {
+      return null;
+    }
+    const ratioMatch = compact.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+    if (ratioMatch) {
+      const numerator = Number(ratioMatch[1]);
+      const denominator = Number(ratioMatch[2]);
+      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0) {
+        return (numerator / denominator) * 100;
+      }
+      return null;
+    }
+    const normalized = compact.replace(/%/g, "").replace(",", ".");
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private normalizeTheSportsDbStatLabel(value: unknown) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return this.normalizeAlias(value);
+  }
+
+  private buildTheSportsDbEventStatsProjection(eventStats: Array<Record<string, unknown>>) {
+    const home: TheSportsDbEventStatsProjection = {
+      possession: null,
+      shots: null,
+      shotsOnTarget: null,
+      fouls: null,
+      corners: null,
+      yellowCards: null,
+      redCards: null,
+      tempo: null,
+      offenseScore: null,
+      defenseScore: null,
+      setPieceScore: null,
+      transitionScore: null
+    };
+    const away: TheSportsDbEventStatsProjection = {
+      possession: null,
+      shots: null,
+      shotsOnTarget: null,
+      fouls: null,
+      corners: null,
+      yellowCards: null,
+      redCards: null,
+      tempo: null,
+      offenseScore: null,
+      defenseScore: null,
+      setPieceScore: null,
+      transitionScore: null
+    };
+
+    const assign = (field: keyof TheSportsDbEventStatsProjection, homeValue: number | null, awayValue: number | null) => {
+      if (homeValue !== null) {
+        home[field] = homeValue;
+      }
+      if (awayValue !== null) {
+        away[field] = awayValue;
+      }
+    };
+
+    for (const row of eventStats) {
+      const label = this.normalizeTheSportsDbStatLabel(row.strStat ?? row.stat ?? row.strType);
+      if (label.length === 0) {
+        continue;
+      }
+      const homeValue = this.parseTheSportsDbStatNumber(row.strHome ?? row.home ?? row.intHome ?? row.homeValue);
+      const awayValue = this.parseTheSportsDbStatNumber(row.strAway ?? row.away ?? row.intAway ?? row.awayValue);
+      if (homeValue === null && awayValue === null) {
+        continue;
+      }
+
+      if (label.includes("possession")) {
+        assign("possession", homeValue, awayValue);
+        continue;
+      }
+      if (
+        label.includes("shots_on_target") ||
+        label.includes("shots_on_goal") ||
+        label.includes("shots_target") ||
+        label.includes("shots_on")
+      ) {
+        assign("shotsOnTarget", homeValue, awayValue);
+        continue;
+      }
+      if (
+        label.includes("total_shots") ||
+        label.includes("shots_total") ||
+        (label.includes("shot") && !label.includes("target"))
+      ) {
+        assign("shots", homeValue, awayValue);
+        continue;
+      }
+      if (label.includes("foul")) {
+        assign("fouls", homeValue, awayValue);
+        continue;
+      }
+      if (label.includes("corner")) {
+        assign("corners", homeValue, awayValue);
+        continue;
+      }
+      if (label.includes("yellow")) {
+        assign("yellowCards", homeValue, awayValue);
+        continue;
+      }
+      if (label.includes("red")) {
+        assign("redCards", homeValue, awayValue);
+      }
+    }
+
+    const finalizeTeam = (own: TheSportsDbEventStatsProjection, opp: TheSportsDbEventStatsProjection) => {
+      const shotsOnTarget = own.shotsOnTarget ?? 0;
+      const shots = own.shots ?? 0;
+      const corners = own.corners ?? 0;
+      own.tempo = own.possession !== null ? Number((0.7 + own.possession / 100).toFixed(3)) : null;
+      own.offenseScore = Number((shotsOnTarget * 0.35 + shots * 0.08 + corners * 0.06).toFixed(3));
+      own.defenseScore = Number((Math.max(0, 10 - (opp.shotsOnTarget ?? 0) * 0.7 - (opp.shots ?? 0) * 0.05)).toFixed(3));
+      own.setPieceScore = Number((corners * 0.28).toFixed(3));
+      own.transitionScore = Number((Math.max(0, (shots - corners) * 0.1 + shotsOnTarget * 0.2)).toFixed(3));
+    };
+
+    finalizeTeam(home, away);
+    finalizeTeam(away, home);
+
+    return { home, away };
+  }
+
+  private optionalFloat(value: number | null) {
+    return value === null ? undefined : Number(value.toFixed(3));
+  }
+
+  private optionalInt(value: number | null) {
+    return value === null ? undefined : Math.max(0, Math.round(value));
+  }
+
+  private hasAnyProjectedStat(value: TheSportsDbEventStatsProjection) {
+    return (
+      value.possession !== null ||
+      value.shots !== null ||
+      value.shotsOnTarget !== null ||
+      value.fouls !== null ||
+      value.corners !== null ||
+      value.yellowCards !== null ||
+      value.redCards !== null
+    );
+  }
+
+  private async persistTheSportsDbTeamStats(params: {
+    matchId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    eventStats: Array<Record<string, unknown>>;
+  }) {
+    if (params.eventStats.length === 0) {
+      return 0;
+    }
+
+    const projection = this.buildTheSportsDbEventStatsProjection(params.eventStats);
+    if (!this.hasAnyProjectedStat(projection.home) && !this.hasAnyProjectedStat(projection.away)) {
+      return 0;
+    }
+
+    const now = new Date();
+    await Promise.all([
+      this.prisma.teamStat.upsert({
+        where: {
+          matchId_teamId: {
+            matchId: params.matchId,
+            teamId: params.homeTeamId
+          }
+        },
+        update: {
+          possession: this.optionalFloat(projection.home.possession),
+          shots: this.optionalInt(projection.home.shots),
+          shotsOnTarget: this.optionalInt(projection.home.shotsOnTarget),
+          fouls: this.optionalInt(projection.home.fouls),
+          corners: this.optionalInt(projection.home.corners),
+          yellowCards: this.optionalInt(projection.home.yellowCards),
+          redCards: this.optionalInt(projection.home.redCards),
+          tempo: this.optionalFloat(projection.home.tempo),
+          offenseScore: this.optionalFloat(projection.home.offenseScore),
+          defenseScore: this.optionalFloat(projection.home.defenseScore),
+          setPieceScore: this.optionalFloat(projection.home.setPieceScore),
+          transitionScore: this.optionalFloat(projection.home.transitionScore),
+          dataSource: "the_sports_db_eventstats",
+          importedAt: now
+        },
+        create: {
+          matchId: params.matchId,
+          teamId: params.homeTeamId,
+          possession: this.optionalFloat(projection.home.possession),
+          shots: this.optionalInt(projection.home.shots),
+          shotsOnTarget: this.optionalInt(projection.home.shotsOnTarget),
+          fouls: this.optionalInt(projection.home.fouls),
+          corners: this.optionalInt(projection.home.corners),
+          yellowCards: this.optionalInt(projection.home.yellowCards),
+          redCards: this.optionalInt(projection.home.redCards),
+          tempo: this.optionalFloat(projection.home.tempo),
+          offenseScore: this.optionalFloat(projection.home.offenseScore),
+          defenseScore: this.optionalFloat(projection.home.defenseScore),
+          setPieceScore: this.optionalFloat(projection.home.setPieceScore),
+          transitionScore: this.optionalFloat(projection.home.transitionScore),
+          dataSource: "the_sports_db_eventstats",
+          importedAt: now
+        }
+      }),
+      this.prisma.teamStat.upsert({
+        where: {
+          matchId_teamId: {
+            matchId: params.matchId,
+            teamId: params.awayTeamId
+          }
+        },
+        update: {
+          possession: this.optionalFloat(projection.away.possession),
+          shots: this.optionalInt(projection.away.shots),
+          shotsOnTarget: this.optionalInt(projection.away.shotsOnTarget),
+          fouls: this.optionalInt(projection.away.fouls),
+          corners: this.optionalInt(projection.away.corners),
+          yellowCards: this.optionalInt(projection.away.yellowCards),
+          redCards: this.optionalInt(projection.away.redCards),
+          tempo: this.optionalFloat(projection.away.tempo),
+          offenseScore: this.optionalFloat(projection.away.offenseScore),
+          defenseScore: this.optionalFloat(projection.away.defenseScore),
+          setPieceScore: this.optionalFloat(projection.away.setPieceScore),
+          transitionScore: this.optionalFloat(projection.away.transitionScore),
+          dataSource: "the_sports_db_eventstats",
+          importedAt: now
+        },
+        create: {
+          matchId: params.matchId,
+          teamId: params.awayTeamId,
+          possession: this.optionalFloat(projection.away.possession),
+          shots: this.optionalInt(projection.away.shots),
+          shotsOnTarget: this.optionalInt(projection.away.shotsOnTarget),
+          fouls: this.optionalInt(projection.away.fouls),
+          corners: this.optionalInt(projection.away.corners),
+          yellowCards: this.optionalInt(projection.away.yellowCards),
+          redCards: this.optionalInt(projection.away.redCards),
+          tempo: this.optionalFloat(projection.away.tempo),
+          offenseScore: this.optionalFloat(projection.away.offenseScore),
+          defenseScore: this.optionalFloat(projection.away.defenseScore),
+          setPieceScore: this.optionalFloat(projection.away.setPieceScore),
+          transitionScore: this.optionalFloat(projection.away.transitionScore),
+          dataSource: "the_sports_db_eventstats",
+          importedAt: now
+        }
+      })
+    ]);
+
+    return 2;
+  }
+
+  private parseTimelineMinute(row: Record<string, unknown>) {
+    const directKeys = ["intTime", "minute", "intMinute", "elapsed", "intElapsed"];
+    for (const key of directKeys) {
+      const value = Number(row[key]);
+      if (Number.isFinite(value) && value >= 0 && value <= 200) {
+        return Math.round(value);
+      }
+    }
+    const textCandidates = [row.strTimeline, row.strTimelineDetail, row.strEvent];
+    for (const candidate of textCandidates) {
+      if (typeof candidate !== "string") {
+        continue;
+      }
+      const match = candidate.match(/(\d{1,3})\s*'?/);
+      if (!match) {
+        continue;
+      }
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 200) {
+        return Math.round(parsed);
+      }
+    }
+    return null;
+  }
+
+  private inferTheSportsDbTimelineTeamId(
+    row: Record<string, unknown>,
+    homeTeamId: string,
+    awayTeamId: string,
+    homeTeamName: string,
+    awayTeamName: string
+  ) {
+    const homeAlias = this.normalizeAlias(homeTeamName);
+    const awayAlias = this.normalizeAlias(awayTeamName);
+    const tokens = [
+      row.strTeam,
+      row.strTimelineTeam,
+      row.strTeamName,
+      row.strHomeTeam,
+      row.strAwayTeam,
+      row.strSide,
+      row.strTimelineDetail
+    ]
+      .map((value) => (typeof value === "string" ? this.normalizeAlias(value) : ""))
+      .filter((value) => value.length > 0);
+
+    for (const token of tokens) {
+      const hasHome = homeAlias.length > 0 && token.includes(homeAlias);
+      const hasAway = awayAlias.length > 0 && token.includes(awayAlias);
+      if (hasHome && !hasAway) {
+        return homeTeamId;
+      }
+      if (hasAway && !hasHome) {
+        return awayTeamId;
+      }
+    }
+    return null;
+  }
+
+  private parseTimelineEventType(row: Record<string, unknown>) {
+    const direct = this.readFirstStringValue(row, ["strTimeline", "strEvent", "strType", "event", "type"]);
+    if (!direct) {
+      return null;
+    }
+    const compact = direct.replace(/\s+/g, " ").trim();
+    return compact.length > 0 ? compact.slice(0, 80) : null;
+  }
+
+  private parseTimelinePlayerName(row: Record<string, unknown>) {
+    const direct =
+      this.readFirstStringValue(row, ["strPlayer", "strPlayerIn", "strPlayerOut", "player", "playerName"]) ?? null;
+    if (direct) {
+      const parsed = this.parsePlayerRosterEntry(direct);
+      return parsed?.playerName ?? null;
+    }
+    const detail = this.readFirstStringValue(row, ["strTimelineDetail", "detail"]);
+    if (!detail || detail.length > 48) {
+      return null;
+    }
+    const parsed = this.parsePlayerRosterEntry(detail);
+    return parsed?.playerName ?? null;
+  }
+
+  private async persistTheSportsDbTimelineEvents(params: {
+    matchId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeamName: string;
+    awayTeamName: string;
+    timeline: Array<Record<string, unknown>>;
+  }) {
+    if (params.timeline.length === 0) {
+      return 0;
+    }
+
+    const now = new Date();
+    const createRows: Prisma.MatchEventCreateManyInput[] = [];
+    const seen = new Set<string>();
+
+    for (const row of params.timeline) {
+      const eventType = this.parseTimelineEventType(row);
+      if (!eventType) {
+        continue;
+      }
+      const minute = this.parseTimelineMinute(row);
+      const teamId = this.inferTheSportsDbTimelineTeamId(
+        row,
+        params.homeTeamId,
+        params.awayTeamId,
+        params.homeTeamName,
+        params.awayTeamName
+      );
+      const playerName = this.parseTimelinePlayerName(row);
+      const signature = `${eventType}|${minute ?? "na"}|${teamId ?? "na"}|${playerName ?? "na"}`;
+      if (seen.has(signature)) {
+        continue;
+      }
+      seen.add(signature);
+      createRows.push({
+        matchId: params.matchId,
+        minute,
+        eventType,
+        teamId,
+        playerId: null,
+        payload: {
+          provider: "the_sports_db",
+          timelineRow: row,
+          playerName
+        } as Prisma.InputJsonValue,
+        dataSource: "the_sports_db_timeline",
+        importedAt: now,
+        updatedByProcess: "provider_sync"
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.matchEvent.deleteMany({
+        where: {
+          matchId: params.matchId,
+          dataSource: "the_sports_db_timeline"
+        }
+      });
+      if (createRows.length > 0) {
+        await tx.matchEvent.createMany({
+          data: createRows
+        });
+      }
+    });
+
+    return createRows.length;
+  }
+
+  private async persistTheSportsDbEnrichment(params: {
+    provider: ProviderRecord;
+    matchId: string;
+    providerEventId: string;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeamName: string;
+    awayTeamName: string;
+    event: Record<string, unknown> | null;
+    eventStats: Array<Record<string, unknown>>;
+    timeline: Array<Record<string, unknown>>;
+  }) {
+    const [lineupResult, teamStatsUpserted, timelineEventsWritten] = await Promise.all([
+      this.persistTheSportsDbCanonicalLineups({
+        provider: params.provider,
+        matchId: params.matchId,
+        providerEventId: params.providerEventId,
+        homeTeamId: params.homeTeamId,
+        awayTeamId: params.awayTeamId,
+        homeTeamName: params.homeTeamName,
+        awayTeamName: params.awayTeamName,
+        event: params.event,
+        timeline: params.timeline
+      }),
+      this.persistTheSportsDbTeamStats({
+        matchId: params.matchId,
+        homeTeamId: params.homeTeamId,
+        awayTeamId: params.awayTeamId,
+        eventStats: params.eventStats
+      }),
+      this.persistTheSportsDbTimelineEvents({
+        matchId: params.matchId,
+        homeTeamId: params.homeTeamId,
+        awayTeamId: params.awayTeamId,
+        homeTeamName: params.homeTeamName,
+        awayTeamName: params.awayTeamName,
+        timeline: params.timeline
+      })
+    ]);
+
+    return {
+      lineupRowsWritten: lineupResult.lineupRowsWritten,
+      lineupPlayersWritten: lineupResult.lineupPlayersWritten,
+      teamStatsUpserted,
+      timelineEventsWritten
+    };
   }
 
   private parseBooleanConfig(value: unknown, fallback: boolean) {
@@ -2637,23 +3547,6 @@ export class ProviderIngestionService {
     return 75;
   }
 
-  private predictionHorizonByStatus(status: MatchStatus) {
-    if (status === MatchStatus.finished) {
-      return "post_match";
-    }
-    if (status === MatchStatus.live) {
-      return "in_play";
-    }
-    return "pre_match";
-  }
-
-  private lineKey(line?: number | null) {
-    if (line === null || line === undefined || !Number.isFinite(line)) {
-      return "na";
-    }
-    return Number(line).toFixed(2);
-  }
-
   private async writeCanonicalMatchRevision(
     matchId: string,
     sourcePriority: number,
@@ -2689,95 +3582,6 @@ export class ProviderIngestionService {
           mergedJson: mergedPayload as Prisma.InputJsonValue
         }
       });
-    });
-  }
-
-  private async writePublishedPredictionRun(input: {
-    matchId: string;
-    matchStatus: MatchStatus;
-    market: string;
-    line?: number | null;
-    modelVersionId?: string | null;
-    probability: number;
-    confidence: number;
-    riskFlags: unknown;
-    explanation: Record<string, unknown>;
-  }) {
-    const normalizedProbability = Number.isFinite(input.probability)
-      ? Math.max(0.0001, Math.min(0.9999, Number(input.probability.toFixed(6))))
-      : 0.5;
-    const normalizedConfidence = Number.isFinite(input.confidence)
-      ? Math.max(0, Math.min(1, Number(input.confidence.toFixed(6))))
-      : 0.5;
-    const line = input.line === undefined || input.line === null ? null : Number(input.line.toFixed(2));
-    const lineKey = this.lineKey(line);
-    const horizon = this.predictionHorizonByStatus(input.matchStatus);
-
-    const [featureSnapshot, oddsSnapshot] = await Promise.all([
-      this.prisma.featureSnapshot.findFirst({
-        where: { matchId: input.matchId, horizon },
-        orderBy: { generatedAt: "desc" },
-        select: { id: true }
-      }),
-      this.prisma.oddsSnapshotV2.findFirst({
-        where: {
-          matchId: input.matchId,
-          market: input.market,
-          ...(line === null ? { line: null } : { line })
-        },
-        orderBy: { collectedAt: "desc" },
-        select: { id: true, normalizedProb: true }
-      })
-    ]);
-
-    const marketProbability = oddsSnapshot?.normalizedProb ?? null;
-    const edge =
-      marketProbability !== null ? Number((normalizedProbability - marketProbability).toFixed(6)) : null;
-    const fairOdds = Number((1 / normalizedProbability).toFixed(6));
-
-    const run = await this.prisma.predictionRun.create({
-      data: {
-        matchId: input.matchId,
-        market: input.market,
-        line,
-        lineKey,
-        horizon,
-        featureSnapshotId: featureSnapshot?.id ?? null,
-        oddsSnapshotId: oddsSnapshot?.id ?? null,
-        modelVersionId: input.modelVersionId ?? null,
-        calibrationVersionId: null,
-        probability: normalizedProbability,
-        fairOdds,
-        edge,
-        confidence: normalizedConfidence,
-        riskFlagsJson: (input.riskFlags ?? []) as Prisma.InputJsonValue,
-        explanationJson: input.explanation as Prisma.InputJsonValue
-      }
-    });
-
-    await this.prisma.publishedPrediction.upsert({
-      where: {
-        matchId_market_lineKey_horizon: {
-          matchId: input.matchId,
-          market: input.market,
-          lineKey,
-          horizon
-        }
-      },
-      update: {
-        line,
-        predictionRunId: run.id,
-        publishedAt: new Date()
-      },
-      create: {
-        matchId: input.matchId,
-        market: input.market,
-        line,
-        lineKey,
-        horizon,
-        predictionRunId: run.id,
-        publishedAt: new Date()
-      }
     });
   }
 
@@ -4799,6 +5603,7 @@ export class ProviderIngestionService {
       }
       const eventId = mapping.providerMatchKey;
 
+      let eventRecord: Record<string, unknown> | null = null;
       let eventStats: Array<Record<string, unknown>> = [];
       let timeline: Array<Record<string, unknown>> = [];
       let refereeName: string | null = null;
@@ -4809,6 +5614,7 @@ export class ProviderIngestionService {
         await this.logApiCall(`provider/${provider.key}/lookupevent/${eventId}`, 200, Date.now() - startedEventAt, runId);
         const event = this.toRecordArray(eventResponse.events)[0];
         if (event) {
+          eventRecord = event;
           refereeName = this.normalizeRefereeName(event.strReferee);
         }
       } catch (error) {
@@ -4851,6 +5657,34 @@ export class ProviderIngestionService {
       const lineupCoverage = Number(Math.min(1, lineupSignals > 0 ? 0.45 + lineupSignals * 0.12 : timeline.length > 0 ? 0.32 : 0.18).toFixed(3));
       const eventStatsCoverage = Number(Math.min(1, statsSignals > 0 ? 0.35 + statsSignals * 0.08 : 0.2).toFixed(3));
       const aliasConfidence = Number((mapping.mappingConfidence ?? 0.6).toFixed(3));
+      let lineupRowsWritten = 0;
+      let lineupPlayersWritten = 0;
+      let teamStatsUpserted = 0;
+      let timelineEventsWritten = 0;
+
+      try {
+        const enrichmentWriteResult = await this.persistTheSportsDbEnrichment({
+          provider,
+          matchId: match.id,
+          providerEventId: eventId,
+          homeTeamId: match.homeTeam.id,
+          awayTeamId: match.awayTeam.id,
+          homeTeamName: match.homeTeam.name,
+          awayTeamName: match.awayTeam.name,
+          event: eventRecord,
+          eventStats,
+          timeline
+        });
+        lineupRowsWritten = enrichmentWriteResult.lineupRowsWritten;
+        lineupPlayersWritten = enrichmentWriteResult.lineupPlayersWritten;
+        teamStatsUpserted = enrichmentWriteResult.teamStatsUpserted;
+        timelineEventsWritten = enrichmentWriteResult.timelineEventsWritten;
+      } catch (error) {
+        errors += 1;
+        this.logger.warn(
+          `TheSportsDB enrichment write failed for ${eventId}: ${error instanceof Error ? error.message : "unknown"}`
+        );
+      }
 
       await this.matchContextEnrichment.upsertContext({
         matchId: match.id,
@@ -4891,7 +5725,11 @@ export class ProviderIngestionService {
         referee: refereeName ?? "missing",
         lineupCoverage,
         eventStatsCoverage,
-        aliasConfidence
+        aliasConfidence,
+        lineupRowsWritten,
+        lineupPlayersWritten,
+        teamStatsUpserted,
+        timelineEventsWritten
       });
       recordsWritten += 1;
     }

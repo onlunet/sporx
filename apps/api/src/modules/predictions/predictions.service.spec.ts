@@ -1,0 +1,182 @@
+import { MatchStatus } from "@prisma/client";
+import { CacheService } from "../../cache/cache.service";
+import { OddsService } from "../odds/odds.service";
+import { PredictionsService } from "./predictions.service";
+import { BasketballPredictionStrategy } from "./sport-strategies/basketball-prediction.strategy";
+import { FootballPredictionStrategy } from "./sport-strategies/football-prediction.strategy";
+import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
+
+function createPublishedRow(runId: string) {
+  return {
+    matchId: "match-1",
+    market: "match_outcome",
+    line: null,
+    lineKey: "na",
+    horizon: "pre_match",
+    publishedAt: new Date("2026-04-17T10:00:00.000Z"),
+    predictionRun: {
+      modelVersionId: "model-1",
+      probability: 0.62,
+      confidence: 0.58,
+      riskFlagsJson: [],
+      explanationJson: {
+        summary: "test summary",
+        selectedSide: "home",
+        probabilities: {
+          home: 0.62,
+          draw: 0.22,
+          away: 0.16
+        },
+        calibratedProbabilities: {
+          home: 0.62,
+          draw: 0.22,
+          away: 0.16
+        },
+        rawProbabilities: {
+          home: 0.6,
+          draw: 0.24,
+          away: 0.16
+        },
+        expectedScore: {
+          home: 1.7,
+          away: 1.1
+        }
+      },
+      createdAt: new Date("2026-04-17T09:59:00.000Z"),
+      id: runId
+    },
+    match: {
+      sport: { code: "football" },
+      status: MatchStatus.scheduled,
+      matchDateTimeUTC: new Date("2026-04-18T18:00:00.000Z"),
+      homeScore: null,
+      awayScore: null,
+      halfTimeHomeScore: null,
+      halfTimeAwayScore: null,
+      q1HomeScore: null,
+      q1AwayScore: null,
+      q2HomeScore: null,
+      q2AwayScore: null,
+      q3HomeScore: null,
+      q3AwayScore: null,
+      q4HomeScore: null,
+      q4AwayScore: null,
+      homeTeam: { name: "Team A" },
+      awayTeam: { name: "Team B" },
+      league: { id: "league-1", name: "League 1", code: "L1" }
+    }
+  };
+}
+
+describe("PredictionsService", () => {
+  it("public match query returns one row per duplicate published tuple", async () => {
+    const prisma = {
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([createPublishedRow("run-1"), createPublishedRow("run-2")])
+      }
+    } as any;
+    const cache = {} as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.listByMatch("match-1");
+
+    const fullTimeRows = items.filter(
+      (item) => item.matchId === "match-1" && item.predictionType === "fullTimeResult" && item.marketKey === "match_outcome"
+    );
+    expect(fullTimeRows).toHaveLength(1);
+  });
+
+  it("list endpoint reads only published source when rollout selects published", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-1", matchDateTimeUTC: new Date("2026-04-18T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([createPublishedRow("run-live")])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+  });
+
+  it("list endpoint requests only approved/manually-forced published decisions", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-1", matchDateTimeUTC: new Date("2026-04-18T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([createPublishedRow("run-allowed")])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    await service.list({ status: "scheduled", sport: "football", take: 5 });
+
+    const firstCallArg = prisma.publishedPrediction.findMany.mock.calls[0][0];
+    expect(firstCallArg.where.OR).toEqual(
+      expect.arrayContaining([
+        { publishDecision: { is: null } },
+        {
+          publishDecision: {
+            is: {
+              status: {
+                in: expect.arrayContaining(["APPROVED", "MANUALLY_FORCED"])
+              }
+            }
+          }
+        }
+      ])
+    );
+  });
+});

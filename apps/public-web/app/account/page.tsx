@@ -4,7 +4,7 @@ import { User, Settings } from 'lucide-react';
 export default function AccountPage() {
   return (
     <div className='space-y-8'>
-      <div className='relative overflow-hidden rounded-3xl bg-gradient-to-br from-surface via-abyss to-void border border-white/10 p-8'>
+      <div className='relative overflow-hidden rounded-3xl bg-gradient-to-br from-surface via-abyss to-void border border-white/10 p-4 sm:p-6 lg:p-8'>
         <div className='absolute top-0 right-0 w-96 h-96 bg-neon-cyan/10 rounded-full blur-[100px] pointer-events-none' />
         <div className='absolute bottom-0 left-0 w-64 h-64 bg-neon-purple/10 rounded-full blur-[80px] pointer-events-none' />
         
@@ -21,7 +21,7 @@ export default function AccountPage() {
         </div>
       </div>
 
-      <div className='grid lg:grid-cols-3 gap-6'>
+      <div className='grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6'>
         <div className='lg:col-span-2 space-y-6'>
           <ProfileCard />          
           <UserStats />          

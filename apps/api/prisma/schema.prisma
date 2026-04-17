@@ -22,6 +22,27 @@ enum MatchStatus {
   cancelled
 }
 
+enum PlayerAvailabilityStatus {
+  AVAILABLE
+  BENCH
+  OUT
+  SUSPENDED
+  INJURY_UNKNOWN
+}
+
+enum PublishDecisionStatus {
+  APPROVED
+  ABSTAINED
+  SUPPRESSED
+  BLOCKED
+  MANUALLY_FORCED
+}
+
+enum ManualOverrideAction {
+  FORCE
+  BLOCK
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -32,6 +53,7 @@ model User {
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
   apiLogs       ApiLog[]
+  manualPublishOverrides ManualPublishOverride[] @relation("ManualPublishOverrideActor")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
@@ -77,6 +99,7 @@ model League {
   seasons          Season[]
   matches          Match[]
   providerMappings ProviderLeagueMapping[]
+  publishStrategyProfiles PublishStrategyProfile[]
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
 
@@ -119,6 +142,7 @@ model Team {
   providerMappings ProviderTeamMapping[]
   standings        Standing[]
   basketballStats  BasketballTeamStat[]
+  canonicalLineups CanonicalLineup[]
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
 
@@ -138,6 +162,7 @@ model Player {
   updatedByProcess String?
   team             Team?        @relation(fields: [teamId], references: [id])
   stats            PlayerStat[]
+  lineupEntries    CanonicalLineupPlayerAvailability[]
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 }
@@ -202,10 +227,21 @@ model Match {
   oddsSnapshotsV2         OddsSnapshotV2[]
   oddsMappings            MatchOddsMapping[]
   marketAnalysisSnapshots MarketAnalysisSnapshot[]
+  canonicalLineups        CanonicalLineup[]
   canonicalRevisions      CanonicalMatchRevision[]
   featureSnapshotsV2      FeatureSnapshot[]
+  lineupSnapshots         LineupSnapshot[]
+  eventAggregateSnapshots EventAggregateSnapshot[]
+  marketConsensusSnapshots MarketConsensusSnapshot[]
   predictionRuns          PredictionRun[]
+  predictionCandidates    PredictionCandidate[]
+  publishDecisions        PublishDecision[]
+  metaModelRuns           MetaModelRun[]
   publishedPredictions    PublishedPrediction[]
+  manualPublishOverrides  ManualPublishOverride[]
+  policyEvaluationSnapshots PolicyEvaluationSnapshot[]
+  shadowComparisons       ShadowPredictionComparison[]
+  leakageChecks           LeakageCheckResult[]
   teamComparisonCache     TeamComparisonCache[]
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -416,6 +452,8 @@ model ModelVersion {
   featureImportance     FeatureImportanceSnapshot[]
   comparisonSnapshots   ModelComparisonSnapshot[]
   predictionRuns        PredictionRun[]
+  predictionCandidates  PredictionCandidate[]
+  publishDecisions      PublishDecision[]
   createdAt             DateTime                     @default(now())
 
   @@unique([modelName, version])
@@ -523,6 +561,7 @@ model Provider {
   matchMappings  ProviderMatchMapping[]
   oddsSnapshots  OddsSnapshot[]
   oddsMappings   MatchOddsMapping[]
+  canonicalLineups CanonicalLineup[]
   jobs           IngestionJob[]
   createdAt      DateTime                @default(now())
 }
@@ -630,6 +669,101 @@ model MarketAnalysisSnapshot {
 
   @@index([matchId, predictionType, marketLine, createdAt])
   @@index([predictionType, marketLine, createdAt])
+}
+
+model CanonicalLineup {
+  id              String                            @id @default(uuid())
+  matchId         String                            @map("match_id")
+  teamId          String                            @map("team_id")
+  providerId      String?                           @map("provider_id")
+  providerKey     String?                           @map("provider_key")
+  formation       String?
+  sourceUpdatedAt DateTime?                         @map("source_updated_at")
+  pulledAt        DateTime                          @default(now()) @map("pulled_at")
+  lineupHash      String                            @map("lineup_hash")
+  payloadJson     Json                              @map("payload_jsonb")
+  createdAt       DateTime                          @default(now()) @map("created_at")
+  match           Match                             @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  team            Team                              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  provider        Provider?                         @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  players         CanonicalLineupPlayerAvailability[]
+
+  @@unique([matchId, teamId, providerKey, lineupHash])
+  @@index([matchId, teamId, sourceUpdatedAt])
+  @@index([providerId, sourceUpdatedAt])
+  @@map("canonical_lineups")
+}
+
+model CanonicalLineupPlayerAvailability {
+  id                String                 @id @default(uuid())
+  canonicalLineupId String                 @map("canonical_lineup_id")
+  playerId          String?                @map("player_id")
+  playerName        String                 @map("player_name")
+  position          String?
+  jerseyNumber      Int?                   @map("jersey_number")
+  availability      PlayerAvailabilityStatus
+  isStarter         Boolean                @default(false) @map("is_starter")
+  sortOrder         Int?                   @map("sort_order")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  canonicalLineup   CanonicalLineup        @relation(fields: [canonicalLineupId], references: [id], onDelete: Cascade)
+  player            Player?                @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  @@index([canonicalLineupId, availability, isStarter])
+  @@index([playerId])
+  @@map("canonical_lineup_player_availability")
+}
+
+model LineupSnapshot {
+  id                String        @id @default(uuid())
+  matchId           String        @map("match_id")
+  horizon           String
+  cutoffAt          DateTime      @map("cutoff_at")
+  generatedAt       DateTime      @default(now()) @map("generated_at")
+  lineupHash        String        @map("lineup_hash")
+  lineupJson        Json          @map("lineup_jsonb")
+  coverageJson      Json          @map("coverage_jsonb")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  match             Match         @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  metaModelRuns     MetaModelRun[]
+
+  @@unique([matchId, horizon, cutoffAt, lineupHash])
+  @@index([matchId, horizon, cutoffAt])
+  @@map("lineup_snapshots")
+}
+
+model EventAggregateSnapshot {
+  id                String        @id @default(uuid())
+  matchId           String        @map("match_id")
+  horizon           String
+  cutoffAt          DateTime      @map("cutoff_at")
+  generatedAt       DateTime      @default(now()) @map("generated_at")
+  aggregateHash     String        @map("aggregate_hash")
+  aggregateJson     Json          @map("aggregate_jsonb")
+  coverageJson      Json          @map("coverage_jsonb")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  match             Match         @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  metaModelRuns     MetaModelRun[]
+
+  @@unique([matchId, horizon, cutoffAt, aggregateHash])
+  @@index([matchId, horizon, cutoffAt])
+  @@map("event_aggregate_snapshots")
+}
+
+model MarketConsensusSnapshot {
+  id                String        @id @default(uuid())
+  matchId           String        @map("match_id")
+  horizon           String
+  cutoffAt          DateTime      @map("cutoff_at")
+  generatedAt       DateTime      @default(now()) @map("generated_at")
+  consensusHash     String        @map("consensus_hash")
+  consensusJson     Json          @map("consensus_jsonb")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  match             Match         @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  metaModelRuns     MetaModelRun[]
+
+  @@unique([matchId, horizon, cutoffAt, consensusHash])
+  @@index([matchId, horizon, cutoffAt])
+  @@map("market_consensus_snapshots")
 }
 
 model IngestionJob {
@@ -771,6 +905,10 @@ model PredictionRun {
   fairOdds             Float?                @map("fair_odds")
   edge                 Float?
   confidence           Float
+  refinedProbability   Float?                @map("refined_probability")
+  publishScore         Float?                @map("publish_score")
+  riskAdjustedConfidence Float?              @map("risk_adjusted_confidence")
+  refinedSource        String?               @map("refined_source")
   riskFlagsJson        Json                  @map("risk_flags_jsonb")
   explanationJson      Json                  @map("explanation_jsonb")
   createdAt            DateTime              @default(now()) @map("created_at")
@@ -778,7 +916,11 @@ model PredictionRun {
   featureSnapshot      FeatureSnapshot?      @relation(fields: [featureSnapshotId], references: [id], onDelete: SetNull)
   oddsSnapshot         OddsSnapshotV2?       @relation(fields: [oddsSnapshotId], references: [id], onDelete: SetNull)
   modelVersion         ModelVersion?         @relation(fields: [modelVersionId], references: [id], onDelete: SetNull)
+  predictionCandidates PredictionCandidate[]
+  publishDecisions     PublishDecision[]
   publishedEntries     PublishedPrediction[]
+  shadowComparisons    ShadowPredictionComparison[]
+  metaModelRuns        MetaModelRun[]
 
   @@index([matchId, createdAt])
   @@index([market, line, horizon, createdAt])
@@ -786,20 +928,375 @@ model PredictionRun {
   @@map("prediction_runs")
 }
 
+model MetaModelRun {
+  id                       String                  @id @default(uuid())
+  matchId                  String                  @map("match_id")
+  market                   String
+  line                     Float?
+  lineKey                  String                  @map("line_key")
+  horizon                  String
+  cutoffAt                 DateTime                @map("cutoff_at")
+  predictionRunId          String?                 @map("prediction_run_id")
+  lineupSnapshotId         String?                 @map("lineup_snapshot_id")
+  eventAggregateSnapshotId String?                 @map("event_aggregate_snapshot_id")
+  marketConsensusSnapshotId String?                @map("market_consensus_snapshot_id")
+  modelVersion             String                  @map("model_version")
+  coreProbability          Float                   @map("core_probability")
+  refinedProbability       Float                   @map("refined_probability")
+  publishScore             Float                   @map("publish_score")
+  riskAdjustedConfidence   Float                   @map("risk_adjusted_confidence")
+  isFallback               Boolean                 @default(false) @map("is_fallback")
+  fallbackReason           String?                 @map("fallback_reason")
+  featureCoverageJson      Json?                   @map("feature_coverage_jsonb")
+  detailsJson              Json?                   @map("details_jsonb")
+  createdAt                DateTime                @default(now()) @map("created_at")
+  match                    Match                   @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  predictionRun            PredictionRun?          @relation(fields: [predictionRunId], references: [id], onDelete: SetNull)
+  predictionCandidates     PredictionCandidate[]
+  lineupSnapshot           LineupSnapshot?         @relation(fields: [lineupSnapshotId], references: [id], onDelete: SetNull)
+  eventAggregateSnapshot   EventAggregateSnapshot? @relation(fields: [eventAggregateSnapshotId], references: [id], onDelete: SetNull)
+  marketConsensusSnapshot  MarketConsensusSnapshot? @relation(fields: [marketConsensusSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([matchId, market, lineKey, horizon, cutoffAt])
+  @@index([predictionRunId])
+  @@index([modelVersion, createdAt])
+  @@map("meta_model_runs")
+}
+
+model PublishPolicy {
+  id               String                 @id @default(uuid())
+  key              String                 @unique
+  name             String
+  description      String?
+  isActive         Boolean                @default(true) @map("is_active")
+  currentVersionId String?                @map("current_version_id")
+  currentVersion   PublishPolicyVersion?  @relation("PublishPolicyCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         PublishPolicyVersion[] @relation("PublishPolicyVersions")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  @@map("publish_policies")
+}
+
+model PublishPolicyVersion {
+  id                    String                   @id @default(uuid())
+  policyId              String                   @map("policy_id")
+  version               Int
+  label                 String
+  configJson            Json                     @map("config_jsonb")
+  isActive              Boolean                  @default(true) @map("is_active")
+  policy                PublishPolicy            @relation("PublishPolicyVersions", fields: [policyId], references: [id], onDelete: Cascade)
+  currentForPolicies    PublishPolicy[]          @relation("PublishPolicyCurrentVersion")
+  strategyProfiles      PublishStrategyProfile[]
+  conflictRules         MarketConflictRule[]
+  publishDecisions      PublishDecision[]
+  policyEvaluations     PolicyEvaluationSnapshot[]
+  createdAt             DateTime                 @default(now()) @map("created_at")
+
+  @@unique([policyId, version])
+  @@index([policyId, isActive, version])
+  @@map("publish_policy_versions")
+}
+
+model PublishStrategyProfile {
+  id              String               @id @default(uuid())
+  policyVersionId String               @map("policy_version_id")
+  profileKey      String               @map("profile_key")
+  name            String
+  description     String?
+  leagueId        String?              @map("league_id")
+  market          String?
+  horizon         String?
+  configJson      Json                 @map("config_jsonb")
+  isDefault       Boolean              @default(false) @map("is_default")
+  isActive        Boolean              @default(true) @map("is_active")
+  policyVersion   PublishPolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+  league          League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@index([policyVersionId, profileKey, isActive])
+  @@index([leagueId, market, horizon])
+  @@map("publish_strategy_profiles")
+}
+
+model PredictionCandidate {
+  id                   String           @id @default(uuid())
+  matchId              String           @map("match_id")
+  market               String
+  line                 Float?
+  lineKey              String           @map("line_key")
+  horizon              String
+  selection            String
+  predictionRunId      String           @map("prediction_run_id")
+  metaModelRunId       String?          @map("meta_model_run_id")
+  modelVersionId       String?          @map("model_version_id")
+  calibrationVersionId String?          @map("calibration_version_id")
+  coreProbability      Float            @map("core_probability")
+  refinedProbability   Float?           @map("refined_probability")
+  calibratedProbability Float           @map("calibrated_probability")
+  confidence           Float
+  publishScore         Float            @map("publish_score")
+  fairOdds             Float?           @map("fair_odds")
+  edge                 Float?
+  freshnessScore       Float?           @map("freshness_score")
+  coverageFlagsJson    Json?            @map("coverage_flags_jsonb")
+  volatilityScore      Float?           @map("volatility_score")
+  providerDisagreement Float?           @map("provider_disagreement")
+  lineupCoverage       Float?           @map("lineup_coverage")
+  eventCoverage        Float?           @map("event_coverage")
+  strategyProfile      String           @map("strategy_profile")
+  policyVersionId      String?          @map("policy_version_id")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  match                Match            @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  predictionRun        PredictionRun    @relation(fields: [predictionRunId], references: [id], onDelete: Cascade)
+  metaModelRun         MetaModelRun?    @relation(fields: [metaModelRunId], references: [id], onDelete: SetNull)
+  modelVersion         ModelVersion?    @relation(fields: [modelVersionId], references: [id], onDelete: SetNull)
+  decisions            PublishDecision[]
+  policyEvaluations    PolicyEvaluationSnapshot[]
+
+  @@unique([predictionRunId, selection])
+  @@index([matchId, market, lineKey, horizon, selection])
+  @@index([strategyProfile, createdAt])
+  @@map("prediction_candidates")
+}
+
+model PublishDecision {
+  id                   String               @id @default(uuid())
+  candidateId          String               @unique @map("candidate_id")
+  matchId              String               @map("match_id")
+  market               String
+  line                 Float?
+  lineKey              String               @map("line_key")
+  horizon              String
+  selection            String
+  predictionRunId      String               @map("prediction_run_id")
+  modelVersionId       String?              @map("model_version_id")
+  calibrationVersionId String?              @map("calibration_version_id")
+  policyVersionId      String?              @map("policy_version_id")
+  strategyProfile      String               @map("strategy_profile")
+  status               PublishDecisionStatus
+  shadowMode           Boolean              @default(false) @map("shadow_mode")
+  selectionScore       Float                @map("selection_score")
+  confidence           Float
+  publishScore         Float                @map("publish_score")
+  fairOdds             Float?               @map("fair_odds")
+  edge                 Float?
+  freshnessScore       Float?               @map("freshness_score")
+  coverageFlagsJson    Json?                @map("coverage_flags_jsonb")
+  volatilityScore      Float?               @map("volatility_score")
+  providerDisagreement Float?               @map("provider_disagreement")
+  abstainReasonsJson   Json?                @map("abstain_reasons_jsonb")
+  detailsJson          Json?                @map("details_jsonb")
+  isPublicPublished    Boolean              @default(false) @map("is_public_published")
+  publishedAt          DateTime?            @map("published_at")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+  candidate            PredictionCandidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  match                Match                @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  predictionRun        PredictionRun        @relation(fields: [predictionRunId], references: [id], onDelete: Cascade)
+  modelVersion         ModelVersion?        @relation(fields: [modelVersionId], references: [id], onDelete: SetNull)
+  policyVersion        PublishPolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+  abstainReasonLogs    AbstainReasonLog[]
+  policyEvaluations    PolicyEvaluationSnapshot[]
+  publishedPredictions PublishedPrediction[]
+
+  @@index([matchId, market, lineKey, horizon])
+  @@index([status, strategyProfile, createdAt])
+  @@index([policyVersionId, createdAt])
+  @@map("publish_decisions")
+}
+
+model AbstainReasonLog {
+  id          String          @id @default(uuid())
+  decisionId  String          @map("decision_id")
+  reasonCode  String          @map("reason_code")
+  reasonText  String          @map("reason_text")
+  severity    String          @default("medium")
+  detailsJson Json?           @map("details_jsonb")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  decision    PublishDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId, reasonCode])
+  @@index([reasonCode, createdAt])
+  @@map("abstain_reason_logs")
+}
+
+model MarketConflictRule {
+  id                    String               @id @default(uuid())
+  policyVersionId       String               @map("policy_version_id")
+  marketFamily          String               @map("market_family")
+  priority              Int                  @default(100)
+  maxPicksPerMatch      Int                  @default(1) @map("max_picks_per_match")
+  allowMultiHorizon     Boolean              @default(false) @map("allow_multi_horizon")
+  suppressCorrelated    Boolean              @default(true) @map("suppress_correlated")
+  isActive              Boolean              @default(true) @map("is_active")
+  configJson            Json?                @map("config_jsonb")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  policyVersion         PublishPolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+
+  @@index([policyVersionId, marketFamily, isActive])
+  @@map("market_conflict_rules")
+}
+
+model ManualPublishOverride {
+  id           String               @id @default(uuid())
+  matchId      String               @map("match_id")
+  market       String
+  line         Float?
+  lineKey      String               @map("line_key")
+  horizon      String
+  selection    String?
+  action       ManualOverrideAction
+  reason       String
+  actorUserId  String?              @map("actor_user_id")
+  active       Boolean              @default(true)
+  expiresAt    DateTime?            @map("expires_at")
+  detailsJson  Json?                @map("details_jsonb")
+  createdAt    DateTime             @default(now()) @map("created_at")
+  match        Match                @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  actor        User?                @relation("ManualPublishOverrideActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([matchId, market, lineKey, horizon, selection, active])
+  @@index([createdAt])
+  @@map("manual_publish_overrides")
+}
+
+model PolicyEvaluationSnapshot {
+  id                 String                @id @default(uuid())
+  matchId            String                @map("match_id")
+  market             String
+  line               Float?
+  lineKey            String                @map("line_key")
+  horizon            String
+  selection          String
+  candidateId        String?               @map("candidate_id")
+  decisionId         String?               @map("decision_id")
+  policyVersionId    String?               @map("policy_version_id")
+  strategyProfile    String                @map("strategy_profile")
+  shadowMode         Boolean               @default(false) @map("shadow_mode")
+  approved           Boolean               @default(false)
+  abstained          Boolean               @default(false)
+  suppressed         Boolean               @default(false)
+  blocked            Boolean               @default(false)
+  candidateMetrics   Json?                 @map("candidate_metrics_jsonb")
+  decisionMetrics    Json?                 @map("decision_metrics_jsonb")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  match              Match                 @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  candidate          PredictionCandidate?  @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  decision           PublishDecision?      @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+  policyVersion      PublishPolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+
+  @@index([strategyProfile, createdAt])
+  @@index([matchId, market, lineKey, horizon])
+  @@map("policy_evaluation_snapshots")
+}
+
 model PublishedPrediction {
   matchId         String        @map("match_id")
   market          String
   line            Float?
+  // Null-safe uniqueness for (match, market, line, horizon) is enforced via lineKey ("na" for null).
   lineKey         String        @map("line_key")
   horizon         String
   predictionRunId String        @map("prediction_run_id")
+  publishDecisionId String?     @unique @map("publish_decision_id")
   publishedAt     DateTime      @default(now()) @map("published_at")
   match           Match         @relation(fields: [matchId], references: [id], onDelete: Cascade)
   predictionRun   PredictionRun @relation(fields: [predictionRunId], references: [id], onDelete: Cascade)
+  publishDecision PublishDecision? @relation(fields: [publishDecisionId], references: [id], onDelete: SetNull)
 
   @@id([matchId, market, lineKey, horizon])
   @@index([predictionRunId])
   @@map("published_predictions")
+}
+
+model ShadowPredictionComparison {
+  id                 String         @id @default(uuid())
+  matchId            String         @map("match_id")
+  market             String
+  line               Float?
+  lineKey            String         @map("line_key")
+  horizon            String
+  oldProbability     Float?         @map("old_probability")
+  newProbability     Float?         @map("new_probability")
+  oldConfidence      Float?         @map("old_confidence")
+  newConfidence      Float?         @map("new_confidence")
+  oldLogLoss         Float?         @map("old_log_loss")
+  newLogLoss         Float?         @map("new_log_loss")
+  oldBrier           Float?         @map("old_brier")
+  newBrier           Float?         @map("new_brier")
+  calibrationBins    Json?          @map("calibration_bins")
+  coverage           Json?
+  latencyMsOld       Int?           @map("latency_ms_old")
+  latencyMsNew       Int?           @map("latency_ms_new")
+  duplicateSuppressed Boolean       @default(false) @map("duplicate_suppressed")
+  leakageViolation   Boolean        @default(false) @map("leakage_violation")
+  details            Json?
+  predictionRunId    String?        @map("prediction_run_id")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  match              Match          @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  predictionRun      PredictionRun? @relation(fields: [predictionRunId], references: [id], onDelete: SetNull)
+
+  @@unique([matchId, market, lineKey, horizon])
+  @@index([createdAt])
+  @@index([predictionRunId])
+  @@map("shadow_prediction_comparisons")
+}
+
+model LeakageCheckResult {
+  id             String   @id @default(uuid())
+  matchId        String   @map("match_id")
+  horizon        String
+  cutoffAt       DateTime @map("cutoff_at")
+  sourceLeakRows Int      @default(0) @map("source_leak_rows")
+  oddsLeakRows   Int      @default(0) @map("odds_leak_rows")
+  passed         Boolean  @default(true)
+  details        Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  match          Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, horizon, cutoffAt])
+  @@index([createdAt])
+  @@map("leakage_check_results")
+}
+
+model PublishFailureLog {
+  id           String   @id @default(uuid())
+  runId        String?  @map("run_id")
+  jobId        String?  @map("job_id")
+  matchId      String?  @map("match_id")
+  market       String?
+  lineKey      String?  @map("line_key")
+  horizon      String?
+  dedupKey     String?  @map("dedup_key")
+  errorCode    String?  @map("error_code")
+  errorMessage String   @map("error_message")
+  details      Json?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([runId])
+  @@index([matchId, market, lineKey, horizon])
+  @@map("publish_failure_logs")
+}
+
+model DuplicateSuppressionStat {
+  id                String   @id @default(uuid())
+  dedupKey          String   @unique @map("dedup_key")
+  matchId           String?  @map("match_id")
+  market            String?
+  lineKey           String?  @map("line_key")
+  horizon           String?
+  suppressedCount   Int      @default(0) @map("suppressed_count")
+  firstSuppressedAt DateTime @default(now()) @map("first_suppressed_at")
+  lastSuppressedAt  DateTime @default(now()) @map("last_suppressed_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([matchId, market, lineKey, horizon])
+  @@index([lastSuppressedAt])
+  @@map("duplicate_suppression_stats")
 }
 
 model ApiLog {

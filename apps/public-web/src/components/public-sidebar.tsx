@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
 import {
   LayoutDashboard,
   Trophy,
@@ -15,7 +16,9 @@ import {
   Radio,
   BookOpen,
   User,
-  Zap
+  Zap,
+  Menu,
+  X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -85,13 +88,14 @@ const itemVariants = {
   visible: { opacity: 1, x: 0 }
 };
 
-function SidebarItem({ link, active }: { link: SidebarLink; active: boolean }) {
+function SidebarItem({ link, active, onClick }: { link: SidebarLink; active: boolean; onClick?: () => void }) {
   const Icon = link.icon;
 
   return (
     <motion.div variants={itemVariants}>
       <Link
         href={link.href}
+        onClick={onClick}
         className={`
           group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200
           ${active ? "text-white" : "text-slate-400 hover:text-white hover:bg-white/5"}
@@ -128,14 +132,14 @@ function SidebarItem({ link, active }: { link: SidebarLink; active: boolean }) {
   );
 }
 
-export function PublicSidebar() {
+function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const isSportGroupActive = (groupKey: "football" | "basketball") =>
     pathname === `/${groupKey}` || pathname.startsWith(`/${groupKey}/`);
 
   return (
-    <aside className="sticky top-0 flex h-screen w-72 flex-col border-r border-white/5 bg-depth/80 backdrop-blur-xl">
+    <>
       <div className="border-b border-white/5 p-6">
         <Link href="/" className="group flex items-center gap-3">
           <div className="relative">
@@ -158,7 +162,7 @@ export function PublicSidebar() {
         <motion.div variants={containerVariants} initial="hidden" animate="visible" className="space-y-4">
           <div className="space-y-1">
             {primaryLinks.map((link) => (
-              <SidebarItem key={link.href} link={link} active={isActive(link.href)} />
+              <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
             ))}
           </div>
 
@@ -181,7 +185,7 @@ export function PublicSidebar() {
 
                 <div className="space-y-1">
                   {group.links.map((link) => (
-                    <SidebarItem key={link.href} link={link} active={isActive(link.href)} />
+                    <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
                   ))}
                 </div>
               </motion.section>
@@ -192,7 +196,7 @@ export function PublicSidebar() {
             <div className="px-2 pb-2 font-display text-[10px] uppercase tracking-[0.2em] text-slate-500">Genel</div>
             <div className="space-y-1">
               {utilityLinks.map((link) => (
-                <SidebarItem key={link.href} link={link} active={isActive(link.href)} />
+                <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
               ))}
             </div>
           </div>
@@ -203,11 +207,94 @@ export function PublicSidebar() {
         <div className="glass-card rounded-xl p-4">
           <div className="mb-2 flex items-center gap-2">
             <div className="h-2 w-2 animate-pulse rounded-full bg-neon-green" />
-            <span className="font-display text-xs tracking-wider text-slate-400">SISTEM AKTIF</span>
+            <span className="font-display text-xs tracking-wider text-slate-500">SISTEM AKTIF</span>
           </div>
           <p className="text-xs text-slate-500">AI modeli gercek zamanli analiz yapiyor</p>
         </div>
       </div>
-    </aside>
+    </>
+  );
+}
+
+export function PublicSidebar() {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <aside className="sticky top-0 hidden lg:flex h-screen w-72 flex-col border-r border-white/5 bg-depth/80 backdrop-blur-xl">
+        <SidebarContent />
+      </aside>
+
+      {/* Mobile Header */}
+      <div className="fixed top-0 left-0 right-0 z-40 lg:hidden">
+        <div className="flex items-center justify-between border-b border-white/5 bg-depth/95 backdrop-blur-xl px-4 py-3">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-neon-cyan to-neon-purple">
+              <Zap className="h-4 w-4 text-void" />
+            </div>
+            <span className="font-display text-lg font-bold tracking-wider">
+              <span className="gradient-text">SPOR</span>
+              <span className="text-white">X</span>
+            </span>
+          </Link>
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+            aria-label="Menüyü Aç"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile Drawer */}
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMobileMenuOpen(false)}
+              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm lg:hidden"
+            />
+            
+            {/* Drawer */}
+            <motion.aside
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed left-0 top-0 z-50 flex h-screen w-[280px] flex-col border-r border-white/5 bg-depth shadow-2xl lg:hidden"
+            >
+              <div className="flex items-center justify-between border-b border-white/5 p-4">
+                <Link href="/" className="flex items-center gap-2" onClick={() => setMobileMenuOpen(false)}>
+                  <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-neon-cyan to-neon-purple">
+                    <Zap className="h-4 w-4 text-void" />
+                  </div>
+                  <span className="font-display text-lg font-bold tracking-wider">
+                    <span className="gradient-text">SPOR</span>
+                    <span className="text-white">X</span>
+                  </span>
+                </Link>
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white transition-colors"
+                  aria-label="Menüyü Kapat"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto">
+                <SidebarContent onLinkClick={() => setMobileMenuOpen(false)} />
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+    </>
   );
 }

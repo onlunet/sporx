@@ -1,5 +1,6 @@
 ﻿import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcrypt";
+import { Prisma } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -208,6 +209,26 @@ async function main() {
       key: "risk.flags.enabled",
       value: { value: true },
       description: "Risk bayrak motoru aktiflik ayarı"
+    },
+    {
+      key: "selection_engine_enabled",
+      value: true,
+      description: "Publish selection engine ana açma-kapama ayarı"
+    },
+    {
+      key: "selection_engine_shadow_mode",
+      value: true,
+      description: "Selection engine kararlarını gölge modda çalıştırır"
+    },
+    {
+      key: "strategy_profile_default",
+      value: "BALANCED",
+      description: "Varsayılan publish strateji profili"
+    },
+    {
+      key: "selection_engine_emergency_rollback",
+      value: false,
+      description: "Selection engine acil geri dönüş anahtarı"
     }
   ];
 
@@ -218,6 +239,183 @@ async function main() {
       create: { key: setting.key, value: setting.value, description: setting.description }
     });
   }
+
+  const defaultPolicy = await prisma.publishPolicy.upsert({
+    where: { key: "default_selection_policy" },
+    update: {
+      name: "Default Publish Selection Policy",
+      description: "Deterministic publish decision policy"
+    },
+    create: {
+      key: "default_selection_policy",
+      name: "Default Publish Selection Policy",
+      description: "Deterministic publish decision policy",
+      isActive: true
+    }
+  });
+
+  let policyVersion = await prisma.publishPolicyVersion.findFirst({
+    where: {
+      policyId: defaultPolicy.id,
+      version: 1
+    }
+  });
+  if (!policyVersion) {
+    policyVersion = await prisma.publishPolicyVersion.create({
+      data: {
+        policyId: defaultPolicy.id,
+        version: 1,
+        label: "v1_deterministic_selector",
+        configJson: {
+          selector: "deterministic_rule_v1",
+          objective: "selection_quality",
+          seededAt: new Date().toISOString()
+        },
+        isActive: true
+      }
+    });
+  }
+  if (defaultPolicy.currentVersionId !== policyVersion.id) {
+    await prisma.publishPolicy.update({
+      where: { id: defaultPolicy.id },
+      data: {
+        currentVersionId: policyVersion.id,
+        isActive: true
+      }
+    });
+  }
+
+  const seedProfile = async (
+    profileKey: "CONSERVATIVE" | "BALANCED" | "AGGRESSIVE",
+    config: Prisma.InputJsonValue,
+    isDefault: boolean
+  ) => {
+    const exists = await prisma.publishStrategyProfile.findFirst({
+      where: {
+        policyVersionId: policyVersion.id,
+        profileKey,
+        leagueId: null,
+        market: null,
+        horizon: null
+      }
+    });
+    if (exists) {
+      return;
+    }
+    await prisma.publishStrategyProfile.create({
+      data: {
+        policyVersionId: policyVersion.id,
+        profileKey,
+        name: profileKey,
+        configJson: config,
+        isDefault,
+        isActive: true
+      }
+    });
+  };
+
+  await seedProfile(
+    "CONSERVATIVE",
+    {
+      minConfidence: 0.62,
+      minPublishScore: 0.66,
+      minEdge: 0.01,
+      maxVolatility: 0.24,
+      maxProviderDisagreement: 0.16,
+      minLineupCoverage: 0.55,
+      minEventCoverage: 0.45,
+      maxMissingStatsRatio: 0.42,
+      minFreshnessScore: 0.52,
+      maxPicksPerMatch: 1,
+      requireOdds: true,
+      valueOnly: true,
+      requireLineupHorizons: ["LINEUP", "LIVE_0_15", "LIVE_16_30"],
+      allowedMarkets: [],
+      allowedHorizons: [],
+      allowedLeagueIds: []
+    },
+    false
+  );
+  await seedProfile(
+    "BALANCED",
+    {
+      minConfidence: 0.56,
+      minPublishScore: 0.58,
+      minEdge: 0,
+      maxVolatility: 0.34,
+      maxProviderDisagreement: 0.25,
+      minLineupCoverage: 0.45,
+      minEventCoverage: 0.3,
+      maxMissingStatsRatio: 0.55,
+      minFreshnessScore: 0.4,
+      maxPicksPerMatch: 2,
+      requireOdds: true,
+      valueOnly: false,
+      requireLineupHorizons: ["LINEUP"],
+      allowedMarkets: [],
+      allowedHorizons: [],
+      allowedLeagueIds: []
+    },
+    true
+  );
+  await seedProfile(
+    "AGGRESSIVE",
+    {
+      minConfidence: 0.5,
+      minPublishScore: 0.5,
+      minEdge: -0.005,
+      maxVolatility: 0.45,
+      maxProviderDisagreement: 0.35,
+      minLineupCoverage: 0.35,
+      minEventCoverage: 0.2,
+      maxMissingStatsRatio: 0.7,
+      minFreshnessScore: 0.3,
+      maxPicksPerMatch: 3,
+      requireOdds: false,
+      valueOnly: false,
+      requireLineupHorizons: [],
+      allowedMarkets: [],
+      allowedHorizons: [],
+      allowedLeagueIds: []
+    },
+    false
+  );
+
+  const ensureConflictRule = async (
+    marketFamily: string,
+    maxPicksPerMatch: number,
+    allowMultiHorizon: boolean,
+    priority: number
+  ) => {
+    const exists = await prisma.marketConflictRule.findFirst({
+      where: {
+        policyVersionId: policyVersion.id,
+        marketFamily
+      }
+    });
+    if (exists) {
+      return;
+    }
+    await prisma.marketConflictRule.create({
+      data: {
+        policyVersionId: policyVersion.id,
+        marketFamily,
+        maxPicksPerMatch,
+        allowMultiHorizon,
+        priority,
+        suppressCorrelated: true,
+        isActive: true,
+        configJson: {}
+      }
+    });
+  };
+
+  await ensureConflictRule("result", 1, false, 10);
+  await ensureConflictRule("totals", 2, true, 20);
+  await ensureConflictRule("btts", 1, false, 30);
+  await ensureConflictRule("score", 1, false, 40);
+  await ensureConflictRule("halftime", 1, false, 50);
+  await ensureConflictRule("other", 2, true, 99);
 
   const primaryModel = await prisma.modelVersion.upsert({
     where: {

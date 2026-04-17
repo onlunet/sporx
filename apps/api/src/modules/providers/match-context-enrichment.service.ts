@@ -4,6 +4,7 @@ import { Prisma, MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { OpenMeteoConnector } from "./open-meteo.connector";
+import { resolveFootballPredictionHorizon } from "../predictions/prediction-horizon.util";
 
 type UpsertContextInput = {
   matchId: string;
@@ -52,19 +53,15 @@ export class MatchContextEnrichmentService {
     return createHash("sha256").update(JSON.stringify(payload ?? null)).digest("hex");
   }
 
-  private horizonByStatus(status: MatchStatus) {
-    if (status === MatchStatus.finished) {
-      return "post_match";
-    }
-    if (status === MatchStatus.live) {
-      return "in_play";
-    }
-    return "pre_match";
-  }
-
   private async writeFeatureSnapshotV2(input: UpsertContextInput, features: Record<string, unknown>) {
-    const horizon = this.horizonByStatus(input.status);
     const now = new Date();
+    const hasLineup = typeof features.lineupCertaintyScore === "number" && Number(features.lineupCertaintyScore) >= 0.55;
+    const horizon = resolveFootballPredictionHorizon({
+      status: input.status,
+      kickoffAt: input.kickoffAt,
+      now,
+      hasLineup
+    });
     const cutoffAt = input.status === MatchStatus.scheduled && input.kickoffAt.getTime() > now.getTime() ? now : input.kickoffAt;
     const featureHash = this.hashPayload(features);
 

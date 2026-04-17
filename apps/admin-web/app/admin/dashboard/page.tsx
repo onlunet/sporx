@@ -84,13 +84,13 @@ function MetricCard({
 // Status Badge Component
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, { class: string; icon: React.ElementType; label: string }> = {
-    healthy: { class: "success", icon: CheckCircle2, label: "Sağlıklı" },
-    degraded: { class: "warning", icon: AlertTriangle, label: "Yavaş" },
-    down: { class: "error", icon: AlertTriangle, label: "Çevrimdışı" },
-    running: { class: "info", icon: Zap, label: "Çalışıyor" },
+    healthy: { class: "success", icon: CheckCircle2, label: "Sa�l�kl�" },
+    degraded: { class: "warning", icon: AlertTriangle, label: "Yava�" },
+    down: { class: "error", icon: AlertTriangle, label: "�evrimd���" },
+    running: { class: "info", icon: Zap, label: "�al���yor" },
     queued: { class: "info", icon: Clock, label: "Kuyrukta" },
-    succeeded: { class: "success", icon: CheckCircle2, label: "Tamamlandı" },
-    failed: { class: "error", icon: AlertTriangle, label: "Başarısız" },
+    succeeded: { class: "success", icon: CheckCircle2, label: "Tamamland�" },
+    failed: { class: "error", icon: AlertTriangle, label: "Ba�ar�s�z" },
   };
 
   const variant = variants[status.toLowerCase()] || { class: "info", icon: Activity, label: status };
@@ -126,7 +126,7 @@ function DataTable({
         {href && (
           <Link href={href} className="text-sm text-admin-brand-primary hover:text-admin-brand-secondary transition-colors"
           >
-            Tümünü Gör <ArrowRight className="w-4 h-4 inline" />
+            T�m�n� G�r <ArrowRight className="w-4 h-4 inline" />
           </Link>
         )}
       </div>
@@ -155,21 +155,21 @@ export default async function AdminDashboardPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-admin-text-primary">Dashboard</h1>
-          <p className="text-admin-text-secondary mt-1">Sistem genel görünümü ve ana metrikler</p>
+          <p className="text-admin-text-secondary mt-1">Sistem genel g�r�n�m� ve ana metrikler</p>
         </div>
         <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-admin-bg-tertiary border border-admin-border-subtle">
           <div className="w-2 h-2 rounded-full bg-admin-success animate-pulse" />
-          <span className="text-sm text-admin-text-secondary">Son güncelleme: {new Date().toLocaleTimeString('tr-TR')}</span>
+          <span className="text-sm text-admin-text-secondary">Son g�ncelleme: {new Date().toLocaleTimeString('tr-TR')}</span>
         </div>
       </div>
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
-          title="Kuyruktaki İşler"
+          title="Kuyruktaki ��ler"
           value={queuedJobs}
           change="Son 1 saat"
           changeType="neutral"
@@ -177,7 +177,7 @@ export default async function AdminDashboardPage() {
           href="/admin/ingestion/jobs"
         />
         <MetricCard
-          title="Başarısız İşler"
+          title="Ba�ar�s�z ��ler"
           value={failedJobs}
           change={failedJobs > 0 ? "Dikkat" : "Normal"}
           changeType={failedJobs > 0 ? "negative" : "positive"}
@@ -185,15 +185,15 @@ export default async function AdminDashboardPage() {
           href="/admin/ingestion/jobs"
         />
         <MetricCard
-          title="Düşük Güven Tahmin"
+          title="D���k G�ven Tahmin"
           value={lowConfidence.length}
-          change="İncelenmeli"
+          change="�ncelenmeli"
           changeType={lowConfidence.length > 10 ? "negative" : "positive"}
           icon={Shield}
           href="/admin/predictions/low-confidence"
         />
         <MetricCard
-          title="Sağlıklı Sağlayıcı"
+          title="Sa�l�kl� Sağlayıcı"
           value={`${healthyProviders}/${providers.length}`}
           change="%{Math.round((healthyProviders / (providers.length || 1)) * 100)}"
           changeType="positive"
@@ -208,7 +208,7 @@ export default async function AdminDashboardPage() {
         >
           <AlertTriangle className="w-5 h-5 flex-shrink-0" />
           <p className="text-sm">
-            Bazı dashboard verileri alınamadı. Ayrıntılar için ilgili menü sayfasını kontrol edin.
+            Baz� dashboard verileri al�namad�. Ayr�nt�lar i�in ilgili men� sayfas�n� kontrol edin.
           </p>
         </div>
       )}
@@ -217,8 +217,8 @@ export default async function AdminDashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Jobs Table */}
         <DataTable 
-          title="Son İçe Aktarım İşlemleri" 
-          subtitle="En son veri işleme kayıtları"
+          title="Son İçe Aktar�m İşlemleri" 
+          subtitle="En son veri işleme kay�tlar�"
           href="/admin/ingestion/jobs"
         >
           {jobs.length === 0 ? (
@@ -228,7 +228,8 @@ export default async function AdminDashboardPage() {
             </div>
   
           ) : (
-            <table className="admin-table">
+            <div className="overflow-x-auto">
+            <table className="admin-table w-full">
               <thead>
                 <tr>
                   <th>İş Tipi</th>
@@ -254,6 +255,7 @@ export default async function AdminDashboardPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </DataTable>
 
@@ -268,7 +270,8 @@ export default async function AdminDashboardPage() {
               <p className="text-admin-text-secondary">Henüz sağlayıcı bilgisi yok.</p>
             </div>
           ) : (
-            <table className="admin-table">
+            <div className="overflow-x-auto">
+            <table className="admin-table w-full">
               <thead>
                 <tr>
                   <th>Sağlayıcı</th>
@@ -292,6 +295,7 @@ export default async function AdminDashboardPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </DataTable>
       </div>
@@ -304,11 +308,11 @@ export default async function AdminDashboardPage() {
             </div>
             <div>
               <div className="text-2xl font-bold text-admin-text-primary">{failedPredictions.length}</div>
-              <div className="text-sm text-admin-text-secondary">Başarısız Tahmin</div>
+              <div className="text-sm text-admin-text-secondary">Ba�ar�s�z Tahmin</div>
             </div>
           </div>
           <Link href="/admin/predictions/failed" className="mt-4 block text-sm text-admin-brand-primary hover:underline">
-            Detayları Gör →
+            Detaylar� G�r �
           </Link>
         </div>
 
@@ -319,11 +323,11 @@ export default async function AdminDashboardPage() {
             </div>
             <div>
               <div className="text-2xl font-bold text-admin-text-primary">{lowConfidence.length}</div>
-              <div className="text-sm text-admin-text-secondary">Düşük Güven Tahmini</div>
+              <div className="text-sm text-admin-text-secondary">D���k G�ven Tahmini</div>
             </div>
           </div>
           <Link href="/admin/predictions/low-confidence" className="mt-4 block text-sm text-admin-brand-primary hover:underline">
-            İncele →
+            �ncele �
           </Link>
         </div>
 
@@ -334,11 +338,11 @@ export default async function AdminDashboardPage() {
             </div>
             <div>
               <div className="text-2xl font-bold text-admin-text-primary">%{Math.round((healthyProviders / (providers.length || 1)) * 100)}</div>
-              <div className="text-sm text-admin-text-secondary">Sistem Sağlığı</div>
+              <div className="text-sm text-admin-text-secondary">Sistem Sa�l���</div>
             </div>
           </div>
           <Link href="/admin/system/settings" className="mt-4 block text-sm text-admin-brand-primary hover:underline">
-            Ayarları Yönet →
+            Ayarlar� Y�net �
           </Link>
         </div>
       </div>

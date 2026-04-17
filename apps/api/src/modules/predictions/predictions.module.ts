@@ -19,6 +19,21 @@ import { OddsModule } from "../odds/odds.module";
 import { FootballPredictionStrategy } from "./sport-strategies/football-prediction.strategy";
 import { BasketballPredictionStrategy } from "./sport-strategies/basketball-prediction.strategy";
 import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
+import { FeatureSnapshotService } from "./feature-snapshot.service";
+import { TrainingExampleBuilderService } from "./training-example-builder.service";
+import { ShadowEvaluationService } from "./shadow-evaluation.service";
+import { PipelineRolloutService } from "./pipeline-rollout.service";
+import { EnrichmentFlagsService } from "./enrichment-flags.service";
+import { LineupSnapshotService } from "./lineup-snapshot.service";
+import { EventEnrichmentService } from "./event-enrichment.service";
+import { MarketConsensusSnapshotService } from "./market-consensus-snapshot.service";
+import { MetaModelRefinementService } from "./meta-model-refinement.service";
+import { SelectionEngineConfigService } from "./selection-engine-config.service";
+import { CandidateBuilderService } from "./candidate-builder.service";
+import { SelectionScoreService } from "./selection-score.service";
+import { AbstainPolicyService } from "./abstain-policy.service";
+import { ConflictResolutionService } from "./conflict-resolution.service";
+import { PublishDecisionService } from "./publish-decision.service";
 
 @Module({
   imports: [OddsModule],
@@ -40,7 +55,22 @@ import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-s
     BasketballMarketAdjustmentService,
     BasketballEnsembleService,
     BasketballCalibrationService,
-    BasketballPredictionEngineService
+    BasketballPredictionEngineService,
+    FeatureSnapshotService,
+    TrainingExampleBuilderService,
+    ShadowEvaluationService,
+    PipelineRolloutService,
+    EnrichmentFlagsService,
+    LineupSnapshotService,
+    EventEnrichmentService,
+    MarketConsensusSnapshotService,
+    MetaModelRefinementService,
+    SelectionEngineConfigService,
+    CandidateBuilderService,
+    SelectionScoreService,
+    AbstainPolicyService,
+    ConflictResolutionService,
+    PublishDecisionService
   ],
   exports: [
     PredictionsService,
@@ -51,7 +81,22 @@ import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-s
     DixonColesService,
     AdvancedPredictionEngineService,
     PredictionSportStrategyRegistry,
-    BasketballPredictionEngineService
+    BasketballPredictionEngineService,
+    FeatureSnapshotService,
+    TrainingExampleBuilderService,
+    ShadowEvaluationService,
+    PipelineRolloutService,
+    EnrichmentFlagsService,
+    LineupSnapshotService,
+    EventEnrichmentService,
+    MarketConsensusSnapshotService,
+    MetaModelRefinementService,
+    SelectionEngineConfigService,
+    CandidateBuilderService,
+    SelectionScoreService,
+    AbstainPolicyService,
+    ConflictResolutionService,
+    PublishDecisionService
   ]
 })
 export class PredictionsModule {}

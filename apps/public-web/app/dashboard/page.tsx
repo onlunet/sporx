@@ -148,19 +148,19 @@ export default async function DashboardPage() {
     .slice(0, 6);
 
   return (
-    <div className="space-y-8">
-      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-surface via-abyss to-void p-8">
-        <div className="pointer-events-none absolute right-0 top-0 h-96 w-96 rounded-full bg-neon-cyan/10 blur-[100px]" />
-        <div className="pointer-events-none absolute bottom-0 left-0 h-64 w-64 rounded-full bg-neon-purple/10 blur-[80px]" />
+    <div className="space-y-6 sm:space-y-8">
+      <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl border border-white/10 bg-gradient-to-br from-surface via-abyss to-void p-5 sm:p-6 lg:p-8">
+        <div className="pointer-events-none absolute right-0 top-0 h-64 w-64 sm:h-96 sm:w-96 rounded-full bg-neon-cyan/10 blur-[80px] sm:blur-[100px]" />
+        <div className="pointer-events-none absolute bottom-0 left-0 h-48 w-48 sm:h-64 sm:w-64 rounded-full bg-neon-purple/10 blur-[60px] sm:blur-[80px]" />
 
         <div className="relative">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-neon-cyan to-neon-purple">
-              <LayoutDashboard className="h-6 w-6 text-void" />
+          <div className="mb-4 sm:mb-6 flex items-center gap-3">
+            <div className="flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-gradient-to-br from-neon-cyan to-neon-purple">
+              <LayoutDashboard className="h-5 w-5 sm:h-6 sm:w-6 text-void" />
             </div>
             <div>
-              <h1 className="gradient-text font-display text-3xl font-bold">Panel</h1>
-              <p className="text-sm text-slate-400">Sistem genel bakis ve analitikler</p>
+              <h1 className="gradient-text font-display text-2xl sm:text-3xl font-bold">Panel</h1>
+              <p className="text-xs sm:text-sm text-slate-400">Sistem genel bakis ve analitikler</p>
             </div>
           </div>
 
@@ -170,7 +170,7 @@ export default async function DashboardPage() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
             <MetricCard label="Toplam Mac" value={dashboard.matchCount} icon={<Trophy className="h-5 w-5" />} color="cyan" trend="up" trendValue="%12" />
             <MetricCard label="Tahmin Sayisi" value={dashboard.predictionCount} icon={<BrainCircuit className="h-5 w-5" />} color="purple" trend="up" trendValue="%8" />
             <MetricCard label="Dusuk Guven" value={dashboard.lowConfidenceCount} icon={<AlertTriangle className="h-5 w-5" />} color="amber" trend="down" trendValue="%5" />
@@ -184,12 +184,12 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          <section className="glass-card rounded-2xl p-6">
-            <div className="mb-6 flex items-center gap-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
+        <div className="space-y-4 sm:space-y-6 lg:col-span-2">
+          <section className="glass-card rounded-xl sm:rounded-2xl p-4 sm:p-6">
+            <div className="mb-4 sm:mb-6 flex items-center gap-2">
               <BrainCircuit className="h-5 w-5 text-neon-cyan" />
-              <h2 className="text-lg font-semibold text-white">Tahmin Guven Dagilimi</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white">Tahmin Guven Dagilimi</h2>
             </div>
             {predictionOverview ? (
               <ConfidenceChart high={predictionOverview.highConfidence} medium={predictionOverview.mediumConfidence} low={predictionOverview.lowConfidence} />
@@ -198,20 +198,20 @@ export default async function DashboardPage() {
             )}
           </section>
 
-          <section className="glass-card rounded-2xl p-6">
-            <div className="mb-6 flex items-center gap-2">
+          <section className="glass-card rounded-xl sm:rounded-2xl p-4 sm:p-6">
+            <div className="mb-4 sm:mb-6 flex items-center gap-2">
               <Activity className="h-5 w-5 text-neon-purple" />
-              <h2 className="text-lg font-semibold text-white">Son Aktiviteler</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white">Son Aktiviteler</h2>
             </div>
             <RecentActivity items={recentActivities} />
           </section>
         </div>
 
         <div>
-          <section className="glass-card rounded-2xl p-6">
-            <div className="mb-6 flex items-center gap-2">
+          <section className="glass-card rounded-xl sm:rounded-2xl p-4 sm:p-6">
+            <div className="mb-4 sm:mb-6 flex items-center gap-2">
               <Server className="h-5 w-5 text-neon-green" />
-              <h2 className="text-lg font-semibold text-white">Sistem Durumu</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white">Sistem Durumu</h2>
             </div>
             <SystemStatus />
           </section>
