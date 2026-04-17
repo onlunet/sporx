@@ -17,6 +17,7 @@ import { AdvancedPredictionEngineService } from "../predictions/advanced-predict
 import { BasketballPredictionEngineService } from "../predictions/basketball/basketball-prediction-engine.service";
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
 import { PredictionRunPublisherService } from "./prediction-run-publisher.service";
+import { ModelAliasService } from "../predictions/model-alias.service";
 
 type SyncSummary = {
   recordsRead: number;
@@ -150,7 +151,8 @@ export class ProviderIngestionService {
     private readonly advancedPredictionEngine: AdvancedPredictionEngineService,
     private readonly basketballPredictionEngine: BasketballPredictionEngineService,
     private readonly matchContextEnrichment: MatchContextEnrichmentService,
-    private readonly predictionRunPublisher: PredictionRunPublisherService
+    private readonly predictionRunPublisher: PredictionRunPublisherService,
+    private readonly modelAliasService: ModelAliasService
   ) {}
 
   private supportsProviderFetch(jobType: string) {
@@ -814,14 +816,68 @@ export class ProviderIngestionService {
       form5Home: true,
       form5Away: true
     } satisfies Prisma.MatchSelect;
-    const activeModel =
-      (await this.prisma.modelVersion.findFirst({
-        where: { active: true },
-        orderBy: { createdAt: "desc" }
-      })) ??
-      (await this.prisma.modelVersion.findFirst({
-        orderBy: { createdAt: "desc" }
-      }));
+    type ServingModelContext = {
+      model: { id: string; modelName: string; version: string } | null;
+      aliasType: string | null;
+      resolvedViaAlias: boolean;
+      calibrationVersionId: string | null;
+      featureSetVersion: string | null;
+      policyVersion: string | null;
+      scopeLeagueKey: string | null;
+    };
+
+    const servingModelCache = new Map<string, ServingModelContext>();
+    const resolveServingModel = async (input: {
+      sportCode: string;
+      market: string;
+      horizon: string;
+      leagueId?: string | null;
+    }) => {
+      const normalizedSport = input.sportCode.trim().toLowerCase();
+      const normalizedMarket = input.market.trim().toLowerCase();
+      const normalizedHorizon = input.horizon.trim().toUpperCase();
+      const scopeLeagueKey = this.modelAliasService.scopeLeagueKey(input.leagueId ?? null);
+      const cacheKey = `${normalizedSport}:${normalizedMarket}:na:${normalizedHorizon}:${scopeLeagueKey}`;
+      const cached = servingModelCache.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+
+      const resolved = await this.modelAliasService.resolveServingAlias({
+        sport: normalizedSport,
+        market: normalizedMarket,
+        line: null,
+        lineKey: "na",
+        horizon: normalizedHorizon,
+        leagueId: input.leagueId ?? null
+      });
+
+      const model = resolved.modelVersionId
+        ? await this.prisma.modelVersion.findUnique({
+            where: { id: resolved.modelVersionId },
+            select: { id: true, modelName: true, version: true }
+          })
+        : null;
+      const context: ServingModelContext = {
+        model,
+        aliasType: resolved.aliasType ?? null,
+        resolvedViaAlias: resolved.resolvedViaAlias,
+        calibrationVersionId: resolved.calibrationVersionId ?? null,
+        featureSetVersion: resolved.featureSetVersion ?? null,
+        policyVersion: resolved.policyVersion ?? null,
+        scopeLeagueKey: resolved.scopeLeagueKey ?? null
+      };
+      servingModelCache.set(cacheKey, context);
+      return context;
+    };
+
+    const activeServingModel = await resolveServingModel({
+      sportCode: "football",
+      market: "match_outcome",
+      horizon: "POST_MATCH",
+      leagueId: null
+    });
+    const activeModel = activeServingModel.model;
 
     const backfillPredictionFilters: Prisma.MatchWhereInput[] = activeModel?.id
       ? [
@@ -1021,6 +1077,12 @@ export class ProviderIngestionService {
     for (const match of candidates) {
       try {
         if (match.sportCode.toLowerCase() === "basketball") {
+          const basketballServingModel = await resolveServingModel({
+            sportCode: "basketball",
+            market: "moneyline",
+            horizon: "POST_MATCH",
+            leagueId: match.leagueId
+          });
           const basketball = await this.basketballPredictionEngine.compute({
             matchId: match.id,
             leagueId: match.leagueId,
@@ -1049,7 +1111,7 @@ export class ProviderIngestionService {
               market: "moneyline",
               line: null,
               selection: selectedSide,
-              modelVersionId: activeModel?.id ?? null,
+              modelVersionId: basketballServingModel.model?.id ?? null,
               probability: pickProbability,
               confidence: basketball.confidenceScore,
               riskFlags: basketball.riskFlags,
@@ -1063,6 +1125,15 @@ export class ProviderIngestionService {
                 expectedScore: basketball.expectedScore,
                 isRecommended: basketball.isRecommended,
                 isLowConfidence: basketball.isLowConfidence,
+                serving: {
+                  aliasType: basketballServingModel.aliasType,
+                  resolvedViaAlias: basketballServingModel.resolvedViaAlias,
+                  modelVersion: basketballServingModel.model?.version ?? null,
+                  calibrationVersionId: basketballServingModel.calibrationVersionId,
+                  featureSetVersion: basketballServingModel.featureSetVersion,
+                  policyVersion: basketballServingModel.policyVersion,
+                  scopeLeagueKey: basketballServingModel.scopeLeagueKey
+                },
                 dataSource: "generated"
               }
             });
@@ -1077,6 +1148,13 @@ export class ProviderIngestionService {
           written += 1;
           continue;
         }
+
+        const activeModelForMatch = await resolveServingModel({
+          sportCode: "football",
+          market: "match_outcome",
+          horizon: "POST_MATCH",
+          leagueId: match.leagueId
+        });
 
         let context = contextByMatchId.get(match.id) ?? null;
         const shouldEnrichContext =
@@ -1201,7 +1279,13 @@ export class ProviderIngestionService {
             : { ...defaultExpectedScore };
         let riskFlags: Array<{ code: string; severity: string; message: string }> = [];
 
-        if (this.isAdvancedModel(activeModel ? { modelName: activeModel.modelName, version: activeModel.version } : null)) {
+        if (
+          this.isAdvancedModel(
+            activeModelForMatch.model
+              ? { modelName: activeModelForMatch.model.modelName, version: activeModelForMatch.model.version }
+              : null
+          )
+        ) {
           try {
             const advanced = this.advancedPredictionEngine.compute({
               homeElo,
@@ -1249,7 +1333,7 @@ export class ProviderIngestionService {
               adjustedLambdaAway: advanced.adjustedLambdaAway,
               eloHome: advanced.eloHome,
               eloAway: advanced.eloAway,
-              modelVersion: "elo_poisson_dc_v2",
+              modelVersion: activeModelForMatch.model?.version ?? "elo_poisson_dc_v2",
               scoreMatrix: advanced.scoreMatrixTop,
               lowScoreBiasApplied: advanced.lowScoreBiasApplied,
               instabilityScore: advanced.instabilityScore
@@ -1457,7 +1541,7 @@ export class ProviderIngestionService {
             market: "match_outcome",
             line: null,
             selection: selectedSide,
-            modelVersionId: activeModel?.id ?? null,
+            modelVersionId: activeModelForMatch.model?.id ?? null,
             probability: pickProbability,
             confidence: confidenceScore,
             riskFlags: uniqueRiskFlags,
@@ -1471,6 +1555,15 @@ export class ProviderIngestionService {
               expectedScore,
               isRecommended: confidenceScore >= 0.6 && !isLowConfidence,
               isLowConfidence,
+              serving: {
+                aliasType: activeModelForMatch.aliasType,
+                resolvedViaAlias: activeModelForMatch.resolvedViaAlias,
+                modelVersion: activeModelForMatch.model?.version ?? null,
+                calibrationVersionId: activeModelForMatch.calibrationVersionId,
+                featureSetVersion: activeModelForMatch.featureSetVersion,
+                policyVersion: activeModelForMatch.policyVersion,
+                scopeLeagueKey: activeModelForMatch.scopeLeagueKey
+              },
               dataSource: "generated"
             }
           });

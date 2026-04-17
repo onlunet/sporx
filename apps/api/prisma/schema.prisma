@@ -43,6 +43,52 @@ enum ManualOverrideAction {
   BLOCK
 }
 
+enum ServingAliasType {
+  CHAMPION
+  CHALLENGER
+  SHADOW
+  CANARY
+  ROLLBACK_CANDIDATE
+  RETIRED
+}
+
+enum PromotionDecisionStatus {
+  PROMOTE
+  KEEP_CHAMPION
+  EXTEND_SHADOW
+  BLOCK_PROMOTION
+  FORCE_PROMOTE
+  FORCE_KEEP
+}
+
+enum DriftSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum DriftMonitorCategory {
+  UNLABELED
+  LABELED
+}
+
+enum RetrainingTriggerType {
+  SCHEDULE
+  DRIFT_THRESHOLD
+  NEW_LABELS
+  MANUAL
+  CANARY_UNDERPERFORMANCE
+  SEASONAL_RESET
+}
+
+enum LifecycleRunStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -100,6 +146,21 @@ model League {
   matches          Match[]
   providerMappings ProviderLeagueMapping[]
   publishStrategyProfiles PublishStrategyProfile[]
+  modelRegistryEntries ModelRegistryEntry[]
+  modelAliases     ModelAlias[]
+  calibrationAliases CalibrationAlias[]
+  challengerEvaluations ChallengerEvaluation[]
+  trainingDatasets TrainingDataset[]
+  trainingRuns     TrainingRun[]
+  promotionDecisions PromotionDecision[]
+  rollbackEvents   RollbackEvent[]
+  driftMonitors    DriftMonitor[]
+  driftEvents      DriftEvent[]
+  retrainingTriggers RetrainingTrigger[]
+  shadowEvalRuns   ShadowEvalRun[]
+  rolloutAssignments RolloutAssignment[]
+  labelCollectionRuns LabelCollectionRun[]
+  modelHealthSnapshots ModelHealthSnapshot[]
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
 
@@ -237,6 +298,7 @@ model Match {
   predictionCandidates    PredictionCandidate[]
   publishDecisions        PublishDecision[]
   metaModelRuns           MetaModelRun[]
+  datasetSnapshots        DatasetSnapshot[]
   publishedPredictions    PublishedPrediction[]
   manualPublishOverrides  ManualPublishOverride[]
   policyEvaluationSnapshots PolicyEvaluationSnapshot[]
@@ -454,6 +516,20 @@ model ModelVersion {
   predictionRuns        PredictionRun[]
   predictionCandidates  PredictionCandidate[]
   publishDecisions      PublishDecision[]
+  registryEntries       ModelRegistryEntry[]
+  modelAliases          ModelAlias[]
+  challengerAsChampion  ChallengerEvaluation[] @relation("ChallengerChampionModel")
+  challengerAsCandidate ChallengerEvaluation[] @relation("ChallengerCandidateModel")
+  trainingRuns          TrainingRun[]
+  promotionAsChampion   PromotionDecision[]    @relation("PromotionChampionModel")
+  promotionAsCandidate  PromotionDecision[]    @relation("PromotionCandidateModel")
+  rollbackFromEvents    RollbackEvent[]        @relation("RollbackFromModel")
+  rollbackToEvents      RollbackEvent[]        @relation("RollbackToModel")
+  shadowAsChampion      ShadowEvalRun[]        @relation("ShadowChampionModel")
+  shadowAsCandidate     ShadowEvalRun[]        @relation("ShadowCandidateModel")
+  modelHealthSnapshots  ModelHealthSnapshot[]
+  servingAliasHistoryPrev ServingAliasHistory[] @relation("ServingAliasHistoryPreviousModel")
+  servingAliasHistoryNext ServingAliasHistory[] @relation("ServingAliasHistoryNewModel")
   createdAt             DateTime                     @default(now())
 
   @@unique([modelName, version])
@@ -477,6 +553,16 @@ model PredictionCalibration {
   brierScore     Float?
   ece            Float?
   modelVersion   ModelVersion @relation(fields: [modelVersionId], references: [id])
+  calibrationAliases CalibrationAlias[]
+  registryEntries  ModelRegistryEntry[]
+  modelAliases     ModelAlias[]
+  promotionAsChampion PromotionDecision[] @relation("PromotionChampionCalibration")
+  promotionAsCandidate PromotionDecision[] @relation("PromotionCandidateCalibration")
+  rollbackFromEvents RollbackEvent[] @relation("RollbackFromCalibration")
+  rollbackToEvents RollbackEvent[] @relation("RollbackToCalibration")
+  modelHealthSnapshots ModelHealthSnapshot[]
+  servingAliasHistoryPrev ServingAliasHistory[] @relation("ServingAliasHistoryPreviousCalibration")
+  servingAliasHistoryNext ServingAliasHistory[] @relation("ServingAliasHistoryNewCalibration")
   createdAt      DateTime     @default(now())
 }
 
@@ -862,6 +948,7 @@ model FeatureSnapshot {
   createdAt         DateTime        @default(now()) @map("created_at")
   match             Match           @relation(fields: [matchId], references: [id], onDelete: Cascade)
   predictionRuns    PredictionRun[]
+  datasetSnapshots  DatasetSnapshot[]
 
   @@unique([matchId, horizon, featureSetVersion, cutoffAt, featureHash])
   @@index([matchId, horizon, cutoffAt])
@@ -1191,6 +1278,472 @@ model PolicyEvaluationSnapshot {
   @@index([strategyProfile, createdAt])
   @@index([matchId, market, lineKey, horizon])
   @@map("policy_evaluation_snapshots")
+}
+
+model TrainingDataset {
+  id                 String            @id @default(uuid())
+  sportCode          String            @map("sport")
+  market             String
+  line               Float?
+  lineKey            String            @map("line_key")
+  horizon            String
+  leagueId           String?           @map("league_id")
+  scopeLeagueKey     String            @default("global") @map("scope_league_key")
+  featureSetVersion  String?           @map("feature_set_version")
+  windowStart        DateTime          @map("window_start")
+  windowEnd          DateTime          @map("window_end")
+  sampleSize         Int               @default(0) @map("sample_size")
+  datasetHash        String            @unique @map("dataset_hash")
+  inclusionBoundaries Json?            @map("inclusion_boundaries_jsonb")
+  leakageChecks      Json?             @map("leakage_checks_jsonb")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  league             League?           @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  datasetSnapshots   DatasetSnapshot[]
+  trainingRuns       TrainingRun[]
+  registryEntries    ModelRegistryEntry[]
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@map("training_datasets")
+}
+
+model DatasetSnapshot {
+  id                String          @id @default(uuid())
+  trainingDatasetId String          @map("training_dataset_id")
+  matchId           String          @map("match_id")
+  horizon           String
+  cutoffAt          DateTime        @map("cutoff_at")
+  featureSnapshotId String?         @map("feature_snapshot_id")
+  labelJson         Json?           @map("label_jsonb")
+  metadataJson      Json?           @map("metadata_jsonb")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  trainingDataset   TrainingDataset @relation(fields: [trainingDatasetId], references: [id], onDelete: Cascade)
+  match             Match           @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  featureSnapshot   FeatureSnapshot? @relation(fields: [featureSnapshotId], references: [id], onDelete: SetNull)
+
+  @@unique([trainingDatasetId, matchId, horizon, cutoffAt])
+  @@index([matchId, horizon, cutoffAt])
+  @@map("dataset_snapshots")
+}
+
+model LabelCollectionRun {
+  id             String              @id @default(uuid())
+  sportCode      String              @map("sport")
+  market         String
+  line           Float?
+  lineKey        String              @map("line_key")
+  horizon        String
+  leagueId       String?             @map("league_id")
+  scopeLeagueKey String              @default("global") @map("scope_league_key")
+  status         LifecycleRunStatus  @default(queued)
+  dedupKey       String              @unique @map("dedup_key")
+  labelsCollected Int                @default(0) @map("labels_collected")
+  fromMatchDate  DateTime?           @map("from_match_date")
+  toMatchDate    DateTime?           @map("to_match_date")
+  startedAt      DateTime?           @map("started_at")
+  finishedAt     DateTime?           @map("finished_at")
+  detailsJson    Json?               @map("details_jsonb")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  league         League?             @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@map("label_collection_runs")
+}
+
+model TrainingRun {
+  id                 String               @id @default(uuid())
+  sportCode          String               @map("sport")
+  market             String
+  line               Float?
+  lineKey            String               @map("line_key")
+  horizon            String
+  leagueId           String?              @map("league_id")
+  scopeLeagueKey     String               @default("global") @map("scope_league_key")
+  triggerType        RetrainingTriggerType? @map("trigger_type")
+  trainingDatasetId  String?              @map("training_dataset_id")
+  modelVersionId     String?              @map("model_version_id")
+  status             LifecycleRunStatus   @default(queued)
+  dedupKey           String               @unique @map("dedup_key")
+  configJson         Json?                @map("config_jsonb")
+  metricsJson        Json?                @map("metrics_jsonb")
+  startedAt          DateTime?            @map("started_at")
+  finishedAt         DateTime?            @map("finished_at")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  league             League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  trainingDataset    TrainingDataset?     @relation(fields: [trainingDatasetId], references: [id], onDelete: SetNull)
+  modelVersion       ModelVersion?        @relation(fields: [modelVersionId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@index([status, createdAt])
+  @@map("training_runs")
+}
+
+model ModelRegistryEntry {
+  id                  String               @id @default(uuid())
+  sportCode           String               @map("sport")
+  market              String
+  line                Float?
+  lineKey             String               @map("line_key")
+  horizon             String
+  leagueId            String?              @map("league_id")
+  scopeLeagueKey      String               @default("global") @map("scope_league_key")
+  modelVersionId      String               @map("model_version_id")
+  calibrationVersionId String?             @map("calibration_version_id")
+  featureSetVersion   String?              @map("feature_set_version")
+  trainingDatasetId   String?              @map("training_dataset_id")
+  evaluationWindowStart DateTime?          @map("evaluation_window_start")
+  evaluationWindowEnd DateTime?            @map("evaluation_window_end")
+  status              String               @default("registered")
+  decisionReasons     Json?                @map("decision_reasons_jsonb")
+  actor               String               @default("system")
+  metadataJson        Json?                @map("metadata_jsonb")
+  effectiveAt         DateTime?            @map("effective_at")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+  league              League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  modelVersion        ModelVersion         @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  calibrationVersion  PredictionCalibration? @relation(fields: [calibrationVersionId], references: [id], onDelete: SetNull)
+  trainingDataset     TrainingDataset?     @relation(fields: [trainingDatasetId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, status])
+  @@index([modelVersionId, createdAt])
+  @@map("model_registry_entries")
+}
+
+model ModelAlias {
+  id                  String               @id @default(uuid())
+  sportCode           String               @map("sport")
+  market              String
+  line                Float?
+  lineKey             String               @map("line_key")
+  horizon             String
+  leagueId            String?              @map("league_id")
+  scopeLeagueKey      String               @default("global") @map("scope_league_key")
+  aliasType           ServingAliasType     @map("alias_type")
+  modelVersionId      String               @map("model_version_id")
+  calibrationVersionId String?             @map("calibration_version_id")
+  featureSetVersion   String?              @map("feature_set_version")
+  policyVersion       String?              @map("policy_version")
+  rolloutPercent      Float                @default(1) @map("rollout_percent")
+  isActive            Boolean              @default(true) @map("is_active")
+  effectiveAt         DateTime?            @map("effective_at")
+  actor               String               @default("system")
+  detailsJson         Json?                @map("details_jsonb")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+  league              League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  modelVersion        ModelVersion         @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  calibrationVersion  PredictionCalibration? @relation(fields: [calibrationVersionId], references: [id], onDelete: SetNull)
+  history             ServingAliasHistory[]
+  rolloutAssignments  RolloutAssignment[]
+
+  @@unique([sportCode, market, lineKey, horizon, scopeLeagueKey, aliasType])
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, isActive])
+  @@index([modelVersionId, createdAt])
+  @@map("model_aliases")
+}
+
+model CalibrationAlias {
+  id                  String               @id @default(uuid())
+  sportCode           String               @map("sport")
+  market              String
+  line                Float?
+  lineKey             String               @map("line_key")
+  horizon             String
+  leagueId            String?              @map("league_id")
+  scopeLeagueKey      String               @default("global") @map("scope_league_key")
+  aliasType           ServingAliasType     @map("alias_type")
+  calibrationVersionId String              @map("calibration_version_id")
+  isActive            Boolean              @default(true) @map("is_active")
+  effectiveAt         DateTime?            @map("effective_at")
+  actor               String               @default("system")
+  detailsJson         Json?                @map("details_jsonb")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+  league              League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  calibrationVersion  PredictionCalibration @relation(fields: [calibrationVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([sportCode, market, lineKey, horizon, scopeLeagueKey, aliasType])
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, isActive])
+  @@map("calibration_aliases")
+}
+
+model ShadowEvalRun {
+  id                   String              @id @default(uuid())
+  sportCode            String              @map("sport")
+  market               String
+  line                 Float?
+  lineKey              String              @map("line_key")
+  horizon              String
+  leagueId             String?             @map("league_id")
+  scopeLeagueKey       String              @default("global") @map("scope_league_key")
+  championModelVersionId String            @map("champion_model_version_id")
+  challengerModelVersionId String          @map("challenger_model_version_id")
+  evaluationWindowStart DateTime           @map("evaluation_window_start")
+  evaluationWindowEnd  DateTime            @map("evaluation_window_end")
+  sampleSize           Int                 @default(0) @map("sample_size")
+  status               LifecycleRunStatus  @default(queued)
+  metricsJson          Json?               @map("metrics_jsonb")
+  coverageJson         Json?               @map("coverage_jsonb")
+  latencyJson          Json?               @map("latency_jsonb")
+  fallbackRate         Float?              @map("fallback_rate")
+  dedupKey             String              @unique @map("dedup_key")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  completedAt          DateTime?           @map("completed_at")
+  league               League?             @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  championModelVersion ModelVersion        @relation("ShadowChampionModel", fields: [championModelVersionId], references: [id], onDelete: Cascade)
+  challengerModelVersion ModelVersion      @relation("ShadowCandidateModel", fields: [challengerModelVersionId], references: [id], onDelete: Cascade)
+  challengerEvaluations ChallengerEvaluation[]
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@index([status, createdAt])
+  @@map("shadow_eval_runs")
+}
+
+model ChallengerEvaluation {
+  id                    String              @id @default(uuid())
+  sportCode             String              @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String              @map("line_key")
+  horizon               String
+  leagueId              String?             @map("league_id")
+  scopeLeagueKey        String              @default("global") @map("scope_league_key")
+  championModelVersionId String            @map("champion_model_version_id")
+  challengerModelVersionId String          @map("challenger_model_version_id")
+  shadowEvalRunId       String?             @map("shadow_eval_run_id")
+  evaluationWindowStart DateTime            @map("evaluation_window_start")
+  evaluationWindowEnd   DateTime            @map("evaluation_window_end")
+  sampleSize            Int                 @default(0) @map("sample_size")
+  metricsJson           Json                @map("metrics_jsonb")
+  segmentMetricsJson    Json?               @map("segment_metrics_jsonb")
+  status                String              @default("shadow_completed")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  league                League?             @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  championModelVersion  ModelVersion        @relation("ChallengerChampionModel", fields: [championModelVersionId], references: [id], onDelete: Cascade)
+  challengerModelVersion ModelVersion       @relation("ChallengerCandidateModel", fields: [challengerModelVersionId], references: [id], onDelete: Cascade)
+  shadowEvalRun         ShadowEvalRun?      @relation(fields: [shadowEvalRunId], references: [id], onDelete: SetNull)
+  promotionDecisions    PromotionDecision[]
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@index([championModelVersionId, challengerModelVersionId, createdAt])
+  @@map("challenger_evaluations")
+}
+
+model PromotionDecision {
+  id                    String                @id @default(uuid())
+  sportCode             String                @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String                @map("line_key")
+  horizon               String
+  leagueId              String?               @map("league_id")
+  scopeLeagueKey        String                @default("global") @map("scope_league_key")
+  championModelVersionId String               @map("champion_model_version_id")
+  challengerModelVersionId String             @map("challenger_model_version_id")
+  championCalibrationVersionId String?        @map("champion_calibration_version_id")
+  challengerCalibrationVersionId String?      @map("challenger_calibration_version_id")
+  challengerEvaluationId String?              @map("challenger_evaluation_id")
+  status                PromotionDecisionStatus
+  decisionReasons       Json                  @map("decision_reasons_jsonb")
+  actor                 String                @default("system")
+  minimumSampleSizeMet  Boolean               @default(false) @map("minimum_sample_size_met")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  effectiveAt           DateTime?             @map("effective_at")
+  league                League?               @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  championModelVersion  ModelVersion          @relation("PromotionChampionModel", fields: [championModelVersionId], references: [id], onDelete: Cascade)
+  challengerModelVersion ModelVersion         @relation("PromotionCandidateModel", fields: [challengerModelVersionId], references: [id], onDelete: Cascade)
+  championCalibrationVersion PredictionCalibration? @relation("PromotionChampionCalibration", fields: [championCalibrationVersionId], references: [id], onDelete: SetNull)
+  challengerCalibrationVersion PredictionCalibration? @relation("PromotionCandidateCalibration", fields: [challengerCalibrationVersionId], references: [id], onDelete: SetNull)
+  challengerEvaluation  ChallengerEvaluation? @relation(fields: [challengerEvaluationId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@index([status, createdAt])
+  @@map("promotion_decisions")
+}
+
+model RollbackEvent {
+  id                    String                @id @default(uuid())
+  sportCode             String                @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String                @map("line_key")
+  horizon               String
+  leagueId              String?               @map("league_id")
+  scopeLeagueKey        String                @default("global") @map("scope_league_key")
+  fromModelVersionId    String?               @map("from_model_version_id")
+  toModelVersionId      String?               @map("to_model_version_id")
+  fromCalibrationVersionId String?            @map("from_calibration_version_id")
+  toCalibrationVersionId String?              @map("to_calibration_version_id")
+  reason                String
+  actor                 String                @default("system")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  effectiveAt           DateTime?             @map("effective_at")
+  metadataJson          Json?                 @map("metadata_jsonb")
+  league                League?               @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  fromModelVersion      ModelVersion?         @relation("RollbackFromModel", fields: [fromModelVersionId], references: [id], onDelete: SetNull)
+  toModelVersion        ModelVersion?         @relation("RollbackToModel", fields: [toModelVersionId], references: [id], onDelete: SetNull)
+  fromCalibrationVersion PredictionCalibration? @relation("RollbackFromCalibration", fields: [fromCalibrationVersionId], references: [id], onDelete: SetNull)
+  toCalibrationVersion  PredictionCalibration? @relation("RollbackToCalibration", fields: [toCalibrationVersionId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@map("rollback_events")
+}
+
+model ServingAliasHistory {
+  id                    String                @id @default(uuid())
+  modelAliasId          String                @map("model_alias_id")
+  previousModelVersionId String?              @map("previous_model_version_id")
+  newModelVersionId     String?               @map("new_model_version_id")
+  previousCalibrationVersionId String?        @map("previous_calibration_version_id")
+  newCalibrationVersionId String?             @map("new_calibration_version_id")
+  actor                 String                @default("system")
+  reason                String?
+  metadataJson          Json?                 @map("metadata_jsonb")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  effectiveAt           DateTime?             @map("effective_at")
+  modelAlias            ModelAlias            @relation(fields: [modelAliasId], references: [id], onDelete: Cascade)
+  previousModelVersion  ModelVersion?         @relation("ServingAliasHistoryPreviousModel", fields: [previousModelVersionId], references: [id], onDelete: SetNull)
+  newModelVersion       ModelVersion?         @relation("ServingAliasHistoryNewModel", fields: [newModelVersionId], references: [id], onDelete: SetNull)
+  previousCalibrationVersion PredictionCalibration? @relation("ServingAliasHistoryPreviousCalibration", fields: [previousCalibrationVersionId], references: [id], onDelete: SetNull)
+  newCalibrationVersion PredictionCalibration? @relation("ServingAliasHistoryNewCalibration", fields: [newCalibrationVersionId], references: [id], onDelete: SetNull)
+
+  @@index([modelAliasId, createdAt])
+  @@map("serving_alias_history")
+}
+
+model DriftMonitor {
+  id                    String               @id @default(uuid())
+  sportCode             String               @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String               @map("line_key")
+  horizon               String
+  leagueId              String?              @map("league_id")
+  scopeLeagueKey        String               @default("global") @map("scope_league_key")
+  monitorName           String               @map("monitor_name")
+  category              DriftMonitorCategory
+  thresholdWarning      Float?               @map("threshold_warning")
+  thresholdCritical     Float?               @map("threshold_critical")
+  baselineJson          Json?                @map("baseline_jsonb")
+  configJson            Json?                @map("config_jsonb")
+  isActive              Boolean              @default(true) @map("is_active")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  league                League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  events                DriftEvent[]
+
+  @@unique([sportCode, market, lineKey, horizon, scopeLeagueKey, monitorName])
+  @@index([isActive, createdAt])
+  @@map("drift_monitors")
+}
+
+model DriftEvent {
+  id                    String        @id @default(uuid())
+  driftMonitorId        String?       @map("drift_monitor_id")
+  sportCode             String        @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String        @map("line_key")
+  horizon               String
+  leagueId              String?       @map("league_id")
+  scopeLeagueKey        String        @default("global") @map("scope_league_key")
+  severity              DriftSeverity
+  metricName            String        @map("metric_name")
+  metricValue           Float         @map("metric_value")
+  baselineValue         Float?        @map("baseline_value")
+  thresholdValue        Float?        @map("threshold_value")
+  windowStart           DateTime?     @map("window_start")
+  windowEnd             DateTime?     @map("window_end")
+  detailsJson           Json?         @map("details_jsonb")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  resolvedAt            DateTime?     @map("resolved_at")
+  driftMonitor          DriftMonitor? @relation(fields: [driftMonitorId], references: [id], onDelete: SetNull)
+  league                League?       @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+
+  @@index([severity, createdAt])
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@map("drift_events")
+}
+
+model RetrainingTrigger {
+  id                    String               @id @default(uuid())
+  triggerType           RetrainingTriggerType @map("trigger_type")
+  sportCode             String               @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String               @map("line_key")
+  horizon               String
+  leagueId              String?              @map("league_id")
+  scopeLeagueKey        String               @default("global") @map("scope_league_key")
+  reasonPayloadJson     Json                 @map("reason_payload_jsonb")
+  sourceMetricSnapshotJson Json?             @map("source_metric_snapshot_jsonb")
+  dedupKey              String               @unique @map("dedup_key")
+  status                String               @default("queued")
+  finalActionTaken      String?              @map("final_action_taken")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  processedAt           DateTime?            @map("processed_at")
+  league                League?              @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@map("retraining_triggers")
+}
+
+model RolloutAssignment {
+  id                    String            @id @default(uuid())
+  sportCode             String            @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String            @map("line_key")
+  horizon               String
+  leagueId              String?           @map("league_id")
+  scopeLeagueKey        String            @default("global") @map("scope_league_key")
+  aliasType             ServingAliasType  @map("alias_type")
+  bucketStart           Int               @map("bucket_start")
+  bucketEnd             Int               @map("bucket_end")
+  modelAliasId          String?           @map("model_alias_id")
+  isActive              Boolean           @default(true) @map("is_active")
+  detailsJson           Json?             @map("details_jsonb")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+  league                League?           @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  modelAlias            ModelAlias?       @relation(fields: [modelAliasId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, aliasType, isActive])
+  @@map("rollout_assignments")
+}
+
+model ModelHealthSnapshot {
+  id                    String                @id @default(uuid())
+  sportCode             String                @map("sport")
+  market                String
+  line                  Float?
+  lineKey               String                @map("line_key")
+  horizon               String
+  leagueId              String?               @map("league_id")
+  scopeLeagueKey        String                @default("global") @map("scope_league_key")
+  modelVersionId        String                @map("model_version_id")
+  calibrationVersionId  String?               @map("calibration_version_id")
+  aliasType             ServingAliasType?     @map("alias_type")
+  sampleSize            Int                   @default(0) @map("sample_size")
+  logLoss               Float?                @map("log_loss")
+  brierScore            Float?                @map("brier_score")
+  calibrationDrift      Float?                @map("calibration_drift")
+  publishRate           Float?                @map("publish_rate")
+  abstainRate           Float?                @map("abstain_rate")
+  latencyP95Ms          Float?                @map("latency_p95_ms")
+  fallbackRate          Float?                @map("fallback_rate")
+  errorRate             Float?                @map("error_rate")
+  coverageJson          Json?                 @map("coverage_jsonb")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  league                League?               @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  modelVersion          ModelVersion          @relation(fields: [modelVersionId], references: [id], onDelete: Cascade)
+  calibrationVersion    PredictionCalibration? @relation(fields: [calibrationVersionId], references: [id], onDelete: SetNull)
+
+  @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
+  @@index([modelVersionId, createdAt])
+  @@map("model_health_snapshots")
 }
 
 model PublishedPrediction {

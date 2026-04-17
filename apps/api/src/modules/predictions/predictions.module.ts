@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { BullModule } from "@nestjs/bullmq";
 import { BasketballPredictionsController } from "./basketball-predictions.controller";
 import { PredictionsController } from "./predictions.controller";
 import { PredictionsService } from "./predictions.service";
@@ -34,9 +35,22 @@ import { SelectionScoreService } from "./selection-score.service";
 import { AbstainPolicyService } from "./abstain-policy.service";
 import { ConflictResolutionService } from "./conflict-resolution.service";
 import { PublishDecisionService } from "./publish-decision.service";
+import { ModelAliasService } from "./model-alias.service";
+import { TrainingDatasetBuilderService } from "./training-dataset-builder.service";
+import { ChallengerEvaluationService } from "./challenger-evaluation.service";
+import { PromotionDecisionService } from "./promotion-decision.service";
+import { RollbackDecisionService } from "./rollback-decision.service";
+import { DriftMonitoringService } from "./drift-monitoring.service";
+import { RetrainingTriggerService } from "./retraining-trigger.service";
+import { ModelLifecycleOrchestrationService } from "./model-lifecycle-orchestration.service";
 
 @Module({
-  imports: [OddsModule],
+  imports: [
+    OddsModule,
+    BullModule.registerQueue({
+      name: "model-lifecycle"
+    })
+  ],
   controllers: [PredictionsController, BasketballPredictionsController],
   providers: [
     PredictionsService,
@@ -70,7 +84,15 @@ import { PublishDecisionService } from "./publish-decision.service";
     SelectionScoreService,
     AbstainPolicyService,
     ConflictResolutionService,
-    PublishDecisionService
+    PublishDecisionService,
+    ModelAliasService,
+    TrainingDatasetBuilderService,
+    ChallengerEvaluationService,
+    PromotionDecisionService,
+    RollbackDecisionService,
+    DriftMonitoringService,
+    RetrainingTriggerService,
+    ModelLifecycleOrchestrationService
   ],
   exports: [
     PredictionsService,
@@ -96,7 +118,15 @@ import { PublishDecisionService } from "./publish-decision.service";
     SelectionScoreService,
     AbstainPolicyService,
     ConflictResolutionService,
-    PublishDecisionService
+    PublishDecisionService,
+    ModelAliasService,
+    TrainingDatasetBuilderService,
+    ChallengerEvaluationService,
+    PromotionDecisionService,
+    RollbackDecisionService,
+    DriftMonitoringService,
+    RetrainingTriggerService,
+    ModelLifecycleOrchestrationService
   ]
 })
 export class PredictionsModule {}

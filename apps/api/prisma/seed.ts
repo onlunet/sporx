@@ -229,6 +229,36 @@ async function main() {
       key: "selection_engine_emergency_rollback",
       value: false,
       description: "Selection engine acil geri dönüş anahtarı"
+    },
+    {
+      key: "champion_alias_resolution_enabled",
+      value: true,
+      description: "Runtime model seciminde alias tabanli champion cozumlemeyi aktif eder"
+    },
+    {
+      key: "challenger_shadow_enabled",
+      value: true,
+      description: "Challenger modellerin shadow degerlendirmesini aktif eder"
+    },
+    {
+      key: "canary_enabled",
+      value: false,
+      description: "Canary trafik dagitimi aktiflik ayari"
+    },
+    {
+      key: "auto_promotion_enabled",
+      value: false,
+      description: "Otomatik champion promosyona izin verir"
+    },
+    {
+      key: "auto_rollback_enabled",
+      value: false,
+      description: "Kritik durumlarda otomatik rollback'i etkinlestirir"
+    },
+    {
+      key: "drift_triggered_retraining_enabled",
+      value: true,
+      description: "Drift olaylarindan otomatik retraining tetiklerini etkinlestirir"
     }
   ];
 
@@ -659,6 +689,187 @@ async function main() {
       }
     });
   }
+  const championCalibration = await prisma.predictionCalibration.findFirst({
+    where: { modelVersionId: advancedModel.id },
+    orderBy: { createdAt: "desc" }
+  });
+
+  await prisma.modelAlias.upsert({
+    where: {
+      sportCode_market_lineKey_horizon_scopeLeagueKey_aliasType: {
+        sportCode: "football",
+        market: "match_outcome",
+        lineKey: "na",
+        horizon: "POST_MATCH",
+        scopeLeagueKey: "global",
+        aliasType: "CHAMPION"
+      }
+    },
+    update: {
+      line: null,
+      leagueId: null,
+      modelVersionId: advancedModel.id,
+      calibrationVersionId: championCalibration?.id ?? null,
+      featureSetVersion: "v1",
+      policyVersion: "v1_deterministic_selector",
+      isActive: true,
+      actor: "seed",
+      detailsJson: {
+        reason: "seed_bootstrap_champion"
+      }
+    },
+    create: {
+      sportCode: "football",
+      market: "match_outcome",
+      line: null,
+      lineKey: "na",
+      horizon: "POST_MATCH",
+      leagueId: null,
+      scopeLeagueKey: "global",
+      aliasType: "CHAMPION",
+      modelVersionId: advancedModel.id,
+      calibrationVersionId: championCalibration?.id ?? null,
+      featureSetVersion: "v1",
+      policyVersion: "v1_deterministic_selector",
+      isActive: true,
+      actor: "seed",
+      detailsJson: {
+        reason: "seed_bootstrap_champion"
+      }
+    }
+  });
+
+  await prisma.modelAlias.upsert({
+    where: {
+      sportCode_market_lineKey_horizon_scopeLeagueKey_aliasType: {
+        sportCode: "football",
+        market: "match_outcome",
+        lineKey: "na",
+        horizon: "POST_MATCH",
+        scopeLeagueKey: "global",
+        aliasType: "ROLLBACK_CANDIDATE"
+      }
+    },
+    update: {
+      line: null,
+      leagueId: null,
+      modelVersionId: primaryModel.id,
+      calibrationVersionId: null,
+      featureSetVersion: "v1",
+      policyVersion: "v1_deterministic_selector",
+      isActive: true,
+      actor: "seed",
+      detailsJson: {
+        reason: "seed_bootstrap_rollback_candidate"
+      }
+    },
+    create: {
+      sportCode: "football",
+      market: "match_outcome",
+      line: null,
+      lineKey: "na",
+      horizon: "POST_MATCH",
+      leagueId: null,
+      scopeLeagueKey: "global",
+      aliasType: "ROLLBACK_CANDIDATE",
+      modelVersionId: primaryModel.id,
+      calibrationVersionId: null,
+      featureSetVersion: "v1",
+      policyVersion: "v1_deterministic_selector",
+      isActive: true,
+      actor: "seed",
+      detailsJson: {
+        reason: "seed_bootstrap_rollback_candidate"
+      }
+    }
+  });
+
+  if (championCalibration) {
+    await prisma.calibrationAlias.upsert({
+      where: {
+        sportCode_market_lineKey_horizon_scopeLeagueKey_aliasType: {
+          sportCode: "football",
+          market: "match_outcome",
+          lineKey: "na",
+          horizon: "POST_MATCH",
+          scopeLeagueKey: "global",
+          aliasType: "CHAMPION"
+        }
+      },
+      update: {
+        line: null,
+        leagueId: null,
+        calibrationVersionId: championCalibration.id,
+        isActive: true,
+        actor: "seed"
+      },
+      create: {
+        sportCode: "football",
+        market: "match_outcome",
+        line: null,
+        lineKey: "na",
+        horizon: "POST_MATCH",
+        leagueId: null,
+        scopeLeagueKey: "global",
+        aliasType: "CHAMPION",
+        calibrationVersionId: championCalibration.id,
+        isActive: true,
+        actor: "seed"
+      }
+    });
+  }
+
+  const ensureRegistryEntry = async (input: {
+    modelVersionId: string;
+    calibrationVersionId?: string | null;
+    status: string;
+  }) => {
+    const existing = await prisma.modelRegistryEntry.findFirst({
+      where: {
+        sportCode: "football",
+        market: "match_outcome",
+        lineKey: "na",
+        horizon: "POST_MATCH",
+        scopeLeagueKey: "global",
+        modelVersionId: input.modelVersionId,
+        status: input.status
+      }
+    });
+    if (existing) {
+      return;
+    }
+    await prisma.modelRegistryEntry.create({
+      data: {
+        sportCode: "football",
+        market: "match_outcome",
+        line: null,
+        lineKey: "na",
+        horizon: "POST_MATCH",
+        leagueId: null,
+        scopeLeagueKey: "global",
+        modelVersionId: input.modelVersionId,
+        calibrationVersionId: input.calibrationVersionId ?? null,
+        featureSetVersion: "v1",
+        status: input.status,
+        decisionReasons: {
+          source: "seed"
+        },
+        actor: "seed",
+        effectiveAt: new Date()
+      }
+    });
+  };
+
+  await ensureRegistryEntry({
+    modelVersionId: advancedModel.id,
+    calibrationVersionId: championCalibration?.id ?? null,
+    status: "champion_seeded"
+  });
+  await ensureRegistryEntry({
+    modelVersionId: challengerModel.id,
+    calibrationVersionId: null,
+    status: "challenger_seeded"
+  });
 
   const backtestCount = await prisma.backtestResult.count();
   if (backtestCount === 0) {
