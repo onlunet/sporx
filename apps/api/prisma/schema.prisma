@@ -217,6 +217,56 @@ enum PolicyPromotionDecisionStatus {
   FORCE_REJECT
 }
 
+enum AuthActorType {
+  PUBLIC
+  ADMIN
+}
+
+enum AuthSessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+  LOCKED
+}
+
+enum RefreshTokenEventType {
+  ISSUED
+  ROTATED
+  REVOKED
+  REUSE_DETECTED
+  FAMILY_REVOKED
+}
+
+enum LoginAttemptResult {
+  SUCCESS
+  FAILURE
+  LOCKED
+}
+
+enum AuthRiskSeverity {
+  INFO
+  WARNING
+  HIGH
+  CRITICAL
+}
+
+enum AuthRiskType {
+  BRUTE_FORCE
+  TOKEN_REUSE
+  ADMIN_IP_BLOCKED
+  STEP_UP_FAILURE
+  STEP_UP_SUCCESS
+  GLOBAL_LOGOUT
+  SESSION_REVOKED
+}
+
+enum AdminStepUpStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  EXPIRED
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -225,6 +275,13 @@ model User {
   roleId        String
   role          Role           @relation(fields: [roleId], references: [id])
   refreshTokens RefreshToken[]
+  refreshTokenFamilies RefreshTokenFamily[]
+  authSessions  AuthSession[]
+  loginAttempts LoginAttempt[]
+  authRiskEvents AuthRiskEvent[]
+  adminAccessSessions AdminAccessSession[]
+  adminStepUpChallenges AdminStepUpChallenge[]
+  refreshTokenEvents RefreshTokenEvent[]
   auditLogs     AuditLog[]
   apiLogs       ApiLog[]
   manualPublishOverrides ManualPublishOverride[] @relation("ManualPublishOverrideActor")
@@ -235,11 +292,185 @@ model User {
 model RefreshToken {
   id        String    @id @default(uuid())
   userId    String
+  tokenJti  String?   @unique
+  familyId  String?
+  sessionId String?
+  actorType AuthActorType @default(PUBLIC)
   tokenHash String
+  usedAt    DateTime?
   expiresAt DateTime
   revokedAt DateTime?
+  revokedReason String?
+  replacedByTokenId String?
+  deviceFingerprint String?
+  ipAddress String?
+  userAgent String?
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  family    RefreshTokenFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  session   AuthSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  events    RefreshTokenEvent[] @relation("RefreshTokenEventToken")
+  replacedByToken RefreshToken? @relation("RefreshTokenReplacement", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  replacesTokens RefreshToken[] @relation("RefreshTokenReplacement")
   createdAt DateTime  @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([sessionId])
+}
+
+model AuthSession {
+  id                String             @id @default(uuid())
+  userId            String             @map("user_id")
+  actorType         AuthActorType      @default(PUBLIC) @map("actor_type")
+  status            AuthSessionStatus  @default(ACTIVE)
+  sessionKey        String             @unique @map("session_key")
+  ipAddress         String?            @map("ip")
+  userAgent         String?            @map("user_agent")
+  deviceFingerprint String?            @map("device_fingerprint")
+  environment       String?
+  lastSeenAt        DateTime           @default(now()) @map("last_seen_at")
+  expiresAt         DateTime           @map("expires_at")
+  revokedAt         DateTime?          @map("revoked_at")
+  revokedReason     String?            @map("revoked_reason")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens     RefreshToken[]
+  refreshTokenFamilies RefreshTokenFamily[]
+  authRiskEvents    AuthRiskEvent[]
+  adminAccessSession AdminAccessSession?
+  adminStepUpChallenges AdminStepUpChallenge[]
+
+  @@index([userId, status, lastSeenAt])
+  @@map("auth_sessions")
+}
+
+model RefreshTokenFamily {
+  id            String            @id @default(uuid())
+  userId        String            @map("user_id")
+  sessionId     String?           @map("session_id")
+  actorType     AuthActorType     @default(PUBLIC) @map("actor_type")
+  status        AuthSessionStatus @default(ACTIVE)
+  revokedAt     DateTime?         @map("revoked_at")
+  revokedReason String?           @map("revoked_reason")
+  lastRotatedAt DateTime?         @map("last_rotated_at")
+  expiresAt     DateTime?         @map("expires_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session       AuthSession?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  tokens        RefreshToken[]
+  events        RefreshTokenEvent[]
+  authRiskEvents AuthRiskEvent[]
+
+  @@index([userId, status, createdAt])
+  @@index([sessionId])
+  @@map("refresh_token_families")
+}
+
+model RefreshTokenEvent {
+  id        String                @id @default(uuid())
+  userId    String?               @map("user_id")
+  familyId  String?               @map("family_id")
+  tokenId   String?               @map("token_id")
+  eventType RefreshTokenEventType @map("event_type")
+  reason    String?
+  ipAddress String?               @map("ip")
+  userAgent String?               @map("user_agent")
+  metadata  Json?
+  createdAt DateTime              @default(now()) @map("created_at")
+  user      User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  family    RefreshTokenFamily?   @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  token     RefreshToken?         @relation("RefreshTokenEventToken", fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@index([familyId, createdAt])
+  @@index([userId, createdAt])
+  @@map("refresh_token_events")
+}
+
+model LoginAttempt {
+  id          String            @id @default(uuid())
+  userId      String?           @map("user_id")
+  actorType   AuthActorType     @default(PUBLIC) @map("actor_type")
+  email       String?
+  ipAddress   String?           @map("ip")
+  userAgent   String?           @map("user_agent")
+  result      LoginAttemptResult
+  reason      String?
+  riskScore   Int               @default(0) @map("risk_score")
+  lockedUntil DateTime?         @map("locked_until")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  user        User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, ipAddress, createdAt])
+  @@index([actorType, result, createdAt])
+  @@map("login_attempts")
+}
+
+model AuthRiskEvent {
+  id         String           @id @default(uuid())
+  userId     String?          @map("user_id")
+  sessionId  String?          @map("session_id")
+  familyId   String?          @map("family_id")
+  actorType  AuthActorType    @default(PUBLIC) @map("actor_type")
+  riskType   AuthRiskType     @map("risk_type")
+  severity   AuthRiskSeverity @default(WARNING)
+  reason     String?
+  ipAddress  String?          @map("ip")
+  userAgent  String?          @map("user_agent")
+  metadata   Json?
+  createdAt  DateTime         @default(now()) @map("created_at")
+  user       User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session    AuthSession?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  family     RefreshTokenFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
+
+  @@index([riskType, severity, createdAt])
+  @@index([actorType, createdAt])
+  @@index([userId, createdAt])
+  @@map("auth_risk_events")
+}
+
+model AdminAccessSession {
+  id               String            @id @default(uuid())
+  userId           String            @map("user_id")
+  sessionId        String            @unique @map("session_id")
+  status           AuthSessionStatus @default(ACTIVE)
+  stepUpRequired   Boolean           @default(false) @map("step_up_required")
+  stepUpVerifiedAt DateTime?         @map("step_up_verified_at")
+  ipAddress        String?           @map("ip")
+  userAgent        String?           @map("user_agent")
+  allowedIp        Boolean?          @map("allowed_ip")
+  reason           String?
+  createdAt        DateTime          @default(now()) @map("created_at")
+  lastSeenAt       DateTime          @default(now()) @map("last_seen_at")
+  revokedAt        DateTime?         @map("revoked_at")
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session          AuthSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@map("admin_access_sessions")
+}
+
+model AdminStepUpChallenge {
+  id            String            @id @default(uuid())
+  userId        String            @map("user_id")
+  sessionId     String?           @map("session_id")
+  status        AdminStepUpStatus @default(PENDING)
+  challengeHash String            @map("challenge_hash")
+  expiresAt     DateTime          @map("expires_at")
+  verifiedAt    DateTime?         @map("verified_at")
+  failedAttempts Int              @default(0) @map("failed_attempts")
+  maxAttempts   Int               @default(3) @map("max_attempts")
+  ipAddress     String?           @map("ip")
+  userAgent     String?           @map("user_agent")
+  reason        String?
+  createdAt     DateTime          @default(now()) @map("created_at")
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session       AuthSession?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([sessionId, status, createdAt])
+  @@map("admin_step_up_challenges")
 }
 
 model Role {

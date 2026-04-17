@@ -1,4 +1,6 @@
+import { AuthActorType } from "@prisma/client";
 import { UnauthorizedException } from "@nestjs/common";
+import bcrypt from "bcrypt";
 import { AuthService } from "./auth.service";
 
 describe("AuthService", () => {
@@ -7,8 +9,30 @@ describe("AuthService", () => {
     findById: jest.fn(),
     storeRefreshToken: jest.fn(),
     findRefreshTokenMatch: jest.fn(),
+    findRefreshTokenByJti: jest.fn(),
     revokeRefreshTokenById: jest.fn(),
-    revokeAllActiveRefreshTokens: jest.fn()
+    revokeRefreshTokenFamily: jest.fn(),
+    revokeAllActiveRefreshTokens: jest.fn(),
+    revokeAuthSession: jest.fn(),
+    revokeAllAuthSessions: jest.fn(),
+    createLoginAttempt: jest.fn(),
+    getRecentLoginFailures: jest.fn(),
+    createAuthRiskEvent: jest.fn(),
+    createAuthSession: jest.fn(),
+    createRefreshTokenFamily: jest.fn(),
+    touchRefreshTokenFamily: jest.fn(),
+    touchAuthSession: jest.fn(),
+    createRefreshTokenEvent: jest.fn(),
+    markRefreshTokenRotated: jest.fn(),
+    createAdminAccessSession: jest.fn(),
+    markAdminAccessSessionSeen: jest.fn(),
+    createAdminStepUpChallenge: jest.fn(),
+    findAdminStepUpChallenge: jest.fn(),
+    updateAdminStepUpChallenge: jest.fn(),
+    findAuthSessions: jest.fn(),
+    findAuthRiskEvents: jest.fn(),
+    findLoginAttempts: jest.fn(),
+    findRefreshTokenEvents: jest.fn()
   };
 
   const jwtService = {
@@ -16,43 +40,194 @@ describe("AuthService", () => {
     verifyAsync: jest.fn()
   };
 
-  const service = new AuthService(usersService as any, jwtService as any);
+  const prismaService = {
+    $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback({})),
+    auditLog: {
+      create: jest.fn()
+    },
+    adminAccessSession: {
+      updateMany: jest.fn()
+    }
+  };
+
+  const service = new AuthService(usersService as any, jwtService as any, prismaService as any);
 
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.JWT_REFRESH_SECRET = "test-refresh-secret";
+    process.env.JWT_REFRESH_SECRET_ADMIN = "test-refresh-secret";
+    process.env.AUTH_LOCKOUT_ENABLED = "true";
+    process.env.REFRESH_REUSE_DETECTION_ENABLED = "true";
   });
 
-  it("throws for unknown user", async () => {
+  it("sanitizes login error for unknown user", async () => {
     usersService.findByEmail.mockResolvedValue(null);
+    usersService.getRecentLoginFailures.mockResolvedValue([]);
+    usersService.createLoginAttempt.mockResolvedValue({});
+
     await expect(service.login("x@y.com", "pwd")).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.login("x@y.com", "pwd")).rejects.toThrow("Authentication failed");
+    expect(usersService.createLoginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: "x@y.com",
+        result: "FAILURE"
+      })
+    );
   });
 
-  it("rotates refresh token when active refresh request is valid", async () => {
+  it("blocks login when lockout is active", async () => {
+    usersService.findByEmail.mockResolvedValue({
+      id: "u1",
+      email: "admin@example.com",
+      passwordHash: "irrelevant",
+      isActive: true,
+      role: { name: "admin" }
+    });
+    usersService.getRecentLoginFailures.mockResolvedValue([
+      {
+        lockedUntil: new Date(Date.now() + 60_000)
+      }
+    ]);
+    usersService.createLoginAttempt.mockResolvedValue({});
+
+    await expect(service.login("admin@example.com", "pwd")).rejects.toThrow("Authentication failed");
+    expect(usersService.createLoginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorType: AuthActorType.ADMIN,
+        result: "LOCKED"
+      })
+    );
+  });
+
+  it("rotates refresh token when request is valid", async () => {
     jwtService.verifyAsync
-      .mockResolvedValueOnce({ sub: "u1", role: "admin", type: "refresh" })
+      .mockResolvedValueOnce({ sub: "u1", role: "admin", type: "refresh", jti: "jti-old", sid: "s1", fid: "f1", at: "ADMIN" })
       .mockResolvedValueOnce({ sub: "u1", role: "admin", type: "refresh", exp: Math.floor(Date.now() / 1000) + 3600 });
-    jwtService.signAsync.mockResolvedValueOnce("new-access-token").mockResolvedValueOnce("new-refresh-token");
-    usersService.findRefreshTokenMatch.mockResolvedValue({ state: "active", token: { id: "rt1" } });
-    usersService.findById.mockResolvedValue({ id: "u1", email: "admin@example.com", role: { name: "admin" } });
-    usersService.storeRefreshToken.mockResolvedValue({});
-    usersService.revokeRefreshTokenById.mockResolvedValue({ count: 1 });
+    jwtService.signAsync.mockResolvedValueOnce("new-refresh-token").mockResolvedValueOnce("new-access-token");
 
-    const result = await service.refresh("old-refresh-token");
+    usersService.findRefreshTokenByJti.mockResolvedValue({
+      id: "rt1",
+      userId: "u1",
+      tokenJti: "jti-old",
+      sessionId: "s1",
+      familyId: "f1",
+      actorType: "ADMIN",
+      revokedAt: null,
+      usedAt: null,
+      revokedReason: null,
+      replacedByTokenId: null,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    usersService.findById.mockResolvedValue({
+      id: "u1",
+      email: "admin@example.com",
+      role: { name: "admin" },
+      isActive: true
+    });
+    usersService.touchAuthSession.mockResolvedValue({ count: 1 });
+    usersService.markAdminAccessSessionSeen.mockResolvedValue({ count: 1 });
+    usersService.touchRefreshTokenFamily.mockResolvedValue({ count: 1 });
+    usersService.storeRefreshToken.mockResolvedValue({ id: "rt2" });
+    usersService.createRefreshTokenEvent.mockResolvedValue({});
+    usersService.markRefreshTokenRotated.mockResolvedValue({});
 
-    expect(result.accessToken).toBe("new-access-token");
-    expect(result.refreshToken).toBe("new-refresh-token");
-    expect(usersService.revokeRefreshTokenById).toHaveBeenCalledWith("rt1");
-    expect(usersService.storeRefreshToken).toHaveBeenCalledTimes(1);
+    const result = await service.refresh("old-refresh-token", {
+      actorTypeHint: AuthActorType.ADMIN,
+      ipAddress: "127.0.0.1",
+      userAgent: "jest"
+    });
+
+    expect(result).toEqual({
+      accessToken: "new-access-token",
+      refreshToken: "new-refresh-token"
+    });
+    expect(usersService.markRefreshTokenRotated).toHaveBeenCalledWith("rt1", "rt2", expect.any(Object));
   });
 
-  it("revokes all sessions when revoked refresh token is reused", async () => {
-    jwtService.verifyAsync.mockResolvedValue({ sub: "u1", role: "admin", type: "refresh" });
-    usersService.findRefreshTokenMatch.mockResolvedValue({ state: "revoked", token: { id: "rt1" } });
-    usersService.revokeAllActiveRefreshTokens.mockResolvedValue({ count: 2 });
+  it("detects reused refresh token and revokes family/session", async () => {
+    jwtService.verifyAsync.mockResolvedValue({
+      sub: "u1",
+      role: "admin",
+      type: "refresh",
+      jti: "jti-old",
+      sid: "s1",
+      fid: "f1",
+      at: "ADMIN"
+    });
+    usersService.findRefreshTokenByJti.mockResolvedValue({
+      id: "rt1",
+      userId: "u1",
+      tokenJti: "jti-old",
+      sessionId: "s1",
+      familyId: "f1",
+      actorType: "ADMIN",
+      revokedAt: new Date(),
+      usedAt: null,
+      revokedReason: "manual",
+      replacedByTokenId: null,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    usersService.revokeRefreshTokenFamily.mockResolvedValue({ count: 3 });
+    usersService.revokeAuthSession.mockResolvedValue({ count: 2 });
+    usersService.createRefreshTokenEvent.mockResolvedValue({});
+    usersService.createAuthRiskEvent.mockResolvedValue({});
 
-    await expect(service.refresh("reused-token")).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(usersService.revokeAllActiveRefreshTokens).toHaveBeenCalledWith("u1");
+    await expect(service.refresh("reused-token")).rejects.toThrow("Authentication failed");
+    expect(usersService.revokeRefreshTokenFamily).toHaveBeenCalledWith("f1", "reuse_detected", expect.any(Object));
+    expect(usersService.revokeAuthSession).toHaveBeenCalledWith("s1", "reuse_detected", expect.any(Object));
+  });
+
+  it("supports global logout by actor scope", async () => {
+    jwtService.verifyAsync.mockResolvedValue({
+      sub: "u1",
+      role: "admin",
+      type: "refresh",
+      at: "ADMIN"
+    });
+    usersService.revokeAllAuthSessions.mockResolvedValue({ count: 4 });
+    usersService.createAuthRiskEvent.mockResolvedValue({});
+
+    const result = await service.logout("refresh-token", true);
+
+    expect(result).toEqual({ revoked: 4 });
+    expect(usersService.revokeAllAuthSessions).toHaveBeenCalledWith("u1", AuthActorType.ADMIN, "global_logout");
+  });
+
+  it("verifies admin step-up challenge", async () => {
+    const passwordHash = await bcrypt.hash("pass123", 10);
+    const codeHash = await bcrypt.hash("123456", 10);
+
+    usersService.findAdminStepUpChallenge.mockResolvedValue({
+      id: "ch1",
+      userId: "u1",
+      sessionId: "s1",
+      status: "PENDING",
+      challengeHash: codeHash,
+      expiresAt: new Date(Date.now() + 60_000),
+      failedAttempts: 0,
+      maxAttempts: 3
+    });
+    usersService.findById.mockResolvedValue({
+      id: "u1",
+      email: "admin@example.com",
+      passwordHash,
+      role: { name: "admin" },
+      isActive: true
+    });
+    usersService.updateAdminStepUpChallenge.mockResolvedValue({});
+    usersService.createAuthRiskEvent.mockResolvedValue({});
+    prismaService.adminAccessSession.updateMany.mockResolvedValue({ count: 1 });
+
+    const result = await service.verifyAdminStepUpChallenge("u1", {
+      challengeId: "ch1",
+      challengeCode: "123456",
+      password: "pass123"
+    });
+
+    expect(result.verified).toBe(true);
+    expect(usersService.updateAdminStepUpChallenge).toHaveBeenCalledWith(
+      "ch1",
+      expect.objectContaining({ status: "VERIFIED", verifiedAt: expect.any(Date) })
+    );
   });
 });
-

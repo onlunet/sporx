@@ -1,4 +1,5 @@
-﻿import { Injectable } from "@nestjs/common";
+import { AuthActorType } from "@prisma/client";
+import { Injectable } from "@nestjs/common";
 import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
 
@@ -17,11 +18,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; role: string; email: string }) {
+  async validate(payload: {
+    sub: string;
+    role: string;
+    email: string;
+    sid?: string;
+    at?: AuthActorType;
+  }) {
     return {
       id: payload.sub,
       role: payload.role,
-      email: payload.email
+      email: payload.email,
+      sessionId: payload.sid,
+      actorType: payload.at === AuthActorType.ADMIN ? AuthActorType.ADMIN : AuthActorType.PUBLIC
     };
   }
 }

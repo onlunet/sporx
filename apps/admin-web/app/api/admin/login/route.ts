@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   const response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, actorType: "ADMIN" }),
     cache: "no-store"
   });
 

@@ -48,7 +48,7 @@ export async function refreshAdminTokens(refreshToken?: string) {
     headers: {
       "content-type": "application/json"
     },
-    body: JSON.stringify({ refreshToken }),
+    body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
     cache: "no-store"
   });
 
