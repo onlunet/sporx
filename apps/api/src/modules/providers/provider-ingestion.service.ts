@@ -2697,6 +2697,9 @@ export class ProviderIngestionService {
         updatedByProcess: "provider_sync",
         mappingConfidence: 0.95,
         dataQualityScore: 0.9
+      },
+      select: {
+        id: true
       }
     });
 
