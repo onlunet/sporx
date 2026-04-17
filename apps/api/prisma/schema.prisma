@@ -267,6 +267,34 @@ enum AdminStepUpStatus {
   EXPIRED
 }
 
+enum AccessActorType {
+  USER
+  ADMIN
+  SERVICE
+  SYSTEM
+}
+
+enum PermissionEffect {
+  ALLOW
+  DENY
+}
+
+enum PrivilegedActionSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PrivilegedActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+  EXPIRED
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -282,6 +310,16 @@ model User {
   adminAccessSessions AdminAccessSession[]
   adminStepUpChallenges AdminStepUpChallenge[]
   refreshTokenEvents RefreshTokenEvent[]
+  accessPolicyVersionsCreated AccessPolicyVersion[] @relation("AccessPolicyVersionCreatedBy")
+  permissionGrantsGranted PermissionGrant[] @relation("PermissionGrantGrantedBy")
+  permissionGrantsRevoked PermissionGrant[] @relation("PermissionGrantRevokedBy")
+  roleAssignmentsUser RoleAssignment[] @relation("RoleAssignmentUser")
+  roleAssignmentsGranted RoleAssignment[] @relation("RoleAssignmentGrantedBy")
+  roleAssignmentsRevoked RoleAssignment[] @relation("RoleAssignmentRevokedBy")
+  privilegedActionRequests PrivilegedActionRequest[] @relation("PrivilegedActionRequestActor")
+  privilegedActionApprovals PrivilegedActionApproval[] @relation("PrivilegedActionApprovalApprover")
+  environmentPolicyOverridesCreated EnvironmentPolicyOverride[] @relation("EnvironmentPolicyOverrideCreatedBy")
+  ipAllowlistsCreated IpAllowlist[] @relation("IpAllowlistCreatedBy")
   auditLogs     AuditLog[]
   apiLogs       ApiLog[]
   manualPublishOverrides ManualPublishOverride[] @relation("ManualPublishOverrideActor")
@@ -471,6 +509,230 @@ model AdminStepUpChallenge {
   @@index([userId, status, createdAt])
   @@index([sessionId, status, createdAt])
   @@map("admin_step_up_challenges")
+}
+
+model AccessPolicy {
+  id               String                @id @default(uuid())
+  key              String                @unique
+  name             String
+  description      String?
+  isActive         Boolean               @default(true) @map("is_active")
+  currentVersionId String?               @map("current_version_id")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  versions         AccessPolicyVersion[]
+  currentVersion   AccessPolicyVersion?  @relation("AccessPolicyCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@map("access_policies")
+}
+
+model AccessPolicyVersion {
+  id                  String         @id @default(uuid())
+  policyId            String         @map("policy_id")
+  version             Int
+  label               String
+  matrixJson          Json           @map("matrix_jsonb")
+  conditionsJson      Json?          @map("conditions_jsonb")
+  isActive            Boolean        @default(true) @map("is_active")
+  createdByUserId     String?        @map("created_by_user_id")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  policy              AccessPolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  createdByUser       User?          @relation("AccessPolicyVersionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  permissionGrants    PermissionGrant[]
+  privilegedRequests  PrivilegedActionRequest[]
+  environmentOverrides EnvironmentPolicyOverride[]
+  currentForPolicies  AccessPolicy[] @relation("AccessPolicyCurrentVersion")
+
+  @@unique([policyId, version])
+  @@index([policyId, isActive, createdAt])
+  @@map("access_policy_versions")
+}
+
+model PermissionGrant {
+  id                   String              @id @default(uuid())
+  actorType            AccessActorType     @map("actor_type")
+  actorId              String?             @map("actor_id")
+  serviceIdentityId    String?             @map("service_identity_id")
+  role                 String?
+  permission           String
+  resourceType         String              @map("resource_type")
+  action               String
+  effect               PermissionEffect    @default(ALLOW)
+  policyVersionId      String?             @map("policy_version_id")
+  scopeGlobal          Boolean             @default(false) @map("scope_global")
+  scopeSport           String?             @map("scope_sport")
+  scopeLeagueId        String?             @map("scope_league_id")
+  scopeMarket          String?             @map("scope_market")
+  scopeHorizon         String?             @map("scope_horizon")
+  scopeEnvironment     String?             @map("scope_environment")
+  ipAllowlistId        String?             @map("ip_allowlist_id")
+  expiresAt            DateTime?           @map("expires_at")
+  reason               String?
+  grantedByUserId      String?             @map("granted_by_user_id")
+  revokedByUserId      String?             @map("revoked_by_user_id")
+  revokedAt            DateTime?           @map("revoked_at")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+  serviceIdentity      ServiceIdentity?    @relation(fields: [serviceIdentityId], references: [id], onDelete: SetNull)
+  policyVersion        AccessPolicyVersion? @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+  ipAllowlist          IpAllowlist?        @relation(fields: [ipAllowlistId], references: [id], onDelete: SetNull)
+  grantedByUser        User?               @relation("PermissionGrantGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  revokedByUser        User?               @relation("PermissionGrantRevokedBy", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorType, actorId, serviceIdentityId, role])
+  @@index([permission, resourceType, action, scopeEnvironment])
+  @@index([scopeSport, scopeLeagueId, scopeMarket, scopeHorizon])
+  @@map("permission_grants")
+}
+
+model RoleAssignment {
+  id                String          @id @default(uuid())
+  userId            String          @map("user_id")
+  role              String
+  scopeGlobal       Boolean         @default(false) @map("scope_global")
+  scopeSport        String?         @map("scope_sport")
+  scopeLeagueId     String?         @map("scope_league_id")
+  scopeMarket       String?         @map("scope_market")
+  scopeHorizon      String?         @map("scope_horizon")
+  scopeEnvironment  String?         @map("scope_environment")
+  reason            String?
+  grantedByUserId   String?         @map("granted_by_user_id")
+  revokedByUserId   String?         @map("revoked_by_user_id")
+  revokedAt         DateTime?       @map("revoked_at")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  user              User            @relation("RoleAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser     User?           @relation("RoleAssignmentGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  revokedByUser     User?           @relation("RoleAssignmentRevokedBy", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, role, revokedAt])
+  @@index([scopeSport, scopeLeagueId, scopeMarket, scopeHorizon, scopeEnvironment])
+  @@map("role_assignments")
+}
+
+model ServiceIdentity {
+  id                  String                 @id @default(uuid())
+  key                 String                 @unique
+  name                String
+  description         String?
+  secretHash          String                 @map("secret_hash")
+  isActive            Boolean                @default(true) @map("is_active")
+  environment         String?
+  lastUsedAt          DateTime?              @map("last_used_at")
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @updatedAt @map("updated_at")
+  scopes              ServiceIdentityScope[]
+  permissionGrants    PermissionGrant[]
+  privilegedRequests  PrivilegedActionRequest[]
+  ipAllowlists        IpAllowlist[]
+
+  @@map("service_identities")
+}
+
+model ServiceIdentityScope {
+  id                String          @id @default(uuid())
+  serviceIdentityId String          @map("service_identity_id")
+  permission        String
+  resourceType      String          @map("resource_type")
+  action            String
+  effect            PermissionEffect @default(ALLOW)
+  scopeGlobal       Boolean         @default(false) @map("scope_global")
+  scopeSport        String?         @map("scope_sport")
+  scopeLeagueId     String?         @map("scope_league_id")
+  scopeMarket       String?         @map("scope_market")
+  scopeHorizon      String?         @map("scope_horizon")
+  scopeEnvironment  String?         @map("scope_environment")
+  isActive          Boolean         @default(true) @map("is_active")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  serviceIdentity   ServiceIdentity @relation(fields: [serviceIdentityId], references: [id], onDelete: Cascade)
+
+  @@index([serviceIdentityId, permission, resourceType, action, isActive])
+  @@map("service_identity_scopes")
+}
+
+model PrivilegedActionRequest {
+  id                   String                  @id @default(uuid())
+  idempotencyKey       String                  @unique @map("idempotency_key")
+  actorType            AccessActorType         @map("actor_type")
+  actorId              String?                 @map("actor_id")
+  serviceIdentityId    String?                 @map("service_identity_id")
+  action               String
+  resourceType         String                  @map("resource_type")
+  resourceId           String?                 @map("resource_id")
+  scopeJson            Json?                   @map("scope_jsonb")
+  environment          String?
+  severity             PrivilegedActionSeverity
+  status               PrivilegedActionStatus  @default(PENDING)
+  reason               String
+  policyVersionId      String?                 @map("policy_version_id")
+  requiresStepUp       Boolean                 @default(false) @map("requires_step_up")
+  requiresApproval     Boolean                 @default(false) @map("requires_approval")
+  approvedAt           DateTime?               @map("approved_at")
+  executedAt           DateTime?               @map("executed_at")
+  expiresAt            DateTime?               @map("expires_at")
+  metadata             Json?                   @map("metadata_jsonb")
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
+  actorUser            User?                   @relation("PrivilegedActionRequestActor", fields: [actorId], references: [id], onDelete: SetNull)
+  serviceIdentity      ServiceIdentity?        @relation(fields: [serviceIdentityId], references: [id], onDelete: SetNull)
+  policyVersion        AccessPolicyVersion?    @relation(fields: [policyVersionId], references: [id], onDelete: SetNull)
+  approvals            PrivilegedActionApproval[]
+
+  @@index([status, createdAt])
+  @@index([action, resourceType, environment, severity])
+  @@map("privileged_action_requests")
+}
+
+model PrivilegedActionApproval {
+  id             String                 @id @default(uuid())
+  requestId      String                 @map("request_id")
+  approverUserId String                 @map("approver_user_id")
+  status         PrivilegedActionStatus
+  reason         String?
+  createdAt      DateTime               @default(now()) @map("created_at")
+  request        PrivilegedActionRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approverUser   User                   @relation("PrivilegedActionApprovalApprover", fields: [approverUserId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@index([approverUserId, createdAt])
+  @@map("privileged_action_approvals")
+}
+
+model EnvironmentPolicyOverride {
+  id               String               @id @default(uuid())
+  policyVersionId  String               @map("policy_version_id")
+  environment      String
+  overrideJson     Json                 @map("override_jsonb")
+  isActive         Boolean              @default(true) @map("is_active")
+  createdByUserId  String?              @map("created_by_user_id")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  policyVersion    AccessPolicyVersion  @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+  createdByUser    User?                @relation("EnvironmentPolicyOverrideCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([policyVersionId, environment, isActive])
+  @@map("environment_policy_overrides")
+}
+
+model IpAllowlist {
+  id                String            @id @default(uuid())
+  actorType         AccessActorType   @map("actor_type")
+  userId            String?           @map("user_id")
+  serviceIdentityId String?           @map("service_identity_id")
+  cidr              String
+  environment       String?
+  isActive          Boolean           @default(true) @map("is_active")
+  reason            String?
+  createdByUserId   String?           @map("created_by_user_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  createdByUser     User?             @relation("IpAllowlistCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  serviceIdentity   ServiceIdentity?  @relation(fields: [serviceIdentityId], references: [id], onDelete: SetNull)
+  permissionGrants  PermissionGrant[]
+
+  @@index([actorType, userId, serviceIdentityId, environment, isActive])
+  @@map("ip_allowlists")
 }
 
 model Role {

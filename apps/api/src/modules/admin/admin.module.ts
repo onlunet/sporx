@@ -14,6 +14,7 @@ import { AdminTeamsController } from "./admin-teams.controller";
 import { AdminModelLifecycleController } from "./admin-model-lifecycle.controller";
 import { AdminBankrollController } from "./admin-bankroll.controller";
 import { AdminResearchLabController } from "./admin-research-lab.controller";
+import { AdminAccessGovernanceController } from "./admin-access-governance.controller";
 import { IngestionModule } from "../ingestion/ingestion.module";
 import { HistoricalImportModule } from "../historical-import/historical-import.module";
 import { ProvidersModule } from "../providers/providers.module";
@@ -49,7 +50,8 @@ import { ResearchLabModule } from "../research-lab/research-lab.module";
     AdminTeamsController,
     AdminModelLifecycleController,
     AdminBankrollController,
-    AdminResearchLabController
+    AdminResearchLabController,
+    AdminAccessGovernanceController
   ]
 })
 export class AdminModule {}
