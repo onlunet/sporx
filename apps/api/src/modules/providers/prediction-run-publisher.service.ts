@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { MatchStatus, Prisma } from "@prisma/client";
+import { MatchStatus, Prisma, PublishDecisionStatus } from "@prisma/client";
 import { CalibrationService } from "../calibration/calibration.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { FeatureSnapshotService } from "../predictions/feature-snapshot.service";
@@ -13,6 +13,7 @@ import { MetaModelRefinementService } from "../predictions/meta-model-refinement
 import { CandidateBuilderService } from "../predictions/candidate-builder.service";
 import { PublishDecisionService } from "../predictions/publish-decision.service";
 import { SelectionEngineConfigService } from "../predictions/selection-engine-config.service";
+import { BankrollOrchestrationService } from "../bankroll/bankroll-orchestration.service";
 
 export type PublishPredictionRunInput = {
   matchId: string;
@@ -53,7 +54,8 @@ export class PredictionRunPublisherService {
     private readonly metaModelRefinementService: MetaModelRefinementService,
     private readonly candidateBuilderService: CandidateBuilderService,
     private readonly publishDecisionService: PublishDecisionService,
-    private readonly selectionEngineConfigService: SelectionEngineConfigService
+    private readonly selectionEngineConfigService: SelectionEngineConfigService,
+    private readonly bankrollOrchestrationService: BankrollOrchestrationService
   ) {}
 
   private normalizeProbability(value: number) {
@@ -700,6 +702,9 @@ export class PredictionRunPublisherService {
               runId: run.id,
               metaModelRunId,
               publishedPredictionId,
+              fairOdds,
+              marketProbability,
+              edge,
               decisionStatus: selectionDecision.status,
               publishDecisionId: selectionDecision.decision.id,
               shouldPublishPublic: selectionDecision.shouldPublishPublic,
@@ -716,6 +721,47 @@ export class PredictionRunPublisherService {
           ),
         5
       );
+
+      if (
+        result.shouldPublishPublic &&
+        ((result.decisionStatus as PublishDecisionStatus) === PublishDecisionStatus.APPROVED ||
+          (result.decisionStatus as PublishDecisionStatus) === PublishDecisionStatus.MANUALLY_FORCED) &&
+        result.publishedPredictionId
+      ) {
+        try {
+          await this.bankrollOrchestrationService.processPublishedSelection({
+            sportCode: "football",
+            matchId: input.matchId,
+            leagueId,
+            market: input.market,
+            line,
+            horizon,
+            selection: calibrationSelection ?? "default",
+            predictionRunId: result.runId,
+            modelVersionId: input.modelVersionId ?? null,
+            calibrationVersionId: null,
+            publishedPredictionId: result.publishedPredictionId,
+            publishDecisionId: result.publishDecisionId ?? "",
+            publishDecisionStatus: (result.decisionStatus as PublishDecisionStatus) ?? PublishDecisionStatus.ABSTAINED,
+            calibratedProbability: probability,
+            fairOdds: result.fairOdds ?? null,
+            offeredOdds: result.marketProbability ?? null,
+            edge: result.edge ?? null,
+            confidence,
+            publishScore: refinement.publishScore,
+            freshnessScore,
+            coverageFlags,
+            volatilityScore,
+            providerDisagreement
+          });
+        } catch (error) {
+          this.logger.warn(
+            `bankroll pipeline skipped for ${input.matchId}/${input.market}/${horizon}: ${
+              error instanceof Error ? error.message : "unknown"
+            }`
+          );
+        }
+      }
 
       await this.shadowEvaluationService.recordComparison({
         matchId: input.matchId,

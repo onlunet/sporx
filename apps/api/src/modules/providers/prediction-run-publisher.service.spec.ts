@@ -216,6 +216,9 @@ describe("PredictionRunPublisherService", () => {
           policyVersionId: "policy-v1",
           policyVersionLabel: "v1"
         })
+      } as any,
+      {
+        processPublishedSelection: jest.fn().mockResolvedValue({ queued: true })
       } as any
     );
 
@@ -375,6 +378,9 @@ describe("PredictionRunPublisherService", () => {
           policyVersionId: "policy-v1",
           policyVersionLabel: "v1"
         })
+      } as any,
+      {
+        processPublishedSelection: jest.fn().mockResolvedValue({ queued: true })
       } as any
     );
 

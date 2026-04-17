@@ -1,4 +1,4 @@
-﻿import { Module } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { BullModule } from "@nestjs/bullmq";
 import { AuthModule } from "./auth/auth.module";
@@ -30,6 +30,7 @@ import { LogsModule } from "./modules/logs/logs.module";
 import { SystemModule } from "./modules/system/system.module";
 import { HealthModule } from "./modules/health/health.module";
 import { OddsModule } from "./modules/odds/odds.module";
+import { BankrollModule } from "./modules/bankroll/bankroll.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { CacheModule } from "./cache/cache.module";
 
@@ -71,7 +72,9 @@ import { CacheModule } from "./cache/cache.module";
     LogsModule,
     SystemModule,
     HealthModule,
-    OddsModule
+    OddsModule,
+    BankrollModule
   ]
 })
 export class AppModule {}
+

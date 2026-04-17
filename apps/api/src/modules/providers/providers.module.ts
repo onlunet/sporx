@@ -1,4 +1,4 @@
-﻿import { Module } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { ProvidersService } from "./providers.service";
 import { FootballDataConnector } from "./football-data.connector";
 import { TheSportsDbConnector } from "./the-sports-db.connector";
@@ -16,9 +16,10 @@ import { OddsIngestionService } from "./odds-ingestion.service";
 import { OddsModule } from "../odds/odds.module";
 import { PredictionRunPublisherService } from "./prediction-run-publisher.service";
 import { CalibrationModule } from "../calibration/calibration.module";
+import { BankrollModule } from "../bankroll/bankroll.module";
 
 @Module({
-  imports: [PredictionsModule, OddsModule, CalibrationModule],
+  imports: [PredictionsModule, OddsModule, CalibrationModule, BankrollModule],
   providers: [
     ProvidersService,
     FootballDataConnector,
@@ -53,3 +54,4 @@ import { CalibrationModule } from "../calibration/calibration.module";
   ]
 })
 export class ProvidersModule {}
+

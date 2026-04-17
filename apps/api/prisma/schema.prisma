@@ -89,6 +89,89 @@ enum LifecycleRunStatus {
   cancelled
 }
 
+enum BankrollAccountMode {
+  PAPER
+  SANDBOX
+  LIVE_DISABLED
+}
+
+enum BankrollProfileKey {
+  FLAT_UNIT
+  FRACTIONAL_KELLY
+  CAPPED_FRACTIONAL_KELLY
+  RISK_BUDGETED
+}
+
+enum StakeDecisionStatus {
+  CREATED
+  NO_STAKE
+  SIZED
+  CLIPPED
+  BLOCKED
+  SKIPPED
+}
+
+enum TicketDecisionStatus {
+  CREATED
+  CLIPPED
+  BLOCKED
+  SKIPPED
+  EXECUTED_PAPER
+}
+
+enum PaperOrderStatus {
+  OPEN
+  WON
+  LOST
+  VOID
+  PUSH
+  HALF_WON
+  HALF_LOST
+  CANCELLED
+}
+
+enum RoiGovernanceStatus {
+  HEALTHY
+  WATCH
+  THROTTLED
+  BLOCKED
+  MANUAL_OVERRIDE
+}
+
+enum ExposureLimitBehavior {
+  ALLOW
+  CLIP
+  BLOCK
+}
+
+enum ExposureScopeType {
+  MATCH
+  LEAGUE
+  SPORT
+  MARKET_FAMILY
+  HORIZON
+  CALENDAR_DAY
+  ROLLING_7D
+  OPEN_TOTAL
+  CONCURRENT_OPEN
+}
+
+enum BankrollLedgerEntryType {
+  ORDER_OPEN
+  ORDER_SETTLE
+  MANUAL_ADJUSTMENT
+  RESERVE_RELEASE
+  RECOMPUTE_CORRECTION
+}
+
+enum SimulationRunStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -304,6 +387,8 @@ model Match {
   policyEvaluationSnapshots PolicyEvaluationSnapshot[]
   shadowComparisons       ShadowPredictionComparison[]
   leakageChecks           LeakageCheckResult[]
+  stakeCandidates         StakeCandidate[]
+  ticketLegs              TicketLeg[]
   teamComparisonCache     TeamComparisonCache[]
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -1744,6 +1829,498 @@ model ModelHealthSnapshot {
   @@index([sportCode, market, lineKey, horizon, scopeLeagueKey, createdAt])
   @@index([modelVersionId, createdAt])
   @@map("model_health_snapshots")
+}
+
+model BankrollAccount {
+  id                  String                    @id @default(uuid())
+  name                String
+  mode                BankrollAccountMode      @default(PAPER)
+  baseCurrency        String                    @default("USD") @map("base_currency")
+  profileDefault      BankrollProfileKey        @default(CAPPED_FRACTIONAL_KELLY) @map("profile_default")
+  status              RoiGovernanceStatus       @default(HEALTHY)
+  startingBalance     Float                     @default(1000) @map("starting_balance")
+  availableBalance    Float                     @default(1000) @map("available_balance")
+  reservedBalance     Float                     @default(0) @map("reserved_balance")
+  realizedPnl         Float                     @default(0) @map("realized_pnl")
+  unrealizedExposure  Float                     @default(0) @map("unrealized_exposure")
+  metadataJson        Json?                     @map("metadata_jsonb")
+  createdAt           DateTime                  @default(now()) @map("created_at")
+  updatedAt           DateTime                  @updatedAt @map("updated_at")
+  snapshots           BankrollAccountSnapshot[]
+  profileVersions     BankrollProfileVersion[]
+  stakeCandidates     StakeCandidate[]
+  stakeRecommendations StakeRecommendation[]
+  exposureLimits      ExposureLimit[]
+  exposureSnapshots   ExposureSnapshot[]
+  correlationGroups   CorrelationGroup[]
+  ticketCandidates    TicketCandidate[]
+  ticketDecisions     TicketDecision[]
+  paperOrders         PaperOrder[]
+  settlementRecords   SettlementRecord[]
+  ledgerEntries       BankrollLedger[]
+  equityCurve         EquityCurvePoint[]
+  simulationRuns      SimulationRun[]
+  roiGovernanceRules  RoiGovernanceRule[]
+  drawdownEvents      DrawdownEvent[]
+  riskLimitBreaches   RiskLimitBreach[]
+  auditLogs           BankrollAuditLog[]
+
+  @@index([mode, status, createdAt])
+  @@map("bankroll_accounts")
+}
+
+model BankrollAccountSnapshot {
+  id                 String          @id @default(uuid())
+  bankrollAccountId  String          @map("bankroll_account_id")
+  availableBalance   Float           @map("available_balance")
+  reservedBalance    Float           @map("reserved_balance")
+  totalEquity        Float           @map("total_equity")
+  realizedPnl        Float           @map("realized_pnl")
+  unrealizedExposure Float           @map("unrealized_exposure")
+  drawdownPct        Float?          @map("drawdown_pct")
+  source             String          @default("accounting")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, createdAt])
+  @@map("bankroll_account_snapshots")
+}
+
+model BankrollProfileVersion {
+  id                 String             @id @default(uuid())
+  bankrollAccountId  String             @map("bankroll_account_id")
+  profileKey         BankrollProfileKey @map("profile_key")
+  version            Int
+  configJson         Json               @map("config_jsonb")
+  isActive           Boolean            @default(true) @map("is_active")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount    @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([bankrollAccountId, profileKey, version])
+  @@index([bankrollAccountId, profileKey, isActive])
+  @@map("bankroll_profile_versions")
+}
+
+model StakingPolicy {
+  id               String                 @id @default(uuid())
+  key              String                 @unique
+  name             String
+  description      String?
+  isActive         Boolean                @default(true) @map("is_active")
+  currentVersionId String?                @map("current_version_id")
+  currentVersion   StakingPolicyVersion?  @relation("StakingPolicyCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         StakingPolicyVersion[] @relation("StakingPolicyVersions")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  @@map("staking_policies")
+}
+
+model StakingPolicyVersion {
+  id                 String               @id @default(uuid())
+  stakingPolicyId    String               @map("staking_policy_id")
+  version            Int
+  label              String
+  configJson         Json                 @map("config_jsonb")
+  isActive           Boolean              @default(true) @map("is_active")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  stakingPolicy      StakingPolicy        @relation("StakingPolicyVersions", fields: [stakingPolicyId], references: [id], onDelete: Cascade)
+  currentForPolicies StakingPolicy[]      @relation("StakingPolicyCurrentVersion")
+  stakeCandidates    StakeCandidate[]
+  stakeRecommendations StakeRecommendation[]
+  ticketCandidates   TicketCandidate[]
+  ticketDecisions    TicketDecision[]
+  simulationRuns     SimulationRun[]
+
+  @@unique([stakingPolicyId, version])
+  @@index([stakingPolicyId, isActive, version])
+  @@map("staking_policy_versions")
+}
+
+model StakeCandidate {
+  id                    String               @id @default(uuid())
+  sportCode             String               @map("sport")
+  matchId               String               @map("match_id")
+  market                String
+  line                  Float?
+  lineKey               String               @map("line_key")
+  horizon               String
+  selection             String
+  publishedPredictionId String               @map("published_prediction_id")
+  predictionRunId       String?              @map("prediction_run_id")
+  modelVersionId        String?              @map("model_version_id")
+  calibrationVersionId  String?              @map("calibration_version_id")
+  bankrollAccountId     String               @map("bankroll_account_id")
+  profileKey            BankrollProfileKey   @map("profile_key")
+  stakingPolicyVersionId String?             @map("staking_policy_version_id")
+  calibratedProbability Float                @map("calibrated_probability")
+  fairOdds              Float?               @map("fair_odds")
+  offeredOdds           Float?               @map("offered_odds")
+  edge                  Float?
+  confidence            Float
+  publishScore          Float                @map("publish_score")
+  freshnessScore        Float?               @map("freshness_score")
+  coverageFlagsJson     Json?                @map("coverage_flags_jsonb")
+  volatilityScore       Float?               @map("volatility_score")
+  providerDisagreement  Float?               @map("provider_disagreement")
+  recommendedFraction   Float?               @map("recommended_fraction")
+  recommendedStake      Float?               @map("recommended_stake")
+  clippedStake          Float?               @map("clipped_stake")
+  decisionStatus        StakeDecisionStatus  @default(CREATED) @map("decision_status")
+  reasonsJson           Json?                @map("reasons_jsonb")
+  dedupKey              String               @unique @map("dedup_key")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  match                 Match                @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  bankrollAccount       BankrollAccount      @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  stakingPolicyVersion  StakingPolicyVersion? @relation(fields: [stakingPolicyVersionId], references: [id], onDelete: SetNull)
+  recommendation        StakeRecommendation?
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([sportCode, market, lineKey, horizon, createdAt])
+  @@index([decisionStatus, createdAt])
+  @@map("stake_candidates")
+}
+
+model StakeRecommendation {
+  id                    String               @id @default(uuid())
+  stakeCandidateId      String               @unique @map("stake_candidate_id")
+  bankrollAccountId     String               @map("bankroll_account_id")
+  profileKey            BankrollProfileKey   @map("profile_key")
+  stakingPolicyVersionId String?             @map("staking_policy_version_id")
+  recommendedFraction   Float?               @map("recommended_fraction")
+  recommendedStake      Float?               @map("recommended_stake")
+  clippedStake          Float?               @map("clipped_stake")
+  decisionStatus        StakeDecisionStatus  @default(CREATED) @map("decision_status")
+  reasonsJson           Json?                @map("reasons_jsonb")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  stakeCandidate        StakeCandidate       @relation(fields: [stakeCandidateId], references: [id], onDelete: Cascade)
+  bankrollAccount       BankrollAccount      @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  stakingPolicyVersion  StakingPolicyVersion? @relation(fields: [stakingPolicyVersionId], references: [id], onDelete: SetNull)
+  ticketCandidates      TicketCandidate[]
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([decisionStatus, createdAt])
+  @@map("stake_recommendations")
+}
+
+model ExposureLimit {
+  id                 String               @id @default(uuid())
+  bankrollAccountId  String               @map("bankroll_account_id")
+  scopeType          ExposureScopeType    @map("scope_type")
+  scopeKey           String               @map("scope_key")
+  behavior           ExposureLimitBehavior @default(CLIP)
+  maxFraction        Float?               @map("max_fraction")
+  maxAmount          Float?               @map("max_amount")
+  configJson         Json?                @map("config_jsonb")
+  isActive           Boolean              @default(true) @map("is_active")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  bankrollAccount    BankrollAccount      @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, scopeType, scopeKey, isActive])
+  @@map("exposure_limits")
+}
+
+model ExposureSnapshot {
+  id                 String             @id @default(uuid())
+  bankrollAccountId  String             @map("bankroll_account_id")
+  scopeType          ExposureScopeType  @map("scope_type")
+  scopeKey           String             @map("scope_key")
+  openExposure       Float              @map("open_exposure")
+  bankrollValue      Float              @map("bankroll_value")
+  utilization        Float              @map("utilization")
+  detailsJson        Json?              @map("details_jsonb")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount    @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, scopeType, scopeKey, createdAt])
+  @@map("exposure_snapshots")
+}
+
+model CorrelationGroup {
+  id                 String          @id @default(uuid())
+  bankrollAccountId  String          @map("bankroll_account_id")
+  groupKey           String          @map("group_key")
+  marketFamily       String          @map("market_family")
+  correlationScore   Float           @default(0) @map("correlation_score")
+  detailsJson        Json?           @map("details_jsonb")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+  bankrollAccount    BankrollAccount @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([bankrollAccountId, groupKey])
+  @@index([bankrollAccountId, marketFamily, createdAt])
+  @@map("correlation_groups")
+}
+
+model TicketCandidate {
+  id                    String               @id @default(uuid())
+  bankrollAccountId     String               @map("bankroll_account_id")
+  stakeRecommendationId String?              @map("stake_recommendation_id")
+  stakingPolicyVersionId String?             @map("staking_policy_version_id")
+  ticketType            String               @default("SINGLE") @map("ticket_type")
+  totalStake            Float                @default(0) @map("total_stake")
+  effectiveOdds         Float?               @map("effective_odds")
+  decisionStatus        TicketDecisionStatus @default(CREATED) @map("decision_status")
+  reasonsJson           Json?                @map("reasons_jsonb")
+  dedupKey              String               @unique @map("dedup_key")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  bankrollAccount       BankrollAccount      @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  stakeRecommendation   StakeRecommendation? @relation(fields: [stakeRecommendationId], references: [id], onDelete: SetNull)
+  stakingPolicyVersion  StakingPolicyVersion? @relation(fields: [stakingPolicyVersionId], references: [id], onDelete: SetNull)
+  ticketDecision        TicketDecision?
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([decisionStatus, createdAt])
+  @@map("ticket_candidates")
+}
+
+model TicketDecision {
+  id                    String               @id @default(uuid())
+  bankrollAccountId     String               @map("bankroll_account_id")
+  ticketCandidateId     String               @unique @map("ticket_candidate_id")
+  stakingPolicyVersionId String?             @map("staking_policy_version_id")
+  profileKey            BankrollProfileKey   @map("profile_key")
+  totalStake            Float                @default(0) @map("total_stake")
+  effectiveOdds         Float?               @map("effective_odds")
+  decisionStatus        TicketDecisionStatus @default(CREATED) @map("decision_status")
+  reasonsJson           Json?                @map("reasons_jsonb")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+  bankrollAccount       BankrollAccount      @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  ticketCandidate       TicketCandidate      @relation(fields: [ticketCandidateId], references: [id], onDelete: Cascade)
+  stakingPolicyVersion  StakingPolicyVersion? @relation(fields: [stakingPolicyVersionId], references: [id], onDelete: SetNull)
+  legs                  TicketLeg[]
+  paperOrder            PaperOrder?
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([decisionStatus, createdAt])
+  @@map("ticket_decisions")
+}
+
+model TicketLeg {
+  id                   String         @id @default(uuid())
+  ticketDecisionId     String         @map("ticket_decision_id")
+  legOrder             Int            @map("leg_order")
+  sportCode            String         @map("sport")
+  matchId              String         @map("match_id")
+  market               String
+  line                 Float?
+  lineKey              String         @map("line_key")
+  horizon              String
+  selection            String
+  publishedPredictionId String        @map("published_prediction_id")
+  calibratedProbability Float         @map("calibrated_probability")
+  fairOdds             Float?         @map("fair_odds")
+  offeredOdds          Float?         @map("offered_odds")
+  edge                 Float?
+  confidence           Float
+  publishScore         Float          @map("publish_score")
+  stakeAmount          Float          @default(0) @map("stake_amount")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  ticketDecision       TicketDecision @relation(fields: [ticketDecisionId], references: [id], onDelete: Cascade)
+  match                Match          @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketDecisionId, legOrder])
+  @@index([matchId, market, lineKey, horizon])
+  @@map("ticket_legs")
+}
+
+model PaperOrder {
+  id                 String           @id @default(uuid())
+  bankrollAccountId  String           @map("bankroll_account_id")
+  ticketDecisionId   String           @unique @map("ticket_decision_id")
+  status             PaperOrderStatus @default(OPEN)
+  stake              Float            @default(0)
+  effectiveOdds      Float?           @map("effective_odds")
+  potentialReturn    Float?           @map("potential_return")
+  settledPayout      Float?           @map("settled_payout")
+  settledPnl         Float?           @map("settled_pnl")
+  dedupKey           String           @unique @map("dedup_key")
+  detailsJson        Json?            @map("details_jsonb")
+  placedAt           DateTime         @default(now()) @map("placed_at")
+  settledAt          DateTime?        @map("settled_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+  bankrollAccount    BankrollAccount  @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  ticketDecision     TicketDecision   @relation(fields: [ticketDecisionId], references: [id], onDelete: Cascade)
+  settlementRecord   SettlementRecord?
+
+  @@index([bankrollAccountId, status, createdAt])
+  @@map("paper_orders")
+}
+
+model SettlementRecord {
+  id                 String           @id @default(uuid())
+  bankrollAccountId  String           @map("bankroll_account_id")
+  paperOrderId       String           @unique @map("paper_order_id")
+  status             PaperOrderStatus @default(OPEN)
+  payout             Float            @default(0)
+  pnl                Float            @default(0)
+  settledAt          DateTime         @default(now()) @map("settled_at")
+  detailsJson        Json?            @map("details_jsonb")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount  @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  paperOrder         PaperOrder       @relation(fields: [paperOrderId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, settledAt])
+  @@index([status, createdAt])
+  @@map("settlement_records")
+}
+
+model BankrollLedger {
+  id                 String                @id @default(uuid())
+  bankrollAccountId  String                @map("bankroll_account_id")
+  entryType          BankrollLedgerEntryType @map("entry_type")
+  amount             Float
+  balanceBefore      Float                 @map("balance_before")
+  balanceAfter       Float                 @map("balance_after")
+  reservedBefore     Float                 @map("reserved_before")
+  reservedAfter      Float                 @map("reserved_after")
+  realizedPnlBefore  Float                 @map("realized_pnl_before")
+  realizedPnlAfter   Float                 @map("realized_pnl_after")
+  referenceType      String                @map("reference_type")
+  referenceId        String                @map("reference_id")
+  dedupKey           String                @unique @map("dedup_key")
+  detailsJson        Json?                 @map("details_jsonb")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount       @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([referenceType, referenceId, createdAt])
+  @@map("bankroll_ledger")
+}
+
+model EquityCurvePoint {
+  id                 String          @id @default(uuid())
+  bankrollAccountId  String          @map("bankroll_account_id")
+  pointAt            DateTime        @default(now()) @map("point_at")
+  availableBalance   Float           @map("available_balance")
+  reservedBalance    Float           @map("reserved_balance")
+  totalEquity        Float           @map("total_equity")
+  realizedPnl        Float           @map("realized_pnl")
+  drawdownPct        Float?          @map("drawdown_pct")
+  source             String          @default("accounting")
+  referenceType      String?         @map("reference_type")
+  referenceId        String?         @map("reference_id")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, pointAt])
+  @@map("equity_curve_points")
+}
+
+model SimulationRun {
+  id                    String             @id @default(uuid())
+  bankrollAccountId     String             @map("bankroll_account_id")
+  stakingPolicyVersionId String?           @map("staking_policy_version_id")
+  profileKey            BankrollProfileKey @map("profile_key")
+  status                SimulationRunStatus @default(queued)
+  simulationName        String             @map("simulation_name")
+  configJson            Json               @map("config_jsonb")
+  metricsJson           Json?              @map("metrics_jsonb")
+  randomSeed            Int?               @map("random_seed")
+  windowStart           DateTime?          @map("window_start")
+  windowEnd             DateTime?          @map("window_end")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  completedAt           DateTime?          @map("completed_at")
+  bankrollAccount       BankrollAccount    @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+  stakingPolicyVersion  StakingPolicyVersion? @relation(fields: [stakingPolicyVersionId], references: [id], onDelete: SetNull)
+  scenarios             SimulationScenario[]
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([status, createdAt])
+  @@map("simulation_runs")
+}
+
+model SimulationScenario {
+  id                 String         @id @default(uuid())
+  simulationRunId    String         @map("simulation_run_id")
+  scenarioName       String         @map("scenario_name")
+  configJson         Json           @map("config_jsonb")
+  metricsJson        Json?          @map("metrics_jsonb")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  simulationRun      SimulationRun  @relation(fields: [simulationRunId], references: [id], onDelete: Cascade)
+
+  @@index([simulationRunId, createdAt])
+  @@map("simulation_scenarios")
+}
+
+model RoiGovernanceRule {
+  id                 String             @id @default(uuid())
+  bankrollAccountId  String             @map("bankroll_account_id")
+  ruleKey            String             @map("rule_key")
+  targetStatus       RoiGovernanceStatus @default(WATCH) @map("target_status")
+  configJson         Json               @map("config_jsonb")
+  isActive           Boolean            @default(true) @map("is_active")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+  bankrollAccount    BankrollAccount    @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([bankrollAccountId, ruleKey])
+  @@index([bankrollAccountId, isActive, createdAt])
+  @@map("roi_governance_rules")
+}
+
+model DrawdownEvent {
+  id                 String           @id @default(uuid())
+  bankrollAccountId  String           @map("bankroll_account_id")
+  status             RoiGovernanceStatus @default(WATCH)
+  peakEquity         Float            @map("peak_equity")
+  troughEquity       Float            @map("trough_equity")
+  drawdownPct        Float            @map("drawdown_pct")
+  reason             String?
+  detailsJson        Json?            @map("details_jsonb")
+  startedAt          DateTime         @default(now()) @map("started_at")
+  resolvedAt         DateTime?        @map("resolved_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount  @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([status, createdAt])
+  @@map("drawdown_events")
+}
+
+model RiskLimitBreach {
+  id                 String           @id @default(uuid())
+  bankrollAccountId  String           @map("bankroll_account_id")
+  severity           DriftSeverity
+  scopeType          ExposureScopeType @map("scope_type")
+  scopeKey           String           @map("scope_key")
+  behavior           ExposureLimitBehavior
+  limitValue         Float?           @map("limit_value")
+  observedValue      Float?           @map("observed_value")
+  actionStatus       TicketDecisionStatus @map("action_status")
+  reason             String?
+  detailsJson        Json?            @map("details_jsonb")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount  @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([severity, createdAt])
+  @@map("risk_limit_breaches")
+}
+
+model BankrollAuditLog {
+  id                 String           @id @default(uuid())
+  bankrollAccountId  String           @map("bankroll_account_id")
+  actor              String           @default("system")
+  action             String
+  entityType         String           @map("entity_type")
+  entityId           String?          @map("entity_id")
+  reason             String?
+  beforeJson         Json?            @map("before_jsonb")
+  afterJson          Json?            @map("after_jsonb")
+  metadataJson       Json?            @map("metadata_jsonb")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  bankrollAccount    BankrollAccount  @relation(fields: [bankrollAccountId], references: [id], onDelete: Cascade)
+
+  @@index([bankrollAccountId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@map("bankroll_audit_logs")
 }
 
 model PublishedPrediction {

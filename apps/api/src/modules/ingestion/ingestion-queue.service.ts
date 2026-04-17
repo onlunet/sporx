@@ -23,6 +23,17 @@ const PIPELINE_STAGES = new Set([
   "conflictResolution",
   "publishDecision",
   "publicPublish",
+  "stakeCandidateBuild",
+  "stakeSizing",
+  "exposureCheck",
+  "correlationCheck",
+  "ticketConstruction",
+  "portfolioDecision",
+  "paperExecution",
+  "settlement",
+  "bankrollAccounting",
+  "simulationAnalytics",
+  "roiGovernance",
   "invalidateCache"
 ]);
 
@@ -192,6 +203,17 @@ export class IngestionQueueService {
       "conflictResolution",
       "publishDecision",
       "publicPublish",
+      "stakeCandidateBuild",
+      "stakeSizing",
+      "exposureCheck",
+      "correlationCheck",
+      "ticketConstruction",
+      "portfolioDecision",
+      "paperExecution",
+      "settlement",
+      "bankrollAccounting",
+      "simulationAnalytics",
+      "roiGovernance",
       "invalidateCache"
     ] as const;
 
