@@ -223,14 +223,73 @@ export class MatchesService {
   async getById(id: string) {
     const match = await this.prisma.match.findUnique({
       where: { id },
-      include: { homeTeam: true, awayTeam: true, league: true, season: true }
+      select: {
+        id: true,
+        sportId: true,
+        leagueId: true,
+        seasonId: true,
+        homeTeamId: true,
+        awayTeamId: true,
+        matchDateTimeUTC: true,
+        status: true,
+        homeScore: true,
+        awayScore: true,
+        halfTimeHomeScore: true,
+        halfTimeAwayScore: true,
+        homeElo: true,
+        awayElo: true,
+        createdAt: true,
+        updatedAt: true
+      }
     });
 
     if (!match) {
       throw new NotFoundException("Match not found");
     }
 
-    return match;
+    const [league, season, teams] = await Promise.all([
+      this.prisma.league
+        .findUnique({
+          where: { id: match.leagueId },
+          select: { id: true, name: true, code: true }
+        })
+        .catch(() => null),
+      this.prisma.season
+        .findUnique({
+          where: { id: match.seasonId },
+          select: { id: true, yearLabel: true }
+        })
+        .catch(() => null),
+      this.prisma.team
+        .findMany({
+          where: { id: { in: [match.homeTeamId, match.awayTeamId] } },
+          select: { id: true, name: true }
+        })
+        .catch(() => [])
+    ]);
+
+    const teamNameById = new Map(teams.map((team) => [team.id, team.name]));
+
+    return {
+      ...match,
+      league: {
+        id: league?.id ?? match.leagueId,
+        name: league?.name ?? "Unknown League",
+        code: league?.code ?? null
+      },
+      season: {
+        id: season?.id ?? match.seasonId,
+        yearLabel: season?.yearLabel ?? "Unknown Season"
+      },
+      homeTeam: {
+        id: match.homeTeamId,
+        name: teamNameById.get(match.homeTeamId) ?? "Unknown Home Team"
+      },
+      awayTeam: {
+        id: match.awayTeamId,
+        name: teamNameById.get(match.awayTeamId) ?? "Unknown Away Team"
+      }
+    };
   }
 
   events(id: string) {
