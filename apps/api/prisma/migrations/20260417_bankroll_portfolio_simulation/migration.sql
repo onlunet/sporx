@@ -75,7 +75,7 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS bankroll_accounts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   name text NOT NULL,
   mode "BankrollAccountMode" NOT NULL DEFAULT 'PAPER',
   base_currency text NOT NULL DEFAULT 'USD',
@@ -92,8 +92,8 @@ CREATE TABLE IF NOT EXISTS bankroll_accounts (
 );
 
 CREATE TABLE IF NOT EXISTS bankroll_account_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   available_balance double precision NOT NULL,
   reserved_balance double precision NOT NULL,
   total_equity double precision NOT NULL,
@@ -105,8 +105,8 @@ CREATE TABLE IF NOT EXISTS bankroll_account_snapshots (
 );
 
 CREATE TABLE IF NOT EXISTS bankroll_profile_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   profile_key "BankrollProfileKey" NOT NULL,
   version integer NOT NULL,
   config_jsonb jsonb NOT NULL,
@@ -116,19 +116,19 @@ CREATE TABLE IF NOT EXISTS bankroll_profile_versions (
 );
 
 CREATE TABLE IF NOT EXISTS staking_policies (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   key text NOT NULL UNIQUE,
   name text NOT NULL,
   description text,
   is_active boolean NOT NULL DEFAULT true,
-  current_version_id uuid,
+  current_version_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS staking_policy_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  staking_policy_id uuid NOT NULL REFERENCES staking_policies(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  staking_policy_id text NOT NULL REFERENCES staking_policies(id) ON DELETE CASCADE,
   version integer NOT NULL,
   label text NOT NULL,
   config_jsonb jsonb NOT NULL,
@@ -150,21 +150,21 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS stake_candidates (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   sport text NOT NULL,
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
   selection text NOT NULL,
   published_prediction_id text NOT NULL,
-  prediction_run_id uuid,
-  model_version_id uuid,
-  calibration_version_id uuid,
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  prediction_run_id text,
+  model_version_id text,
+  calibration_version_id text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   profile_key "BankrollProfileKey" NOT NULL,
-  staking_policy_version_id uuid REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
+  staking_policy_version_id text REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
   calibrated_probability double precision NOT NULL,
   fair_odds double precision,
   offered_odds double precision,
@@ -186,11 +186,11 @@ CREATE TABLE IF NOT EXISTS stake_candidates (
 );
 
 CREATE TABLE IF NOT EXISTS stake_recommendations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  stake_candidate_id uuid NOT NULL UNIQUE REFERENCES stake_candidates(id) ON DELETE CASCADE,
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  stake_candidate_id text NOT NULL UNIQUE REFERENCES stake_candidates(id) ON DELETE CASCADE,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   profile_key "BankrollProfileKey" NOT NULL,
-  staking_policy_version_id uuid REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
+  staking_policy_version_id text REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
   recommended_fraction double precision,
   recommended_stake double precision,
   clipped_stake double precision,
@@ -201,8 +201,8 @@ CREATE TABLE IF NOT EXISTS stake_recommendations (
 );
 
 CREATE TABLE IF NOT EXISTS exposure_limits (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   scope_type "ExposureScopeType" NOT NULL,
   scope_key text NOT NULL,
   behavior "ExposureLimitBehavior" NOT NULL DEFAULT 'CLIP',
@@ -215,8 +215,8 @@ CREATE TABLE IF NOT EXISTS exposure_limits (
 );
 
 CREATE TABLE IF NOT EXISTS exposure_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   scope_type "ExposureScopeType" NOT NULL,
   scope_key text NOT NULL,
   open_exposure double precision NOT NULL,
@@ -227,8 +227,8 @@ CREATE TABLE IF NOT EXISTS exposure_snapshots (
 );
 
 CREATE TABLE IF NOT EXISTS correlation_groups (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   group_key text NOT NULL,
   market_family text NOT NULL,
   correlation_score double precision NOT NULL DEFAULT 0,
@@ -239,10 +239,10 @@ CREATE TABLE IF NOT EXISTS correlation_groups (
 );
 
 CREATE TABLE IF NOT EXISTS ticket_candidates (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
-  stake_recommendation_id uuid REFERENCES stake_recommendations(id) ON DELETE SET NULL,
-  staking_policy_version_id uuid REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  stake_recommendation_id text REFERENCES stake_recommendations(id) ON DELETE SET NULL,
+  staking_policy_version_id text REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
   ticket_type text NOT NULL DEFAULT 'SINGLE',
   total_stake double precision NOT NULL DEFAULT 0,
   effective_odds double precision,
@@ -254,10 +254,10 @@ CREATE TABLE IF NOT EXISTS ticket_candidates (
 );
 
 CREATE TABLE IF NOT EXISTS ticket_decisions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
-  ticket_candidate_id uuid NOT NULL UNIQUE REFERENCES ticket_candidates(id) ON DELETE CASCADE,
-  staking_policy_version_id uuid REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  ticket_candidate_id text NOT NULL UNIQUE REFERENCES ticket_candidates(id) ON DELETE CASCADE,
+  staking_policy_version_id text REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
   profile_key "BankrollProfileKey" NOT NULL,
   total_stake double precision NOT NULL DEFAULT 0,
   effective_odds double precision,
@@ -268,11 +268,11 @@ CREATE TABLE IF NOT EXISTS ticket_decisions (
 );
 
 CREATE TABLE IF NOT EXISTS ticket_legs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  ticket_decision_id uuid NOT NULL REFERENCES ticket_decisions(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  ticket_decision_id text NOT NULL REFERENCES ticket_decisions(id) ON DELETE CASCADE,
   leg_order integer NOT NULL,
   sport text NOT NULL,
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
@@ -291,9 +291,9 @@ CREATE TABLE IF NOT EXISTS ticket_legs (
 );
 
 CREATE TABLE IF NOT EXISTS paper_orders (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
-  ticket_decision_id uuid NOT NULL UNIQUE REFERENCES ticket_decisions(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  ticket_decision_id text NOT NULL UNIQUE REFERENCES ticket_decisions(id) ON DELETE CASCADE,
   status "PaperOrderStatus" NOT NULL DEFAULT 'OPEN',
   stake double precision NOT NULL DEFAULT 0,
   effective_odds double precision,
@@ -309,9 +309,9 @@ CREATE TABLE IF NOT EXISTS paper_orders (
 );
 
 CREATE TABLE IF NOT EXISTS settlement_records (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
-  paper_order_id uuid NOT NULL UNIQUE REFERENCES paper_orders(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  paper_order_id text NOT NULL UNIQUE REFERENCES paper_orders(id) ON DELETE CASCADE,
   status "PaperOrderStatus" NOT NULL DEFAULT 'OPEN',
   payout double precision NOT NULL DEFAULT 0,
   pnl double precision NOT NULL DEFAULT 0,
@@ -321,8 +321,8 @@ CREATE TABLE IF NOT EXISTS settlement_records (
 );
 
 CREATE TABLE IF NOT EXISTS bankroll_ledger (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   entry_type "BankrollLedgerEntryType" NOT NULL,
   amount double precision NOT NULL,
   balance_before double precision NOT NULL,
@@ -339,8 +339,8 @@ CREATE TABLE IF NOT EXISTS bankroll_ledger (
 );
 
 CREATE TABLE IF NOT EXISTS equity_curve_points (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   point_at timestamptz NOT NULL DEFAULT now(),
   available_balance double precision NOT NULL,
   reserved_balance double precision NOT NULL,
@@ -354,9 +354,9 @@ CREATE TABLE IF NOT EXISTS equity_curve_points (
 );
 
 CREATE TABLE IF NOT EXISTS simulation_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
-  staking_policy_version_id uuid REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  staking_policy_version_id text REFERENCES staking_policy_versions(id) ON DELETE SET NULL,
   profile_key "BankrollProfileKey" NOT NULL,
   status "SimulationRunStatus" NOT NULL DEFAULT 'queued',
   simulation_name text NOT NULL,
@@ -370,8 +370,8 @@ CREATE TABLE IF NOT EXISTS simulation_runs (
 );
 
 CREATE TABLE IF NOT EXISTS simulation_scenarios (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  simulation_run_id uuid NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  simulation_run_id text NOT NULL REFERENCES simulation_runs(id) ON DELETE CASCADE,
   scenario_name text NOT NULL,
   config_jsonb jsonb NOT NULL,
   metrics_jsonb jsonb,
@@ -379,8 +379,8 @@ CREATE TABLE IF NOT EXISTS simulation_scenarios (
 );
 
 CREATE TABLE IF NOT EXISTS roi_governance_rules (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   rule_key text NOT NULL,
   target_status "RoiGovernanceStatus" NOT NULL DEFAULT 'WATCH',
   config_jsonb jsonb NOT NULL,
@@ -391,8 +391,8 @@ CREATE TABLE IF NOT EXISTS roi_governance_rules (
 );
 
 CREATE TABLE IF NOT EXISTS drawdown_events (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   status "RoiGovernanceStatus" NOT NULL DEFAULT 'WATCH',
   peak_equity double precision NOT NULL,
   trough_equity double precision NOT NULL,
@@ -405,8 +405,8 @@ CREATE TABLE IF NOT EXISTS drawdown_events (
 );
 
 CREATE TABLE IF NOT EXISTS risk_limit_breaches (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   severity "DriftSeverity" NOT NULL,
   scope_type "ExposureScopeType" NOT NULL,
   scope_key text NOT NULL,
@@ -420,8 +420,8 @@ CREATE TABLE IF NOT EXISTS risk_limit_breaches (
 );
 
 CREATE TABLE IF NOT EXISTS bankroll_audit_logs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  bankroll_account_id uuid NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bankroll_account_id text NOT NULL REFERENCES bankroll_accounts(id) ON DELETE CASCADE,
   actor text NOT NULL DEFAULT 'system',
   action text NOT NULL,
   entity_type text NOT NULL,

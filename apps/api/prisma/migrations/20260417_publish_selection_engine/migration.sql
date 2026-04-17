@@ -15,19 +15,19 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS publish_policies (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   key text NOT NULL UNIQUE,
   name text NOT NULL,
   description text,
   is_active boolean NOT NULL DEFAULT true,
-  current_version_id uuid,
+  current_version_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS publish_policy_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  policy_id uuid NOT NULL REFERENCES publish_policies(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  policy_id text NOT NULL REFERENCES publish_policies(id) ON DELETE CASCADE,
   version integer NOT NULL,
   label text NOT NULL,
   config_jsonb jsonb NOT NULL,
@@ -49,12 +49,12 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS publish_strategy_profiles (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  policy_version_id uuid NOT NULL REFERENCES publish_policy_versions(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  policy_version_id text NOT NULL REFERENCES publish_policy_versions(id) ON DELETE CASCADE,
   profile_key text NOT NULL,
   name text NOT NULL,
   description text,
-  league_id uuid REFERENCES "League"(id) ON DELETE SET NULL,
+  league_id text REFERENCES "League"(id) ON DELETE SET NULL,
   market text,
   horizon text,
   config_jsonb jsonb NOT NULL,
@@ -65,16 +65,16 @@ CREATE TABLE IF NOT EXISTS publish_strategy_profiles (
 );
 
 CREATE TABLE IF NOT EXISTS prediction_candidates (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
   selection text NOT NULL,
-  prediction_run_id uuid NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
-  meta_model_run_id uuid REFERENCES meta_model_runs(id) ON DELETE SET NULL,
-  model_version_id uuid REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
+  prediction_run_id text NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
+  meta_model_run_id text REFERENCES meta_model_runs(id) ON DELETE SET NULL,
+  model_version_id text REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
   calibration_version_id text,
   core_probability double precision NOT NULL,
   refined_probability double precision,
@@ -96,18 +96,18 @@ CREATE TABLE IF NOT EXISTS prediction_candidates (
 );
 
 CREATE TABLE IF NOT EXISTS publish_decisions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  candidate_id uuid NOT NULL UNIQUE REFERENCES prediction_candidates(id) ON DELETE CASCADE,
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  candidate_id text NOT NULL UNIQUE REFERENCES prediction_candidates(id) ON DELETE CASCADE,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
   selection text NOT NULL,
-  prediction_run_id uuid NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
-  model_version_id uuid REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
+  prediction_run_id text NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
+  model_version_id text REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
   calibration_version_id text,
-  policy_version_id uuid REFERENCES publish_policy_versions(id) ON DELETE SET NULL,
+  policy_version_id text REFERENCES publish_policy_versions(id) ON DELETE SET NULL,
   strategy_profile text NOT NULL,
   status "PublishDecisionStatus" NOT NULL,
   shadow_mode boolean NOT NULL DEFAULT false,
@@ -129,8 +129,8 @@ CREATE TABLE IF NOT EXISTS publish_decisions (
 );
 
 CREATE TABLE IF NOT EXISTS abstain_reason_logs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  decision_id uuid NOT NULL REFERENCES publish_decisions(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  decision_id text NOT NULL REFERENCES publish_decisions(id) ON DELETE CASCADE,
   reason_code text NOT NULL,
   reason_text text NOT NULL,
   severity text NOT NULL DEFAULT 'medium',
@@ -139,8 +139,8 @@ CREATE TABLE IF NOT EXISTS abstain_reason_logs (
 );
 
 CREATE TABLE IF NOT EXISTS market_conflict_rules (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  policy_version_id uuid NOT NULL REFERENCES publish_policy_versions(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  policy_version_id text NOT NULL REFERENCES publish_policy_versions(id) ON DELETE CASCADE,
   market_family text NOT NULL,
   priority integer NOT NULL DEFAULT 100,
   max_picks_per_match integer NOT NULL DEFAULT 1,
@@ -153,8 +153,8 @@ CREATE TABLE IF NOT EXISTS market_conflict_rules (
 );
 
 CREATE TABLE IF NOT EXISTS manual_publish_overrides (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS manual_publish_overrides (
   selection text,
   action "ManualOverrideAction" NOT NULL,
   reason text NOT NULL,
-  actor_user_id uuid REFERENCES "User"(id) ON DELETE SET NULL,
+  actor_user_id text REFERENCES "User"(id) ON DELETE SET NULL,
   active boolean NOT NULL DEFAULT true,
   expires_at timestamptz,
   details_jsonb jsonb,
@@ -170,16 +170,16 @@ CREATE TABLE IF NOT EXISTS manual_publish_overrides (
 );
 
 CREATE TABLE IF NOT EXISTS policy_evaluation_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
   selection text NOT NULL,
-  candidate_id uuid REFERENCES prediction_candidates(id) ON DELETE SET NULL,
-  decision_id uuid REFERENCES publish_decisions(id) ON DELETE SET NULL,
-  policy_version_id uuid REFERENCES publish_policy_versions(id) ON DELETE SET NULL,
+  candidate_id text REFERENCES prediction_candidates(id) ON DELETE SET NULL,
+  decision_id text REFERENCES publish_decisions(id) ON DELETE SET NULL,
+  policy_version_id text REFERENCES publish_policy_versions(id) ON DELETE SET NULL,
   strategy_profile text NOT NULL,
   shadow_mode boolean NOT NULL DEFAULT false,
   approved boolean NOT NULL DEFAULT false,
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS policy_evaluation_snapshots (
 );
 
 ALTER TABLE published_predictions
-  ADD COLUMN IF NOT EXISTS publish_decision_id uuid;
+  ADD COLUMN IF NOT EXISTS publish_decision_id text;
 
 DO $$
 BEGIN

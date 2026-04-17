@@ -60,7 +60,7 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS research_projects (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   key text NOT NULL UNIQUE,
   name text NOT NULL,
   description text,
@@ -72,8 +72,8 @@ CREATE TABLE IF NOT EXISTS research_projects (
 );
 
 CREATE TABLE IF NOT EXISTS research_experiments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id text NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
   key text NOT NULL,
   name text NOT NULL,
   description text,
@@ -95,22 +95,22 @@ CREATE TABLE IF NOT EXISTS research_experiments (
 );
 
 CREATE TABLE IF NOT EXISTS strategy_config_sets (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  experiment_id uuid NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  experiment_id text NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
   key text NOT NULL,
   name text NOT NULL,
   description text,
   scope_jsonb jsonb,
   is_active boolean NOT NULL DEFAULT true,
-  current_version_id uuid,
+  current_version_id text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (experiment_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS strategy_config_versions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  config_set_id uuid NOT NULL REFERENCES strategy_config_sets(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  config_set_id text NOT NULL REFERENCES strategy_config_sets(id) ON DELETE CASCADE,
   version integer NOT NULL,
   label text NOT NULL,
   config_hash text NOT NULL,
@@ -134,8 +134,8 @@ BEGIN
 END $$;
 
 CREATE TABLE IF NOT EXISTS tuning_search_spaces (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  experiment_id uuid NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  experiment_id text NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
   key text NOT NULL,
   version integer NOT NULL,
   search_type "TuningSearchType" NOT NULL,
@@ -149,12 +149,12 @@ CREATE TABLE IF NOT EXISTS tuning_search_spaces (
 );
 
 CREATE TABLE IF NOT EXISTS research_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
-  experiment_id uuid NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
-  strategy_config_set_id uuid REFERENCES strategy_config_sets(id) ON DELETE SET NULL,
-  strategy_config_version_id uuid REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
-  search_space_id uuid REFERENCES tuning_search_spaces(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id text NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
+  experiment_id text NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
+  strategy_config_set_id text REFERENCES strategy_config_sets(id) ON DELETE SET NULL,
+  strategy_config_version_id text REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
+  search_space_id text REFERENCES tuning_search_spaces(id) ON DELETE SET NULL,
   run_key text NOT NULL UNIQUE,
   status "ResearchRunStatus" NOT NULL DEFAULT 'queued',
   data_window_start timestamptz NOT NULL,
@@ -181,8 +181,8 @@ CREATE TABLE IF NOT EXISTS research_runs (
 );
 
 CREATE TABLE IF NOT EXISTS research_run_artifacts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  research_run_id uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  research_run_id text NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
   artifact_type text NOT NULL,
   artifact_key text NOT NULL,
   artifact_uri text,
@@ -192,9 +192,9 @@ CREATE TABLE IF NOT EXISTS research_run_artifacts (
 );
 
 CREATE TABLE IF NOT EXISTS tuning_trials (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  research_run_id uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
-  strategy_config_version_id uuid REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  research_run_id text NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+  strategy_config_version_id text REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
   trial_number integer NOT NULL,
   trial_key text NOT NULL UNIQUE,
   status "ResearchRunStatus" NOT NULL DEFAULT 'queued',
@@ -212,8 +212,8 @@ CREATE TABLE IF NOT EXISTS tuning_trials (
 );
 
 CREATE TABLE IF NOT EXISTS tuning_trial_metrics (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tuning_trial_id uuid NOT NULL REFERENCES tuning_trials(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tuning_trial_id text NOT NULL REFERENCES tuning_trials(id) ON DELETE CASCADE,
   metric_key text NOT NULL,
   metric_value double precision NOT NULL,
   is_primary boolean NOT NULL DEFAULT false,
@@ -223,8 +223,8 @@ CREATE TABLE IF NOT EXISTS tuning_trial_metrics (
 );
 
 CREATE TABLE IF NOT EXISTS tuning_trial_artifacts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tuning_trial_id uuid NOT NULL REFERENCES tuning_trials(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tuning_trial_id text NOT NULL REFERENCES tuning_trials(id) ON DELETE CASCADE,
   artifact_type text NOT NULL,
   artifact_key text NOT NULL,
   artifact_uri text,
@@ -234,8 +234,8 @@ CREATE TABLE IF NOT EXISTS tuning_trial_artifacts (
 );
 
 CREATE TABLE IF NOT EXISTS robustness_test_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  research_run_id uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  research_run_id text NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
   status "ResearchRunStatus" NOT NULL DEFAULT 'queued',
   robustness_score double precision,
   summary_jsonb jsonb,
@@ -246,8 +246,8 @@ CREATE TABLE IF NOT EXISTS robustness_test_runs (
 );
 
 CREATE TABLE IF NOT EXISTS robustness_test_results (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  robustness_test_run_id uuid NOT NULL REFERENCES robustness_test_runs(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  robustness_test_run_id text NOT NULL REFERENCES robustness_test_runs(id) ON DELETE CASCADE,
   check_name text NOT NULL,
   passed boolean NOT NULL,
   score double precision,
@@ -256,8 +256,8 @@ CREATE TABLE IF NOT EXISTS robustness_test_results (
 );
 
 CREATE TABLE IF NOT EXISTS segment_scorecards (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  research_run_id uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  research_run_id text NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
   segment_type text NOT NULL,
   segment_key text NOT NULL,
   metrics_jsonb jsonb NOT NULL,
@@ -265,14 +265,14 @@ CREATE TABLE IF NOT EXISTS segment_scorecards (
 );
 
 CREATE TABLE IF NOT EXISTS policy_candidates (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
-  experiment_id uuid NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
-  research_run_id uuid NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
-  best_trial_id uuid REFERENCES tuning_trials(id) ON DELETE SET NULL,
-  strategy_config_version_id uuid REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
-  search_space_id uuid REFERENCES tuning_search_spaces(id) ON DELETE SET NULL,
-  robustness_test_run_id uuid REFERENCES robustness_test_runs(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id text NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
+  experiment_id text NOT NULL REFERENCES research_experiments(id) ON DELETE CASCADE,
+  research_run_id text NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+  best_trial_id text REFERENCES tuning_trials(id) ON DELETE SET NULL,
+  strategy_config_version_id text REFERENCES strategy_config_versions(id) ON DELETE SET NULL,
+  search_space_id text REFERENCES tuning_search_spaces(id) ON DELETE SET NULL,
+  robustness_test_run_id text REFERENCES robustness_test_runs(id) ON DELETE SET NULL,
   key text NOT NULL UNIQUE,
   status "PolicyCandidateStatus" NOT NULL DEFAULT 'DRAFT',
   summary_jsonb jsonb,
@@ -284,13 +284,13 @@ CREATE TABLE IF NOT EXISTS policy_candidates (
 );
 
 CREATE TABLE IF NOT EXISTS policy_aliases (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   sport text NOT NULL DEFAULT 'football',
-  league_id uuid REFERENCES "League"(id) ON DELETE SET NULL,
+  league_id text REFERENCES "League"(id) ON DELETE SET NULL,
   market text,
   horizon text,
   alias_key text NOT NULL,
-  policy_candidate_id uuid REFERENCES policy_candidates(id) ON DELETE SET NULL,
+  policy_candidate_id text REFERENCES policy_candidates(id) ON DELETE SET NULL,
   is_active boolean NOT NULL DEFAULT true,
   metadata_jsonb jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -299,9 +299,9 @@ CREATE TABLE IF NOT EXISTS policy_aliases (
 );
 
 CREATE TABLE IF NOT EXISTS policy_promotion_requests (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  policy_candidate_id uuid NOT NULL REFERENCES policy_candidates(id) ON DELETE CASCADE,
-  research_run_id uuid REFERENCES research_runs(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  policy_candidate_id text NOT NULL REFERENCES policy_candidates(id) ON DELETE CASCADE,
+  research_run_id text REFERENCES research_runs(id) ON DELETE SET NULL,
   requested_by text NOT NULL DEFAULT 'system',
   reason text,
   evidence_jsonb jsonb,
@@ -311,9 +311,9 @@ CREATE TABLE IF NOT EXISTS policy_promotion_requests (
 );
 
 CREATE TABLE IF NOT EXISTS policy_promotion_decisions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  policy_promotion_request_id uuid NOT NULL UNIQUE REFERENCES policy_promotion_requests(id) ON DELETE CASCADE,
-  policy_candidate_id uuid NOT NULL REFERENCES policy_candidates(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  policy_promotion_request_id text NOT NULL UNIQUE REFERENCES policy_promotion_requests(id) ON DELETE CASCADE,
+  policy_candidate_id text NOT NULL REFERENCES policy_candidates(id) ON DELETE CASCADE,
   decision_status "PolicyPromotionDecisionStatus" NOT NULL,
   decision_reasons_jsonb jsonb NOT NULL,
   actor text NOT NULL DEFAULT 'system',
@@ -322,19 +322,19 @@ CREATE TABLE IF NOT EXISTS policy_promotion_decisions (
 );
 
 CREATE TABLE IF NOT EXISTS experiment_notes (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid REFERENCES research_projects(id) ON DELETE SET NULL,
-  experiment_id uuid REFERENCES research_experiments(id) ON DELETE SET NULL,
-  research_run_id uuid REFERENCES research_runs(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id text REFERENCES research_projects(id) ON DELETE SET NULL,
+  experiment_id text REFERENCES research_experiments(id) ON DELETE SET NULL,
+  research_run_id text REFERENCES research_runs(id) ON DELETE SET NULL,
   author text NOT NULL DEFAULT 'system',
   note_text text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS experiment_tags (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id uuid REFERENCES research_projects(id) ON DELETE SET NULL,
-  experiment_id uuid REFERENCES research_experiments(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  project_id text REFERENCES research_projects(id) ON DELETE SET NULL,
+  experiment_id text REFERENCES research_experiments(id) ON DELETE SET NULL,
   tag text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );

@@ -1,7 +1,7 @@
-﻿-- Pipeline v2 additive tables (raw -> canonical -> features -> odds -> prediction runs -> published)
+-- Pipeline v2 additive tables (raw -> canonical -> features -> odds -> prediction runs -> published)
 
 CREATE TABLE IF NOT EXISTS raw_provider_payloads (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   provider text NOT NULL,
   entity_type text NOT NULL,
   provider_entity_id text,
@@ -19,8 +19,8 @@ CREATE INDEX IF NOT EXISTS idx_raw_provider_payloads_pulled_at
   ON raw_provider_payloads (pulled_at);
 
 CREATE TABLE IF NOT EXISTS canonical_match_revisions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   revision_no integer NOT NULL,
   source_priority integer NOT NULL,
   valid_from timestamptz NOT NULL DEFAULT now(),
@@ -37,8 +37,8 @@ CREATE INDEX IF NOT EXISTS idx_canonical_match_revisions_valid_from
   ON canonical_match_revisions (match_id, valid_from);
 
 CREATE TABLE IF NOT EXISTS feature_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   horizon text NOT NULL,
   feature_set_version text NOT NULL,
   cutoff_at timestamptz NOT NULL,
@@ -53,8 +53,8 @@ CREATE INDEX IF NOT EXISTS idx_feature_snapshots_lookup
   ON feature_snapshots (match_id, horizon, cutoff_at);
 
 CREATE TABLE IF NOT EXISTS odds_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   provider text,
   bookmaker text NOT NULL,
   market text NOT NULL,
@@ -74,15 +74,15 @@ CREATE INDEX IF NOT EXISTS idx_odds_snapshots_bookmaker_market
   ON odds_snapshots (bookmaker, market, line, collected_at);
 
 CREATE TABLE IF NOT EXISTS prediction_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
-  feature_snapshot_id uuid REFERENCES feature_snapshots(id) ON DELETE SET NULL,
-  odds_snapshot_id uuid REFERENCES odds_snapshots(id) ON DELETE SET NULL,
-  model_version_id uuid REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
+  feature_snapshot_id text REFERENCES feature_snapshots(id) ON DELETE SET NULL,
+  odds_snapshot_id text REFERENCES odds_snapshots(id) ON DELETE SET NULL,
+  model_version_id text REFERENCES "ModelVersion"(id) ON DELETE SET NULL,
   calibration_version_id text,
   probability double precision NOT NULL,
   fair_odds double precision,
@@ -101,12 +101,12 @@ CREATE INDEX IF NOT EXISTS idx_prediction_runs_model_version
   ON prediction_runs (model_version_id, created_at);
 
 CREATE TABLE IF NOT EXISTS published_predictions (
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
-  prediction_run_id uuid NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
+  prediction_run_id text NOT NULL REFERENCES prediction_runs(id) ON DELETE CASCADE,
   published_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (match_id, market, line_key, horizon)
 );

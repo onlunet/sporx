@@ -3,8 +3,8 @@
 -- (equivalent to NULLS NOT DISTINCT behavior for line in composite uniqueness).
 
 CREATE TABLE IF NOT EXISTS shadow_prediction_comparisons (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS shadow_prediction_comparisons (
   duplicate_suppressed boolean NOT NULL DEFAULT false,
   leakage_violation boolean NOT NULL DEFAULT false,
   details jsonb,
-  prediction_run_id uuid REFERENCES prediction_runs(id) ON DELETE SET NULL,
+  prediction_run_id text REFERENCES prediction_runs(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (match_id, market, line_key, horizon)
 );
@@ -35,8 +35,8 @@ CREATE INDEX IF NOT EXISTS idx_shadow_prediction_comparisons_prediction_run
   ON shadow_prediction_comparisons (prediction_run_id);
 
 CREATE TABLE IF NOT EXISTS leakage_check_results (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   horizon text NOT NULL,
   cutoff_at timestamptz NOT NULL,
   source_leak_rows integer NOT NULL DEFAULT 0,
@@ -52,10 +52,10 @@ CREATE INDEX IF NOT EXISTS idx_leakage_check_results_created_at
   ON leakage_check_results (created_at);
 
 CREATE TABLE IF NOT EXISTS publish_failure_logs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  run_id uuid,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  run_id text,
   job_id text,
-  match_id uuid,
+  match_id text,
   market text,
   line_key text,
   horizon text,
@@ -74,9 +74,9 @@ CREATE INDEX IF NOT EXISTS idx_publish_failure_logs_lookup
   ON publish_failure_logs (match_id, market, line_key, horizon);
 
 CREATE TABLE IF NOT EXISTS duplicate_suppression_stats (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
   dedup_key text NOT NULL UNIQUE,
-  match_id uuid,
+  match_id text,
   market text,
   line_key text,
   horizon text,

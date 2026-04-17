@@ -25,10 +25,10 @@ ALTER TABLE prediction_runs
   ADD COLUMN IF NOT EXISTS refined_source text;
 
 CREATE TABLE IF NOT EXISTS canonical_lineups (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
-  team_id uuid NOT NULL REFERENCES "Team"(id) ON DELETE CASCADE,
-  provider_id uuid REFERENCES "Provider"(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  team_id text NOT NULL REFERENCES "Team"(id) ON DELETE CASCADE,
+  provider_id text REFERENCES "Provider"(id) ON DELETE SET NULL,
   provider_key text,
   formation text,
   source_updated_at timestamptz,
@@ -45,9 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_canonical_lineups_provider_time
   ON canonical_lineups (provider_id, source_updated_at);
 
 CREATE TABLE IF NOT EXISTS canonical_lineup_player_availability (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  canonical_lineup_id uuid NOT NULL REFERENCES canonical_lineups(id) ON DELETE CASCADE,
-  player_id uuid REFERENCES "Player"(id) ON DELETE SET NULL,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  canonical_lineup_id text NOT NULL REFERENCES canonical_lineups(id) ON DELETE CASCADE,
+  player_id text REFERENCES "Player"(id) ON DELETE SET NULL,
   player_name text NOT NULL,
   position text,
   jersey_number integer,
@@ -63,8 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_canonical_lineup_player_availability_player
   ON canonical_lineup_player_availability (player_id);
 
 CREATE TABLE IF NOT EXISTS lineup_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   horizon text NOT NULL,
   cutoff_at timestamptz NOT NULL,
   generated_at timestamptz NOT NULL DEFAULT now(),
@@ -79,8 +79,8 @@ CREATE INDEX IF NOT EXISTS idx_lineup_snapshots_match_horizon_cutoff
   ON lineup_snapshots (match_id, horizon, cutoff_at);
 
 CREATE TABLE IF NOT EXISTS event_aggregate_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   horizon text NOT NULL,
   cutoff_at timestamptz NOT NULL,
   generated_at timestamptz NOT NULL DEFAULT now(),
@@ -95,8 +95,8 @@ CREATE INDEX IF NOT EXISTS idx_event_aggregate_snapshots_match_horizon_cutoff
   ON event_aggregate_snapshots (match_id, horizon, cutoff_at);
 
 CREATE TABLE IF NOT EXISTS market_consensus_snapshots (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   horizon text NOT NULL,
   cutoff_at timestamptz NOT NULL,
   generated_at timestamptz NOT NULL DEFAULT now(),
@@ -110,17 +110,17 @@ CREATE INDEX IF NOT EXISTS idx_market_consensus_snapshots_match_horizon_cutoff
   ON market_consensus_snapshots (match_id, horizon, cutoff_at);
 
 CREATE TABLE IF NOT EXISTS meta_model_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  match_id uuid NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
+  id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  match_id text NOT NULL REFERENCES "Match"(id) ON DELETE CASCADE,
   market text NOT NULL,
   line double precision,
   line_key text NOT NULL,
   horizon text NOT NULL,
   cutoff_at timestamptz NOT NULL,
-  prediction_run_id uuid REFERENCES prediction_runs(id) ON DELETE SET NULL,
-  lineup_snapshot_id uuid REFERENCES lineup_snapshots(id) ON DELETE SET NULL,
-  event_aggregate_snapshot_id uuid REFERENCES event_aggregate_snapshots(id) ON DELETE SET NULL,
-  market_consensus_snapshot_id uuid REFERENCES market_consensus_snapshots(id) ON DELETE SET NULL,
+  prediction_run_id text REFERENCES prediction_runs(id) ON DELETE SET NULL,
+  lineup_snapshot_id text REFERENCES lineup_snapshots(id) ON DELETE SET NULL,
+  event_aggregate_snapshot_id text REFERENCES event_aggregate_snapshots(id) ON DELETE SET NULL,
+  market_consensus_snapshot_id text REFERENCES market_consensus_snapshots(id) ON DELETE SET NULL,
   model_version text NOT NULL,
   core_probability double precision NOT NULL,
   refined_probability double precision NOT NULL,
