@@ -2627,14 +2627,6 @@ export class ProviderIngestionService {
         awayScore: true,
         halfTimeHomeScore: true,
         halfTimeAwayScore: true,
-        q1HomeScore: true,
-        q1AwayScore: true,
-        q2HomeScore: true,
-        q2AwayScore: true,
-        q3HomeScore: true,
-        q3AwayScore: true,
-        q4HomeScore: true,
-        q4AwayScore: true,
         homeElo: true,
         awayElo: true,
         form5Home: true,
@@ -2643,7 +2635,21 @@ export class ProviderIngestionService {
       }
     });
 
-    const merged = this.mergeMatchState(existingMatch, input, normalizedStatus);
+    const existingMatchForMerge = existingMatch
+      ? {
+          ...existingMatch,
+          q1HomeScore: null as number | null,
+          q1AwayScore: null as number | null,
+          q2HomeScore: null as number | null,
+          q2AwayScore: null as number | null,
+          q3HomeScore: null as number | null,
+          q3AwayScore: null as number | null,
+          q4HomeScore: null as number | null,
+          q4AwayScore: null as number | null
+        }
+      : null;
+
+    const merged = this.mergeMatchState(existingMatchForMerge, input, normalizedStatus);
 
     const match = await this.prisma.match.upsert({
       where: {
@@ -2662,14 +2668,6 @@ export class ProviderIngestionService {
         awayScore: merged.awayScore,
         halfTimeHomeScore: merged.halfTimeHomeScore,
         halfTimeAwayScore: merged.halfTimeAwayScore,
-        q1HomeScore: merged.q1HomeScore,
-        q1AwayScore: merged.q1AwayScore,
-        q2HomeScore: merged.q2HomeScore,
-        q2AwayScore: merged.q2AwayScore,
-        q3HomeScore: merged.q3HomeScore,
-        q3AwayScore: merged.q3AwayScore,
-        q4HomeScore: merged.q4HomeScore,
-        q4AwayScore: merged.q4AwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
@@ -2690,14 +2688,6 @@ export class ProviderIngestionService {
         awayScore: merged.awayScore,
         halfTimeHomeScore: merged.halfTimeHomeScore,
         halfTimeAwayScore: merged.halfTimeAwayScore,
-        q1HomeScore: merged.q1HomeScore,
-        q1AwayScore: merged.q1AwayScore,
-        q2HomeScore: merged.q2HomeScore,
-        q2AwayScore: merged.q2AwayScore,
-        q3HomeScore: merged.q3HomeScore,
-        q3AwayScore: merged.q3AwayScore,
-        q4HomeScore: merged.q4HomeScore,
-        q4AwayScore: merged.q4AwayScore,
         homeElo: merged.homeElo,
         awayElo: merged.awayElo,
         form5Home: merged.form5Home,
