@@ -326,6 +326,57 @@ describe("PredictionsService", () => {
     expect((items[0] as any)?.homeTeam).toBe("Run A");
   });
 
+  it("list endpoint falls back to synthetic match-based rows when all sources are empty", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "match-synthetic-1",
+            matchDateTimeUTC: new Date("2026-04-22T18:00:00.000Z"),
+            status: MatchStatus.scheduled,
+            homeScore: null,
+            awayScore: null,
+            halfTimeHomeScore: null,
+            halfTimeAwayScore: null
+          }
+        ])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      predictionRun: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expect(prisma.predictionRun.findMany).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+    expect((items[0] as any)?.homeTeam).toContain("Ev Takim");
+  });
+
   it("list endpoint requests only approved/manually-forced published decisions", async () => {
     const prisma = {
       match: {

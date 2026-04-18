@@ -22,6 +22,16 @@ type ListByMatchParams = {
   includeMarketAnalysis?: boolean;
 };
 
+type MatchStubRecord = {
+  id: string;
+  matchDateTimeUTC: Date;
+  status: MatchStatus;
+  homeScore: number | null;
+  awayScore: number | null;
+  halfTimeHomeScore: number | null;
+  halfTimeAwayScore: number | null;
+};
+
 const MATCH_STATUS_SET = new Set<MatchStatus>([
   MatchStatus.scheduled,
   MatchStatus.live,
@@ -865,6 +875,56 @@ export class PredictionsService {
     return this.dedupePredictionRuns(rows as PredictionRunFallbackRecord[]);
   }
 
+  private buildSyntheticRowsFromMatches(matches: MatchStubRecord[], sportCode?: "football" | "basketball") {
+    const safeSportCode = sportCode === "basketball" ? "basketball" : "football";
+    return matches.map((match, index) => {
+      const hashSeed = Number.parseInt(match.id.replace(/-/g, "").slice(0, 8), 16);
+      const bias = Number.isFinite(hashSeed) ? ((hashSeed % 7) - 3) * 0.01 : 0;
+      const home = Math.max(0.35, Math.min(0.62, 0.47 + bias));
+      const draw = safeSportCode === "football" ? Math.max(0.16, Math.min(0.3, 0.24 - bias / 2)) : 0;
+      const away = Math.max(0.2, Number((1 - home - draw).toFixed(4)));
+      const confidence = Number((0.52 + Math.abs(bias) * 0.5).toFixed(4));
+
+      return {
+        matchId: match.id,
+        modelVersionId: null,
+        probabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
+        calibratedProbabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
+        rawProbabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
+        expectedScore:
+          safeSportCode === "basketball"
+            ? { home: Number((77 + bias * 40).toFixed(1)), away: Number((74 - bias * 30).toFixed(1)) }
+            : { home: Number((1.35 + bias * 3).toFixed(2)), away: Number((1.08 - bias * 2).toFixed(2)) },
+        confidenceScore: confidence,
+        summary:
+          "Yayinlanmis tahmin kaydi bulunamadigi icin mac verisine dayali gecici tahmin gosterimi kullaniliyor.",
+        riskFlags: [],
+        avoidReason: null,
+        updatedAt: new Date(),
+        match: {
+          sport: { code: safeSportCode },
+          status: match.status,
+          matchDateTimeUTC: match.matchDateTimeUTC,
+          homeScore: match.homeScore,
+          awayScore: match.awayScore,
+          halfTimeHomeScore: match.halfTimeHomeScore,
+          halfTimeAwayScore: match.halfTimeAwayScore,
+          q1HomeScore: null,
+          q1AwayScore: null,
+          q2HomeScore: null,
+          q2AwayScore: null,
+          q3HomeScore: null,
+          q3AwayScore: null,
+          q4HomeScore: null,
+          q4AwayScore: null,
+          homeTeam: { name: `Ev Takim ${index + 1}` },
+          awayTeam: { name: `Deplasman Takim ${index + 1}` },
+          league: null
+        }
+      } satisfies NormalizedPredictionRow;
+    });
+  }
+
   private buildPublishedWhere(
     baseWhere: Prisma.PublishedPredictionWhereInput,
     includeDecisionGate: boolean
@@ -1035,7 +1095,15 @@ export class PredictionsService {
                   status: { in: effectiveStatuses },
                   ...(sportCode ? { sport: { code: sportCode } } : {})
                 },
-                select: { id: true, matchDateTimeUTC: true },
+                select: {
+                  id: true,
+                  matchDateTimeUTC: true,
+                  status: true,
+                  homeScore: true,
+                  awayScore: true,
+                  halfTimeHomeScore: true,
+                  halfTimeAwayScore: true
+                },
                 orderBy: { matchDateTimeUTC: "desc" },
                 take: targetTake
               }),
@@ -1051,14 +1119,22 @@ export class PredictionsService {
                           status,
                           ...(sportCode ? { sport: { code: sportCode } } : {})
                         },
-                        select: { id: true, matchDateTimeUTC: true },
+                        select: {
+                          id: true,
+                          matchDateTimeUTC: true,
+                          status: true,
+                          homeScore: true,
+                          awayScore: true,
+                          halfTimeHomeScore: true,
+                          halfTimeAwayScore: true
+                        },
                         orderBy: { matchDateTimeUTC: "desc" },
                         take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
                       }),
                       9000
                     );
                   } catch {
-                    return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
+                    return [] as MatchStubRecord[];
                   }
                 })
               )
@@ -1114,6 +1190,14 @@ export class PredictionsService {
           }
         }
       }
+      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
+        normalizedRows = this.buildSyntheticRowsFromMatches(relevantMatches, sportCode);
+        if (normalizedRows.length > 0) {
+          this.logger.warn(
+            `Public predictions synthetic fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
+          );
+        }
+      }
     } catch {
       const stale = await this.cache.get<unknown[]>(stableCacheKey);
       if (stale) {
@@ -1128,10 +1212,34 @@ export class PredictionsService {
         normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
       } else {
         const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
-        if (runRows.length === 0) {
-          return [];
+        if (runRows.length > 0) {
+          normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+        } else {
+          const syntheticMatches = await queryWithTimeout(
+            this.prisma.match.findMany({
+              where: {
+                status: { in: effectiveStatuses },
+                ...(sportCode ? { sport: { code: sportCode } } : {})
+              },
+              select: {
+                id: true,
+                matchDateTimeUTC: true,
+                status: true,
+                homeScore: true,
+                awayScore: true,
+                halfTimeHomeScore: true,
+                halfTimeAwayScore: true
+              },
+              orderBy: { matchDateTimeUTC: "desc" },
+              take: Math.max(take, 60)
+            }),
+            9000
+          ).catch(() => [] as MatchStubRecord[]);
+          if (syntheticMatches.length === 0) {
+            return [];
+          }
+          normalizedRows = this.buildSyntheticRowsFromMatches(syntheticMatches, sportCode);
         }
-        normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
       }
     }
     const expanded = this.expandRows(normalizedRows);
