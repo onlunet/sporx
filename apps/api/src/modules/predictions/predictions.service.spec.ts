@@ -170,7 +170,11 @@ describe("PredictionsService", () => {
     await service.list({ status: "scheduled", sport: "football", take: 5 });
 
     const firstCallArg = prisma.publishedPrediction.findMany.mock.calls[0][0];
-    expect(firstCallArg.where.OR).toEqual(
+    const decisionGate =
+      firstCallArg.where?.AND?.find((item: { OR?: unknown }) => Array.isArray(item?.OR))?.OR ??
+      firstCallArg.where?.OR;
+
+    expect(decisionGate).toEqual(
       expect.arrayContaining([
         { publishDecision: { is: null } },
         {

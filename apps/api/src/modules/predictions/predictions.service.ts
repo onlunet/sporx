@@ -1,5 +1,5 @@
-import { Injectable } from "@nestjs/common";
-import { MatchStatus, PublishDecisionStatus } from "@prisma/client";
+import { Injectable, Logger } from "@nestjs/common";
+import { MatchStatus, Prisma, PublishDecisionStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { OddsService } from "../odds/odds.service";
@@ -579,6 +579,8 @@ async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Prom
 
 @Injectable()
 export class PredictionsService {
+  private readonly logger = new Logger(PredictionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
@@ -681,6 +683,62 @@ export class PredictionsService {
     return rows as LegacyPredictionRecord[];
   }
 
+  private buildPublishedWhere(
+    baseWhere: Prisma.PublishedPredictionWhereInput,
+    includeDecisionGate: boolean
+  ): Prisma.PublishedPredictionWhereInput {
+    if (!includeDecisionGate) {
+      return baseWhere;
+    }
+
+    return {
+      AND: [
+        baseWhere,
+        {
+          OR: [
+            { publishDecision: { is: null } },
+            { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+          ]
+        }
+      ]
+    };
+  }
+
+  private formatErrorMessage(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.slice(0, 240);
+  }
+
+  private async findPublishedRows(
+    baseWhere: Prisma.PublishedPredictionWhereInput,
+    take: number,
+    orderBy: Prisma.Enumerable<Prisma.PublishedPredictionOrderByWithRelationInput> = { publishedAt: "desc" }
+  ): Promise<PublishedPredictionRecord[]> {
+    const query = (includeDecisionGate: boolean) =>
+      queryWithTimeout(
+        this.prisma.publishedPrediction.findMany({
+          where: this.buildPublishedWhere(baseWhere, includeDecisionGate),
+          orderBy,
+          include: PUBLISHED_PREDICTION_INCLUDE,
+          take
+        }),
+        12000
+      ) as Promise<PublishedPredictionRecord[]>;
+
+    try {
+      return await query(true);
+    } catch (strictError) {
+      this.logger.warn(
+        `Strict published query failed, retrying without decision gate: ${this.formatErrorMessage(strictError)}`
+      );
+      try {
+        return await query(false);
+      } catch {
+        throw strictError;
+      }
+    }
+  }
+
   private expandRows(normalizedRows: NormalizedPredictionRow[]) {
     return normalizedRows.flatMap((item) => {
       const matchRecord = (item.match as Record<string, unknown> | null) ?? null;
@@ -776,7 +834,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v11:published:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v12:published:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -833,44 +891,26 @@ export class PredictionsService {
       }
 
       const matchIds = relevantMatches.map((item) => item.id);
-      let rows = await queryWithTimeout(
-        this.prisma.publishedPrediction.findMany({
-          where: {
-            OR: [
-              { publishDecision: { is: null } },
-              { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-            ],
-            matchId: { in: matchIds },
+      let rows = await this.findPublishedRows(
+        {
+          matchId: { in: matchIds },
+          match: {
+            status: { in: effectiveStatuses },
+            ...(sportCode ? { sport: { code: sportCode } } : {})
+          }
+        },
+        Math.max(take * 2, 100)
+      );
+
+      if (rows.length === 0) {
+        rows = await this.findPublishedRows(
+          {
             match: {
               status: { in: effectiveStatuses },
               ...(sportCode ? { sport: { code: sportCode } } : {})
             }
           },
-          orderBy: { publishedAt: "desc" },
-          include: PUBLISHED_PREDICTION_INCLUDE,
-          take: Math.max(take * 2, 100)
-        }),
-        12000
-      );
-
-      if (rows.length === 0) {
-        rows = await queryWithTimeout(
-          this.prisma.publishedPrediction.findMany({
-            where: {
-              OR: [
-                { publishDecision: { is: null } },
-                { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-              ],
-              match: {
-                status: { in: effectiveStatuses },
-                ...(sportCode ? { sport: { code: sportCode } } : {})
-              }
-            },
-            orderBy: { publishedAt: "desc" },
-            include: PUBLISHED_PREDICTION_INCLUDE,
-            take: Math.max(take * 3, 120)
-          }),
-          12000
+          Math.max(take * 3, 120)
         ).catch(() => []);
       }
 
@@ -923,20 +963,12 @@ export class PredictionsService {
     const line = parseLine(params?.line);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
 
-    const normalizedRows: NormalizedPredictionRow[] = (
-      await this.prisma.publishedPrediction.findMany({
-        where: {
-          matchId,
-          OR: [
-            { publishDecision: { is: null } },
-            { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-          ]
-        },
-        include: PUBLISHED_PREDICTION_INCLUDE,
-        orderBy: [{ publishedAt: "desc" }],
-        take: 20
-      })
-    ).map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
+    const rows = await this.findPublishedRows({ matchId }, 20, [{ publishedAt: "desc" }]).catch((error) => {
+      this.logger.warn(`listByMatch fallback to empty set due to query error: ${this.formatErrorMessage(error)}`);
+      return [] as PublishedPredictionRecord[];
+    });
+
+    const normalizedRows: NormalizedPredictionRow[] = rows.map((row) => normalizePublishedRow(row));
 
     if (normalizedRows.length === 0) {
       return [];
@@ -968,20 +1000,18 @@ export class PredictionsService {
   }
 
   async highConfidence() {
-    const rows = await this.prisma.publishedPrediction.findMany({
-      where: {
-        OR: [
-          { publishDecision: { is: null } },
-          { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-        ],
+    const rows = await this.findPublishedRows(
+      {
         predictionRun: {
           confidence: { gte: 0.7 }
         }
       },
-      include: PUBLISHED_PREDICTION_INCLUDE,
-      orderBy: { publishedAt: "desc" },
-      take: 50
+      50
+    ).catch((error) => {
+      this.logger.warn(`highConfidence fallback to empty set due to query error: ${this.formatErrorMessage(error)}`);
+      return [] as PublishedPredictionRecord[];
     });
-    return rows.map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
+
+    return rows.map((row) => normalizePublishedRow(row));
   }
 }
