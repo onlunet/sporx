@@ -32,15 +32,29 @@ export async function POST(request: NextRequest) {
     return buildLoginRedirect(request, nextPath, "missing_fields");
   }
 
-  const response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password, actorType: "ADMIN" }),
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password, actorType: "ADMIN" }),
+      cache: "no-store"
+    });
+  } catch {
+    return buildLoginRedirect(request, nextPath, "auth_service_unreachable");
+  }
 
   if (!response.ok) {
-    return buildLoginRedirect(request, nextPath, "invalid_credentials");
+    if (response.status === 401) {
+      return buildLoginRedirect(request, nextPath, "invalid_credentials");
+    }
+    if (response.status === 403) {
+      return buildLoginRedirect(request, nextPath, "unauthorized_role");
+    }
+    if (response.status >= 500) {
+      return buildLoginRedirect(request, nextPath, "auth_service_unavailable");
+    }
+    return buildLoginRedirect(request, nextPath, "login_failed");
   }
 
   const payload = (await response.json()) as {
