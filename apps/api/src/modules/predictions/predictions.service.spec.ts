@@ -68,6 +68,57 @@ function createPublishedRow(runId: string) {
   };
 }
 
+function createLegacyRow() {
+  return {
+    matchId: "match-legacy-1",
+    modelVersionId: "legacy-model-1",
+    probabilities: {
+      home: 0.57,
+      draw: 0.24,
+      away: 0.19
+    },
+    calibratedProbabilities: {
+      home: 0.56,
+      draw: 0.25,
+      away: 0.19
+    },
+    rawProbabilities: {
+      home: 0.58,
+      draw: 0.23,
+      away: 0.19
+    },
+    expectedScore: {
+      home: 1.6,
+      away: 1.0
+    },
+    confidenceScore: 0.61,
+    summary: "legacy summary",
+    riskFlags: [],
+    avoidReason: null,
+    updatedAt: new Date("2026-04-18T10:00:00.000Z"),
+    match: {
+      sport: { code: "football" },
+      status: MatchStatus.scheduled,
+      matchDateTimeUTC: new Date("2026-04-20T18:00:00.000Z"),
+      homeScore: null,
+      awayScore: null,
+      halfTimeHomeScore: null,
+      halfTimeAwayScore: null,
+      q1HomeScore: null,
+      q1AwayScore: null,
+      q2HomeScore: null,
+      q2AwayScore: null,
+      q3HomeScore: null,
+      q3AwayScore: null,
+      q4HomeScore: null,
+      q4AwayScore: null,
+      homeTeam: { name: "Legacy A" },
+      awayTeam: { name: "Legacy B" },
+      league: { id: "league-legacy", name: "Legacy League", code: "LL" }
+    }
+  };
+}
+
 describe("PredictionsService", () => {
   it("public match query returns one row per duplicate published tuple", async () => {
     const prisma = {
@@ -136,6 +187,43 @@ describe("PredictionsService", () => {
     expect(prisma.prediction.findMany).not.toHaveBeenCalled();
     expect(rollout.resolveSource).not.toHaveBeenCalled();
     expect(items.length).toBeGreaterThan(0);
+  });
+
+  it("list endpoint falls back to legacy rows when published source is empty", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-legacy-1", matchDateTimeUTC: new Date("2026-04-20T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([createLegacyRow()])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+    expect((items[0] as any)?.homeTeam).toBe("Legacy A");
   });
 
   it("list endpoint requests only approved/manually-forced published decisions", async () => {
@@ -219,5 +307,38 @@ describe("PredictionsService", () => {
     expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
     expect(prisma.prediction.findMany).not.toHaveBeenCalled();
     expect(rollout.resolveSource).not.toHaveBeenCalled();
+  });
+
+  it("high confidence endpoint falls back to legacy source when published is empty", async () => {
+    const legacy = createLegacyRow();
+    legacy.confidenceScore = 0.76;
+
+    const prisma = {
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([legacy])
+      }
+    } as any;
+    const cache = {} as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.highConfidence();
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0]?.matchId).toBe("match-legacy-1");
   });
 });

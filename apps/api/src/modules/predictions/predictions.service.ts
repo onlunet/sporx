@@ -580,6 +580,7 @@ async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Prom
 @Injectable()
 export class PredictionsService {
   private readonly logger = new Logger(PredictionsService.name);
+  private readonly allowLegacyPublicFallback = process.env.PUBLIC_PREDICTIONS_LEGACY_FALLBACK !== "0";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -681,6 +682,32 @@ export class PredictionsService {
     }
 
     return rows as LegacyPredictionRecord[];
+  }
+
+  private async fetchLegacyRowsByMatch(matchId: string): Promise<LegacyPredictionRecord[]> {
+    return queryWithTimeout(
+      this.prisma.prediction.findMany({
+        where: { matchId },
+        orderBy: { updatedAt: "desc" },
+        include: LEGACY_PREDICTION_INCLUDE,
+        take: 80
+      }),
+      12000
+    ).catch(() => []);
+  }
+
+  private async fetchLegacyHighConfidenceRows(): Promise<LegacyPredictionRecord[]> {
+    return queryWithTimeout(
+      this.prisma.prediction.findMany({
+        where: {
+          confidenceScore: { gte: 0.7 }
+        },
+        orderBy: { updatedAt: "desc" },
+        include: LEGACY_PREDICTION_INCLUDE,
+        take: 60
+      }),
+      12000
+    ).catch(() => []);
   }
 
   private buildPublishedWhere(
@@ -834,7 +861,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v12:published:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v13:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -915,13 +942,29 @@ export class PredictionsService {
       }
 
       normalizedRows = rows.map((row) => normalizePublishedRow(row));
+      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
+        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take);
+        if (legacyRows.length > 0) {
+          this.logger.warn(
+            `Public predictions fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
+          );
+          normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+        }
+      }
     } catch {
       const stale = await this.cache.get<unknown[]>(stableCacheKey);
       if (stale) {
         await this.cache.set(cacheKey, stale, 12, ["predictions", "market-analysis"]);
         return stale;
       }
-      return [];
+      if (!this.allowLegacyPublicFallback) {
+        return [];
+      }
+      const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
+      if (legacyRows.length === 0) {
+        return [];
+      }
+      normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
     }
     const expanded = this.expandRows(normalizedRows);
 
@@ -968,7 +1011,14 @@ export class PredictionsService {
       return [] as PublishedPredictionRecord[];
     });
 
-    const normalizedRows: NormalizedPredictionRow[] = rows.map((row) => normalizePublishedRow(row));
+    let normalizedRows: NormalizedPredictionRow[] = rows.map((row) => normalizePublishedRow(row));
+
+    if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
+      const legacyRows = await this.fetchLegacyRowsByMatch(matchId);
+      if (legacyRows.length > 0) {
+        normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      }
+    }
 
     if (normalizedRows.length === 0) {
       return [];
@@ -1012,6 +1062,15 @@ export class PredictionsService {
       return [] as PublishedPredictionRecord[];
     });
 
-    return rows.map((row) => normalizePublishedRow(row));
+    if (rows.length > 0) {
+      return rows.map((row) => normalizePublishedRow(row));
+    }
+
+    if (!this.allowLegacyPublicFallback) {
+      return [];
+    }
+
+    const legacyRows = await this.fetchLegacyHighConfidenceRows();
+    return legacyRows.map((row) => normalizeLegacyRow(row));
   }
 }
