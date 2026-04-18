@@ -220,6 +220,45 @@ describe("AuthService", () => {
     issueTokenPairSpy.mockRestore();
   });
 
+  it("keeps login working when security/audit persistence fails", async () => {
+    const passwordHash = await bcrypt.hash("pass123", 10);
+    usersService.findByEmail.mockResolvedValue({
+      id: "u-admin",
+      email: "admin@example.com",
+      passwordHash,
+      isActive: true,
+      role: { name: "admin" }
+    });
+    usersService.getRecentLoginFailures.mockRejectedValue(new Error("relation login_attempts does not exist"));
+    usersService.createLoginAttempt.mockRejectedValue(new Error("relation login_attempts does not exist"));
+    securityEventService.emitSecurityEvent.mockRejectedValue(new Error("relation security_events does not exist"));
+
+    const issueTokenPairSpy = jest.spyOn(service as any, "issueTokenPair").mockResolvedValue({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      actorType: AuthActorType.ADMIN,
+      sessionId: "session-1"
+    });
+
+    const result = await service.login("admin@example.com", "pass123", {
+      actorTypeHint: AuthActorType.ADMIN,
+      ipAddress: "10.10.10.10",
+      userAgent: "jest"
+    });
+
+    expect(result).toMatchObject({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      user: {
+        email: "admin@example.com",
+        role: "admin"
+      },
+      sessionId: "session-1"
+    });
+
+    issueTokenPairSpy.mockRestore();
+  });
+
   it("rotates refresh token when request is valid", async () => {
     jwtService.verifyAsync
       .mockResolvedValueOnce({ sub: "u1", role: "admin", type: "refresh", jti: "jti-old", sid: "s1", fid: "f1", at: "ADMIN" })

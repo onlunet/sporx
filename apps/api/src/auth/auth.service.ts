@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import {
   AccessActorType,
   AdminStepUpStatus,
@@ -97,6 +97,8 @@ function parseDurationToMs(raw: string | undefined, fallbackMs: number) {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -107,6 +109,31 @@ export class AuthService {
 
   private mapActorTypeForSecurity(actorType: AuthActorType) {
     return actorType === AuthActorType.ADMIN ? AccessActorType.ADMIN : AccessActorType.USER;
+  }
+
+  private describeError(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
+  }
+
+  private async runBestEffort<T>(operation: string, run: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await run();
+    } catch (error) {
+      this.logger.warn(`[auth_resilience] ${operation} skipped: ${this.describeError(error)}`);
+      return undefined;
+    }
+  }
+
+  private async runBestEffortWithFallback<T>(operation: string, run: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      this.logger.warn(`[auth_resilience] ${operation} fallback: ${this.describeError(error)}`);
+      return fallback;
+    }
   }
 
   private throwAuthFailed(): never {
@@ -336,7 +363,11 @@ export class AuthService {
     }
 
     const since = new Date(Date.now() - this.getLockWindowMinutes(input.actorType) * 60 * 1000);
-    const attempts = await this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since);
+    const attempts = await this.runBestEffortWithFallback(
+      "get_recent_login_failures",
+      () => this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since),
+      []
+    );
     const relevantAttempts = this.filterRelevantLoginFailures(attempts, input.email, input.ipAddress);
     const nowMs = Date.now();
     const activeLockUntil = relevantAttempts
@@ -349,16 +380,18 @@ export class AuthService {
       return;
     }
 
-    await this.usersService.createLoginAttempt({
-      userId: input.userId,
-      actorType: input.actorType,
-      email: input.email,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-      result: LoginAttemptResult.LOCKED,
-      reason: "active_lockout",
-      lockedUntil: new Date(activeLockUntil)
-    });
+    await this.runBestEffort("record_active_lockout_attempt", () =>
+      this.usersService.createLoginAttempt({
+        userId: input.userId,
+        actorType: input.actorType,
+        email: input.email,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        result: LoginAttemptResult.LOCKED,
+        reason: "active_lockout",
+        lockedUntil: new Date(activeLockUntil)
+      })
+    );
 
     this.throwAuthFailed();
   }
@@ -371,39 +404,47 @@ export class AuthService {
     userAgent?: string;
     reason: string;
   }) {
-    await this.usersService.createLoginAttempt({
-      userId: input.userId,
-      actorType: input.actorType,
-      email: input.email,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-      result: LoginAttemptResult.FAILURE,
-      reason: input.reason
-    });
-
-    await this.securityEventService.emitSecurityEvent({
-      sourceDomain: SecurityEventSourceDomain.AUTH,
-      eventType: input.actorType === AuthActorType.ADMIN ? "admin_login_failure" : "login_failure",
-      severity: input.actorType === AuthActorType.ADMIN ? SecurityEventSeverity.HIGH : SecurityEventSeverity.MEDIUM,
-      actorType: this.mapActorTypeForSecurity(input.actorType),
-      actorId: input.userId ?? null,
-      targetResourceType: "auth",
-      reason: input.reason,
-      context: {
+    await this.runBestEffort("record_login_failure_attempt", () =>
+      this.usersService.createLoginAttempt({
+        userId: input.userId,
+        actorType: input.actorType,
+        email: input.email,
         ipAddress: input.ipAddress,
-        userAgent: input.userAgent ?? null
-      },
-      metadata: {
-        email: input.email
-      }
-    });
+        userAgent: input.userAgent,
+        result: LoginAttemptResult.FAILURE,
+        reason: input.reason
+      })
+    );
+
+    await this.runBestEffort("emit_login_failure_security_event", () =>
+      this.securityEventService.emitSecurityEvent({
+        sourceDomain: SecurityEventSourceDomain.AUTH,
+        eventType: input.actorType === AuthActorType.ADMIN ? "admin_login_failure" : "login_failure",
+        severity: input.actorType === AuthActorType.ADMIN ? SecurityEventSeverity.HIGH : SecurityEventSeverity.MEDIUM,
+        actorType: this.mapActorTypeForSecurity(input.actorType),
+        actorId: input.userId ?? null,
+        targetResourceType: "auth",
+        reason: input.reason,
+        context: {
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent ?? null
+        },
+        metadata: {
+          email: input.email
+        }
+      })
+    );
 
     if (!this.isAuthLockoutEnabled()) {
       return;
     }
 
     const since = new Date(Date.now() - this.getLockWindowMinutes(input.actorType) * 60 * 1000);
-    const failures = await this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since);
+    const failures = await this.runBestEffortWithFallback(
+      "get_recent_login_failures_after_failure",
+      () => this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since),
+      []
+    );
     const relevantFailures = this.filterRelevantLoginFailures(failures, input.email, input.ipAddress);
     const failureSignals = relevantFailures.filter((item) => item.result === LoginAttemptResult.FAILURE);
     const threshold = this.getLockThreshold(input.actorType);
@@ -412,32 +453,36 @@ export class AuthService {
     }
 
     const lockedUntil = new Date(Date.now() + this.getLockMinutes(input.actorType) * 60 * 1000);
-    await this.usersService.createLoginAttempt({
-      userId: input.userId,
-      actorType: input.actorType,
-      email: input.email,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-      result: LoginAttemptResult.LOCKED,
-      reason: "threshold_reached",
-      lockedUntil,
-      riskScore: 100
-    });
+    await this.runBestEffort("record_threshold_lockout_attempt", () =>
+      this.usersService.createLoginAttempt({
+        userId: input.userId,
+        actorType: input.actorType,
+        email: input.email,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        result: LoginAttemptResult.LOCKED,
+        reason: "threshold_reached",
+        lockedUntil,
+        riskScore: 100
+      })
+    );
 
-    await this.usersService.createAuthRiskEvent({
-      userId: input.userId,
-      actorType: input.actorType,
-      riskType: AuthRiskType.BRUTE_FORCE,
-      severity: AuthRiskSeverity.HIGH,
-      reason: "login_threshold_reached",
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
-          metadata: {
-            failures: failureSignals.length,
-            threshold,
-            lockedUntil: lockedUntil.toISOString()
-          }
-    });
+    await this.runBestEffort("record_login_threshold_risk_event", () =>
+      this.usersService.createAuthRiskEvent({
+        userId: input.userId,
+        actorType: input.actorType,
+        riskType: AuthRiskType.BRUTE_FORCE,
+        severity: AuthRiskSeverity.HIGH,
+        reason: "login_threshold_reached",
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        metadata: {
+          failures: failureSignals.length,
+          threshold,
+          lockedUntil: lockedUntil.toISOString()
+        }
+      })
+    );
   }
 
   private async issueTokenPair(
@@ -701,15 +746,17 @@ export class AuthService {
           userAgent,
           reason: "admin_ip_not_allowed"
         });
-        await this.usersService.createAuthRiskEvent({
-          userId: activeUser.id,
-          actorType,
-          riskType: AuthRiskType.ADMIN_IP_BLOCKED,
-          severity: AuthRiskSeverity.HIGH,
-          reason: "admin_ip_restriction_blocked_login",
-          ipAddress,
-          userAgent
-        });
+        await this.runBestEffort("record_admin_ip_blocked_login_risk_event", () =>
+          this.usersService.createAuthRiskEvent({
+            userId: activeUser.id,
+            actorType,
+            riskType: AuthRiskType.ADMIN_IP_BLOCKED,
+            severity: AuthRiskSeverity.HIGH,
+            reason: "admin_ip_restriction_blocked_login",
+            ipAddress,
+            userAgent
+          })
+        );
         this.throwAuthFailed();
       }
     }
@@ -727,33 +774,37 @@ export class AuthService {
       this.throwAuthFailed();
     }
 
-    await this.usersService.createLoginAttempt({
-      userId: activeUser.id,
-      actorType,
-      email: normalizedEmail,
-      ipAddress,
-      userAgent,
-      result: LoginAttemptResult.SUCCESS,
-      reason: "login_success"
-    });
-
-    await this.securityEventService.emitSecurityEvent({
-      sourceDomain: SecurityEventSourceDomain.AUTH,
-      eventType: actorType === AuthActorType.ADMIN ? "admin_login_success" : "login_success",
-      severity: SecurityEventSeverity.INFO,
-      actorType: this.mapActorTypeForSecurity(actorType),
-      actorId: activeUser.id,
-      targetResourceType: "auth",
-      reason: "login_success",
-      context: {
+    await this.runBestEffort("record_login_success_attempt", () =>
+      this.usersService.createLoginAttempt({
+        userId: activeUser.id,
+        actorType,
+        email: normalizedEmail,
         ipAddress,
-        userAgent: userAgent ?? null,
-        environment: context?.environment ?? null
-      },
-      metadata: {
-        email: activeUser.email
-      }
-    });
+        userAgent,
+        result: LoginAttemptResult.SUCCESS,
+        reason: "login_success"
+      })
+    );
+
+    await this.runBestEffort("emit_login_success_security_event", () =>
+      this.securityEventService.emitSecurityEvent({
+        sourceDomain: SecurityEventSourceDomain.AUTH,
+        eventType: actorType === AuthActorType.ADMIN ? "admin_login_success" : "login_success",
+        severity: SecurityEventSeverity.INFO,
+        actorType: this.mapActorTypeForSecurity(actorType),
+        actorId: activeUser.id,
+        targetResourceType: "auth",
+        reason: "login_success",
+        context: {
+          ipAddress,
+          userAgent: userAgent ?? null,
+          environment: context?.environment ?? null
+        },
+        metadata: {
+          email: activeUser.email
+        }
+      })
+    );
 
     const { accessToken, refreshToken, sessionId } = await this.issueTokenPair(activeUser, actorType, context);
 
@@ -776,21 +827,28 @@ export class AuthService {
     const ipAddress = context?.ipAddress ?? "unknown";
     const userAgent = context?.userAgent;
 
-    if (await this.incidentReadinessService.isEmergencyControlActive("disable_refresh_global")) {
-      await this.securityEventService.emitSecurityEvent({
-        sourceDomain: SecurityEventSourceDomain.AUTH,
-        eventType: "refresh_blocked_by_emergency_control",
-        severity: SecurityEventSeverity.CRITICAL,
-        actorType: this.mapActorTypeForSecurity(actorType),
-        actorId: payload.sub ?? null,
-        targetResourceType: "auth_refresh",
-        reason: "disable_refresh_global",
-        context: {
-          ipAddress,
-          userAgent: userAgent ?? null,
-          environment: context?.environment ?? null
-        }
-      });
+    const disableRefreshGlobally = await this.runBestEffortWithFallback(
+      "check_disable_refresh_emergency_control",
+      () => this.incidentReadinessService.isEmergencyControlActive("disable_refresh_global"),
+      false
+    );
+    if (disableRefreshGlobally) {
+      await this.runBestEffort("emit_refresh_blocked_security_event", () =>
+        this.securityEventService.emitSecurityEvent({
+          sourceDomain: SecurityEventSourceDomain.AUTH,
+          eventType: "refresh_blocked_by_emergency_control",
+          severity: SecurityEventSeverity.CRITICAL,
+          actorType: this.mapActorTypeForSecurity(actorType),
+          actorId: payload.sub ?? null,
+          targetResourceType: "auth_refresh",
+          reason: "disable_refresh_global",
+          context: {
+            ipAddress,
+            userAgent: userAgent ?? null,
+            environment: context?.environment ?? null
+          }
+        })
+      );
       this.throwAuthFailed();
     }
 
@@ -812,7 +870,9 @@ export class AuthService {
         storedToken.revokedReason === "rotated" && Boolean(storedToken.replacedByTokenId) && inGracePeriod;
 
       if (!likelyRetry) {
-        await this.processReuseDetection(storedToken, actorType, context);
+        await this.runBestEffort("process_refresh_reuse_detection", () =>
+          this.processReuseDetection(storedToken, actorType, context)
+        );
       }
       this.throwAuthFailed();
     }
@@ -826,17 +886,19 @@ export class AuthService {
     if (actorType === AuthActorType.ADMIN && this.isStrictAdminAuthEnabled() && this.isAdminIpRestrictionEnabled()) {
       const allowed = this.isAdminIpAllowed(ipAddress);
       if (!allowed) {
-        await this.usersService.createAuthRiskEvent({
-          userId: activeUser.id,
-          sessionId: storedToken.sessionId,
-          familyId: storedToken.familyId,
-          actorType,
-          riskType: AuthRiskType.ADMIN_IP_BLOCKED,
-          severity: AuthRiskSeverity.HIGH,
-          reason: "admin_ip_restriction_blocked_refresh",
-          ipAddress,
-          userAgent
-        });
+        await this.runBestEffort("record_admin_ip_blocked_refresh_risk_event", () =>
+          this.usersService.createAuthRiskEvent({
+            userId: activeUser.id,
+            sessionId: storedToken.sessionId,
+            familyId: storedToken.familyId,
+            actorType,
+            riskType: AuthRiskType.ADMIN_IP_BLOCKED,
+            severity: AuthRiskSeverity.HIGH,
+            reason: "admin_ip_restriction_blocked_refresh",
+            ipAddress,
+            userAgent
+          })
+        );
         this.throwAuthFailed();
       }
     }
@@ -872,15 +934,17 @@ export class AuthService {
 
     if (allSessions) {
       const result = await this.usersService.revokeAllAuthSessions(payload.sub, actorType, "global_logout");
-      await this.usersService.createAuthRiskEvent({
-        userId: payload.sub,
-        actorType,
-        riskType: AuthRiskType.GLOBAL_LOGOUT,
-        severity: AuthRiskSeverity.INFO,
-        reason: "global_logout",
-        ipAddress,
-        userAgent
-      });
+      await this.runBestEffort("record_global_logout_risk_event", () =>
+        this.usersService.createAuthRiskEvent({
+          userId: payload.sub,
+          actorType,
+          riskType: AuthRiskType.GLOBAL_LOGOUT,
+          severity: AuthRiskSeverity.INFO,
+          reason: "global_logout",
+          ipAddress,
+          userAgent
+        })
+      );
       return { revoked: result.count };
     }
 
@@ -892,7 +956,23 @@ export class AuthService {
     const token = match.token;
     if (token.sessionId) {
       const result = await this.usersService.revokeAuthSession(token.sessionId, "logout");
-      await this.usersService.createRefreshTokenEvent({
+      await this.runBestEffort("record_refresh_event_logout_session", () =>
+        this.usersService.createRefreshTokenEvent({
+          userId: token.userId,
+          familyId: token.familyId,
+          tokenId: token.id,
+          eventType: RefreshTokenEventType.REVOKED,
+          reason: "logout",
+          ipAddress,
+          userAgent
+        })
+      );
+      return { revoked: result.count };
+    }
+
+    const result = await this.usersService.revokeRefreshTokenById(token.id, "logout");
+    await this.runBestEffort("record_refresh_event_logout_token", () =>
+      this.usersService.createRefreshTokenEvent({
         userId: token.userId,
         familyId: token.familyId,
         tokenId: token.id,
@@ -900,20 +980,8 @@ export class AuthService {
         reason: "logout",
         ipAddress,
         userAgent
-      });
-      return { revoked: result.count };
-    }
-
-    const result = await this.usersService.revokeRefreshTokenById(token.id, "logout");
-    await this.usersService.createRefreshTokenEvent({
-      userId: token.userId,
-      familyId: token.familyId,
-      tokenId: token.id,
-      eventType: RefreshTokenEventType.REVOKED,
-      reason: "logout",
-      ipAddress,
-      userAgent
-    });
+      })
+    );
     return { revoked: result.count };
   }
 
