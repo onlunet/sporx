@@ -31,6 +31,24 @@ type ProviderHealth = {
   message?: string;
 };
 
+type ProviderCatalogItem = {
+  key: string;
+  isActive: boolean;
+};
+
+function buildProviderHealthFallback(providers: ProviderCatalogItem[]): ProviderHealth[] {
+  const checkedAt = new Date().toISOString();
+  return providers
+    .filter((provider) => provider.isActive)
+    .map((provider) => ({
+      provider: provider.key,
+      status: "degraded",
+      latencyMs: 0,
+      checkedAt,
+      message: "Sağlık verisi geçici olarak alınamadı."
+    }));
+}
+
 function MetricCard({
   title,
   value,
@@ -135,15 +153,26 @@ function DataTable({
 }
 
 export default async function AdminDashboardPage() {
-  const [jobsResult, providersResult, lowConfidenceResult, failedResult] = await Promise.all([
+  const [jobsResult, providersResult, providersCatalogResult, lowConfidenceResult, failedResult] = await Promise.all([
     adminApiGet<IngestionRun[]>("/api/v1/admin/ingestion/jobs"),
     adminApiGet<ProviderHealth[]>("/api/v1/admin/providers/health"),
+    adminApiGet<ProviderCatalogItem[]>("/api/v1/admin/providers"),
     adminApiGet<unknown[]>("/api/v1/admin/predictions/low-confidence"),
     adminApiGet<unknown[]>("/api/v1/admin/predictions/failed")
   ]);
 
   const jobs = jobsResult.ok && Array.isArray(jobsResult.data) ? jobsResult.data : [];
-  const providers = providersResult.ok && Array.isArray(providersResult.data) ? providersResult.data : [];
+  const directProviders = providersResult.ok && Array.isArray(providersResult.data) ? providersResult.data : [];
+  const fallbackProviders =
+    providersCatalogResult.ok && Array.isArray(providersCatalogResult.data)
+      ? buildProviderHealthFallback(providersCatalogResult.data)
+      : [];
+  const providers =
+    directProviders.length > 0
+      ? directProviders
+      : providersResult.status >= 500 || !providersResult.ok
+        ? fallbackProviders
+        : directProviders;
   const lowConfidence = lowConfidenceResult.ok && Array.isArray(lowConfidenceResult.data) ? lowConfidenceResult.data : [];
   const failedPredictions = failedResult.ok && Array.isArray(failedResult.data) ? failedResult.data : [];
 
@@ -200,7 +229,7 @@ export default async function AdminDashboardPage() {
         />
       </div>
 
-      {!jobsResult.ok || !providersResult.ok || !lowConfidenceResult.ok || !failedResult.ok ? (
+      {!jobsResult.ok || !lowConfidenceResult.ok || !failedResult.ok ? (
         <div className="flex items-center gap-3 rounded-xl border border-admin-warning/20 bg-admin-warning/10 p-4 text-admin-warning">
           <AlertTriangle className="h-5 w-5 flex-shrink-0" />
           <p className="text-sm">Bazı dashboard verileri alınamadı. Ayrıntılar için ilgili menü sayfasını kontrol edin.</p>

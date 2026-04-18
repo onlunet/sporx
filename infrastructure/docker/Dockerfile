@@ -29,4 +29,4 @@ COPY --from=builder /app/packages ./packages
 COPY package.json tsconfig.base.json .
 ARG TARGET=api
 ENV TARGET=${TARGET}
-CMD ["sh", "-c", "if [ \"$TARGET\" = \"api\" ]; then node apps/api/dist/apps/api/src/main.js; elif [ \"$TARGET\" = \"worker\" ]; then node apps/api/dist/apps/api/src/worker.js; elif [ \"$TARGET\" = \"public-web\" ]; then npm run -w @sporx/public-web start; else npm run -w @sporx/admin-web start; fi"]
+CMD ["sh", "-c", "if [ \"$TARGET\" = \"api\" ]; then npm run -w @sporx/api prisma:migrate:deploy && node apps/api/dist/apps/api/src/main.js; elif [ \"$TARGET\" = \"worker\" ]; then node apps/api/dist/apps/api/src/worker.js; elif [ \"$TARGET\" = \"public-web\" ]; then npm run -w @sporx/public-web start; else npm run -w @sporx/admin-web start; fi"]

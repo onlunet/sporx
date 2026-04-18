@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const strictSecurityHeaders = process.env.STRICT_SECURITY_HEADERS_ENABLED !== "false";
 const contentSecurityPolicy =
   process.env.PUBLIC_WEB_CSP ??
-  "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'";
+  "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:;";
 
 function buildSecurityHeaders() {
   if (!strictSecurityHeaders) {
