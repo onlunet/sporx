@@ -559,6 +559,7 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
     summaryFromExplanation.length > 0
       ? summaryFromExplanation
       : `${row.match.homeTeam.name} - ${row.match.awayTeam.name}: published ${row.market} tahmini.`;
+  const summarySafe = normalizeFallbackSummary(summary, row.match, calibratedProbabilities ?? probabilities);
 
   return {
     matchId: row.matchId,
@@ -568,7 +569,7 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
     rawProbabilities,
     expectedScore,
     confidenceScore: row.predictionRun.confidence,
-    summary,
+    summary: summarySafe,
     riskFlags: row.predictionRun.riskFlagsJson,
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.publishedAt ?? row.predictionRun.createdAt,
