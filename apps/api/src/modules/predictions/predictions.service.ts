@@ -362,6 +362,22 @@ type NormalizedPredictionRow = {
   match: LegacyPredictionRecord["match"];
 };
 
+type PredictionRunFallbackRecord = {
+  id: string;
+  matchId: string;
+  market: string;
+  line: number | null;
+  lineKey: string;
+  horizon: string;
+  modelVersionId: string | null;
+  probability: number;
+  confidence: number;
+  riskFlagsJson: unknown;
+  explanationJson: unknown;
+  createdAt: Date;
+  match: LegacyPredictionRecord["match"];
+};
+
 const PUBLISHED_PREDICTION_INCLUDE = {
   predictionRun: {
     select: {
@@ -389,6 +405,22 @@ const PUBLISHED_PREDICTION_INCLUDE = {
 } as const;
 
 const LEGACY_PREDICTION_INCLUDE = {
+  match: {
+    select: {
+      ...PREDICTION_MATCH_SELECT,
+      q1HomeScore: true,
+      q1AwayScore: true,
+      q2HomeScore: true,
+      q2AwayScore: true,
+      q3HomeScore: true,
+      q3AwayScore: true,
+      q4HomeScore: true,
+      q4AwayScore: true
+    }
+  }
+} as const;
+
+const PREDICTION_RUN_FALLBACK_INCLUDE = {
   match: {
     select: {
       ...PREDICTION_MATCH_SELECT,
@@ -497,6 +529,42 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
     riskFlags: row.riskFlags,
     avoidReason: row.avoidReason,
     updatedAt: row.updatedAt,
+    match: row.match
+  };
+}
+
+function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
+  const explanation = asRecord(row.explanationJson);
+  const probabilitiesFromExplanation = explanation ? explanation.probabilities : null;
+  const calibratedFromExplanation = explanation ? explanation.calibratedProbabilities : null;
+  const rawFromExplanation = explanation ? explanation.rawProbabilities : null;
+  const expectedScoreFromExplanation = explanation ? explanation.expectedScore : null;
+  const summaryFromExplanation = explanation && typeof explanation.summary === "string" ? explanation.summary : "";
+  const avoidReasonFromExplanation =
+    explanation && typeof explanation.avoidReason === "string" ? explanation.avoidReason : null;
+
+  const fallbackProbabilities = fallbackProbabilitiesByMarket(row.market, row.probability, explanation);
+  const probabilities = probabilitiesFromExplanation ?? calibratedFromExplanation ?? fallbackProbabilities;
+  const calibratedProbabilities = calibratedFromExplanation ?? probabilities;
+  const rawProbabilities = rawFromExplanation ?? probabilities;
+  const expectedScore = expectedScoreFromExplanation ?? null;
+  const summary =
+    summaryFromExplanation.length > 0
+      ? summaryFromExplanation
+      : `${row.match.homeTeam.name} - ${row.match.awayTeam.name}: prediction run ${row.market} tahmini.`;
+
+  return {
+    matchId: row.matchId,
+    modelVersionId: row.modelVersionId,
+    probabilities,
+    calibratedProbabilities,
+    rawProbabilities,
+    expectedScore,
+    confidenceScore: row.confidence,
+    summary,
+    riskFlags: row.riskFlagsJson,
+    avoidReason: avoidReasonFromExplanation,
+    updatedAt: row.createdAt,
     match: row.match
   };
 }
@@ -710,6 +778,93 @@ export class PredictionsService {
     ).catch(() => []);
   }
 
+  private dedupePredictionRuns(rows: PredictionRunFallbackRecord[]) {
+    const deduped = new Map<string, PredictionRunFallbackRecord>();
+    for (const row of rows) {
+      const dedupeKey = [row.matchId, row.market, row.lineKey, row.horizon].join("|");
+      const existing = deduped.get(dedupeKey);
+      if (!existing || row.createdAt.getTime() >= existing.createdAt.getTime()) {
+        deduped.set(dedupeKey, row);
+      }
+    }
+    return Array.from(deduped.values());
+  }
+
+  private async fetchPredictionRunRows(
+    effectiveStatuses: MatchStatus[],
+    sportCode: "football" | "basketball" | undefined,
+    take: number,
+    matchIds?: string[]
+  ): Promise<PredictionRunFallbackRecord[]> {
+    const baseWhere: Prisma.PredictionRunWhereInput = {
+      match: {
+        status: { in: effectiveStatuses },
+        ...(sportCode ? { sport: { code: sportCode } } : {})
+      }
+    };
+    const scopedWhere: Prisma.PredictionRunWhereInput =
+      matchIds && matchIds.length > 0 ? { ...baseWhere, matchId: { in: matchIds } } : baseWhere;
+    const maxRows = Math.max(take * 3, 180);
+
+    const rows = await queryWithTimeout(
+      this.prisma.predictionRun.findMany({
+        where: scopedWhere,
+        orderBy: { createdAt: "desc" },
+        include: PREDICTION_RUN_FALLBACK_INCLUDE,
+        take: maxRows
+      }),
+      12000
+    ).catch(() => [] as PredictionRunFallbackRecord[]);
+
+    if (rows.length > 0) {
+      return this.dedupePredictionRuns(rows as PredictionRunFallbackRecord[]);
+    }
+
+    if (!matchIds || matchIds.length === 0) {
+      return [];
+    }
+
+    const relaxedRows = await queryWithTimeout(
+      this.prisma.predictionRun.findMany({
+        where: baseWhere,
+        orderBy: { createdAt: "desc" },
+        include: PREDICTION_RUN_FALLBACK_INCLUDE,
+        take: maxRows
+      }),
+      12000
+    ).catch(() => [] as PredictionRunFallbackRecord[]);
+
+    return this.dedupePredictionRuns(relaxedRows as PredictionRunFallbackRecord[]);
+  }
+
+  private async fetchPredictionRunRowsByMatch(matchId: string): Promise<PredictionRunFallbackRecord[]> {
+    const rows = await queryWithTimeout(
+      this.prisma.predictionRun.findMany({
+        where: { matchId },
+        orderBy: { createdAt: "desc" },
+        include: PREDICTION_RUN_FALLBACK_INCLUDE,
+        take: 120
+      }),
+      12000
+    ).catch(() => [] as PredictionRunFallbackRecord[]);
+
+    return this.dedupePredictionRuns(rows as PredictionRunFallbackRecord[]);
+  }
+
+  private async fetchPredictionRunHighConfidenceRows(): Promise<PredictionRunFallbackRecord[]> {
+    const rows = await queryWithTimeout(
+      this.prisma.predictionRun.findMany({
+        where: { confidence: { gte: 0.7 } },
+        orderBy: { createdAt: "desc" },
+        include: PREDICTION_RUN_FALLBACK_INCLUDE,
+        take: 120
+      }),
+      12000
+    ).catch(() => [] as PredictionRunFallbackRecord[]);
+
+    return this.dedupePredictionRuns(rows as PredictionRunFallbackRecord[]);
+  }
+
   private buildPublishedWhere(
     baseWhere: Prisma.PublishedPredictionWhereInput,
     includeDecisionGate: boolean
@@ -861,7 +1016,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v13:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v14:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -949,6 +1104,14 @@ export class PredictionsService {
             `Public predictions fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
           );
           normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+        } else {
+          const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
+          if (runRows.length > 0) {
+            this.logger.warn(
+              `Public predictions prediction-run fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
+            );
+            normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+          }
         }
       }
     } catch {
@@ -961,10 +1124,15 @@ export class PredictionsService {
         return [];
       }
       const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
-      if (legacyRows.length === 0) {
-        return [];
+      if (legacyRows.length > 0) {
+        normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      } else {
+        const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
+        if (runRows.length === 0) {
+          return [];
+        }
+        normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
       }
-      normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
     }
     const expanded = this.expandRows(normalizedRows);
 
@@ -1017,6 +1185,11 @@ export class PredictionsService {
       const legacyRows = await this.fetchLegacyRowsByMatch(matchId);
       if (legacyRows.length > 0) {
         normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      } else {
+        const runRows = await this.fetchPredictionRunRowsByMatch(matchId);
+        if (runRows.length > 0) {
+          normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+        }
       }
     }
 
@@ -1071,6 +1244,11 @@ export class PredictionsService {
     }
 
     const legacyRows = await this.fetchLegacyHighConfidenceRows();
-    return legacyRows.map((row) => normalizeLegacyRow(row));
+    if (legacyRows.length > 0) {
+      return legacyRows.map((row) => normalizeLegacyRow(row));
+    }
+
+    const runRows = await this.fetchPredictionRunHighConfidenceRows();
+    return runRows.map((row) => normalizePredictionRunFallbackRow(row));
   }
 }

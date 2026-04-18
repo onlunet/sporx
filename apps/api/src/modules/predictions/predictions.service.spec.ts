@@ -119,6 +119,65 @@ function createLegacyRow() {
   };
 }
 
+function createPredictionRunRow() {
+  return {
+    id: "run-fallback-1",
+    matchId: "match-run-1",
+    market: "match_outcome",
+    line: null,
+    lineKey: "na",
+    horizon: "pre_match",
+    modelVersionId: "run-model-1",
+    probability: 0.63,
+    confidence: 0.64,
+    riskFlagsJson: [],
+    explanationJson: {
+      summary: "run summary",
+      selectedSide: "home",
+      probabilities: {
+        home: 0.63,
+        draw: 0.21,
+        away: 0.16
+      },
+      calibratedProbabilities: {
+        home: 0.62,
+        draw: 0.22,
+        away: 0.16
+      },
+      rawProbabilities: {
+        home: 0.64,
+        draw: 0.2,
+        away: 0.16
+      },
+      expectedScore: {
+        home: 1.8,
+        away: 1.0
+      }
+    },
+    createdAt: new Date("2026-04-18T11:00:00.000Z"),
+    match: {
+      sport: { code: "football" },
+      status: MatchStatus.scheduled,
+      matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z"),
+      homeScore: null,
+      awayScore: null,
+      halfTimeHomeScore: null,
+      halfTimeAwayScore: null,
+      q1HomeScore: null,
+      q1AwayScore: null,
+      q2HomeScore: null,
+      q2AwayScore: null,
+      q3HomeScore: null,
+      q3AwayScore: null,
+      q4HomeScore: null,
+      q4AwayScore: null,
+      homeTeam: { name: "Run A" },
+      awayTeam: { name: "Run B" },
+      league: { id: "league-run", name: "Run League", code: "RL" }
+    }
+  };
+}
+
 describe("PredictionsService", () => {
   it("public match query returns one row per duplicate published tuple", async () => {
     const prisma = {
@@ -224,6 +283,47 @@ describe("PredictionsService", () => {
     expect(prisma.prediction.findMany).toHaveBeenCalled();
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Legacy A");
+  });
+
+  it("list endpoint falls back to prediction runs when published and legacy are empty", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-run-1", matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      predictionRun: {
+        findMany: jest.fn().mockResolvedValue([createPredictionRunRow()])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expect(prisma.predictionRun.findMany).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+    expect((items[0] as any)?.homeTeam).toBe("Run A");
   });
 
   it("list endpoint requests only approved/manually-forced published decisions", async () => {
