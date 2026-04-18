@@ -5,7 +5,7 @@
     "scripts":  {
                     "dev":  "ts-node src/main.ts",
                     "build":  "npm run prisma:generate && nest build",
-                    "start":  "node dist/apps/api/src/main.js",
+                    "start":  "npm run prisma:migrate:deploy && node dist/apps/api/src/main.js",
                     "worker:dev":  "ts-node src/worker.ts",
                     "worker:start":  "node dist/apps/api/src/worker.js",
                     "lint":  "echo \"No lint for api (flat config pending)\"",
