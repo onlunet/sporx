@@ -100,6 +100,8 @@ describe("AuthService", () => {
     });
     usersService.getRecentLoginFailures.mockResolvedValue([
       {
+        email: "admin@example.com",
+        ipAddress: "127.0.0.1",
         lockedUntil: new Date(Date.now() + 60_000)
       }
     ]);
@@ -112,6 +114,62 @@ describe("AuthService", () => {
         result: "LOCKED"
       })
     );
+  });
+
+  it("does not inherit lockout from a different email on the same ip", async () => {
+    const passwordHash = await bcrypt.hash("pass123", 10);
+    usersService.findByEmail.mockResolvedValue({
+      id: "u-admin",
+      email: "admin@example.com",
+      passwordHash,
+      isActive: true,
+      role: { name: "admin" }
+    });
+    usersService.getRecentLoginFailures.mockResolvedValue([
+      {
+        email: "other-user@example.com",
+        ipAddress: "10.10.10.10",
+        lockedUntil: new Date(Date.now() + 60_000)
+      }
+    ]);
+    usersService.createLoginAttempt.mockResolvedValue({});
+
+    const issueTokenPairSpy = jest.spyOn(service as any, "issueTokenPair").mockResolvedValue({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      actorType: AuthActorType.ADMIN,
+      sessionId: "session-1"
+    });
+
+    const result = await service.login("admin@example.com", "pass123", {
+      actorTypeHint: AuthActorType.ADMIN,
+      ipAddress: "10.10.10.10",
+      userAgent: "jest"
+    });
+
+    expect(result).toMatchObject({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      user: {
+        email: "admin@example.com",
+        role: "admin"
+      },
+      sessionId: "session-1"
+    });
+    expect(usersService.createLoginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorType: AuthActorType.ADMIN,
+        result: "SUCCESS"
+      })
+    );
+    expect(usersService.createLoginAttempt).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorType: AuthActorType.ADMIN,
+        result: "LOCKED"
+      })
+    );
+
+    issueTokenPairSpy.mockRestore();
   });
 
   it("rotates refresh token when request is valid", async () => {

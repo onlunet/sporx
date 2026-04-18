@@ -209,6 +209,26 @@ export class AuthService {
     return parseInteger(process.env.AUTH_REFRESH_RETRY_GRACE_SECONDS, 20);
   }
 
+  private isFailureAttemptRelevant(
+    attempt: { email?: string | null; ipAddress?: string | null },
+    email: string,
+    ipAddress: string
+  ) {
+    const attemptEmail = typeof attempt.email === "string" ? attempt.email.trim().toLowerCase() : "";
+    if (attemptEmail.length > 0) {
+      return attemptEmail === email;
+    }
+    return Boolean(ipAddress) && attempt.ipAddress === ipAddress;
+  }
+
+  private filterRelevantLoginFailures<T extends { email?: string | null; ipAddress?: string | null }>(
+    attempts: T[],
+    email: string,
+    ipAddress: string
+  ) {
+    return attempts.filter((attempt) => this.isFailureAttemptRelevant(attempt, email, ipAddress));
+  }
+
   private isAdminIpAllowed(ipAddress: string) {
     const raw = (process.env.ADMIN_IP_ALLOWLIST ?? "")
       .split(",")
@@ -317,8 +337,9 @@ export class AuthService {
 
     const since = new Date(Date.now() - this.getLockWindowMinutes(input.actorType) * 60 * 1000);
     const attempts = await this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since);
+    const relevantAttempts = this.filterRelevantLoginFailures(attempts, input.email, input.ipAddress);
     const nowMs = Date.now();
-    const activeLockUntil = attempts
+    const activeLockUntil = relevantAttempts
       .map((item) => item.lockedUntil?.getTime() ?? 0)
       .filter((value) => value > nowMs)
       .sort((a, b) => b - a)[0];
@@ -382,8 +403,9 @@ export class AuthService {
 
     const since = new Date(Date.now() - this.getLockWindowMinutes(input.actorType) * 60 * 1000);
     const failures = await this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since);
+    const relevantFailures = this.filterRelevantLoginFailures(failures, input.email, input.ipAddress);
     const threshold = this.getLockThreshold(input.actorType);
-    if (failures.length < threshold) {
+    if (relevantFailures.length < threshold) {
       return;
     }
 
@@ -408,11 +430,11 @@ export class AuthService {
       reason: "login_threshold_reached",
       ipAddress: input.ipAddress,
       userAgent: input.userAgent,
-      metadata: {
-        failures: failures.length,
-        threshold,
-        lockedUntil: lockedUntil.toISOString()
-      }
+          metadata: {
+            failures: relevantFailures.length,
+            threshold,
+            lockedUntil: lockedUntil.toISOString()
+          }
     });
   }
 
