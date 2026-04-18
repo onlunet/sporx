@@ -159,6 +159,58 @@ describe("AccessGovernanceService", () => {
     expect(result.reason).toBe("deny_by_default");
   });
 
+  it("allows admin read fallback when governance storage query fails", async () => {
+    prisma.permissionGrant.findMany.mockRejectedValueOnce(new Error("relation permission_grants does not exist"));
+
+    const result = await service.evaluateAccess(
+      {
+        actorType: AccessActorType.ADMIN,
+        userId: "admin-1",
+        role: "super_admin",
+        environment: "production",
+        ipAddress: "10.0.0.12"
+      },
+      {
+        permission: "security.runtime.read",
+        resourceType: "security",
+        action: "read",
+        scope: {
+          global: false,
+          environment: "production"
+        }
+      }
+    );
+
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBe("governance_backend_error_admin_read_fallback");
+  });
+
+  it("denies non-read action when governance storage query fails", async () => {
+    prisma.permissionGrant.findMany.mockRejectedValueOnce(new Error("relation permission_grants does not exist"));
+
+    const result = await service.evaluateAccess(
+      {
+        actorType: AccessActorType.ADMIN,
+        userId: "admin-2",
+        role: "super_admin",
+        environment: "production",
+        ipAddress: "10.0.0.22"
+      },
+      {
+        permission: "security.runtime.write",
+        resourceType: "security",
+        action: "update",
+        scope: {
+          global: true,
+          environment: "production"
+        }
+      }
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("governance_backend_error");
+  });
+
   it("blocks service identity for unauthorized privileged action", async () => {
     const result = await service.evaluateAccess(
       {

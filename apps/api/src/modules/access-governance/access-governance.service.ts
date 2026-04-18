@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from "@nestjs/common";
+import { ForbiddenException, Injectable, Logger } from "@nestjs/common";
 import {
   AccessActorType,
   PermissionEffect,
@@ -81,6 +81,8 @@ function isStrictEnvironmentName(value: string | undefined | null) {
 
 @Injectable()
 export class AccessGovernanceService {
+  private readonly logger = new Logger(AccessGovernanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly securityEventService: SecurityEventService
@@ -478,133 +480,155 @@ export class AccessGovernanceService {
       };
     }
 
-    const ipAllowed = await this.validateIpAllowlist(actor);
-    if (!ipAllowed) {
+    try {
+      const ipAllowed = await this.validateIpAllowlist(actor);
+      if (!ipAllowed) {
+        return {
+          allowed: false,
+          effect: PermissionEffect.DENY,
+          reason: "ip_allowlist_denied",
+          source: "default"
+        };
+      }
+
+      const now = new Date();
+      const whereBase: Prisma.PermissionGrantWhereInput = {
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        permission: normalizedRequirement.permission,
+        resourceType: normalizedRequirement.resourceType,
+        action: normalizedRequirement.action
+      };
+
+      const directGrants = await this.prisma.permissionGrant.findMany({
+        where: {
+          ...whereBase,
+          actorType: actor.actorType,
+          ...(actor.userId ? { actorId: actor.userId } : {}),
+          ...(actor.serviceIdentityId ? { serviceIdentityId: actor.serviceIdentityId } : {})
+        },
+        orderBy: [{ createdAt: "asc" }]
+      });
+
+      const roleGrants =
+        actor.userId && actor.role
+          ? await this.prisma.permissionGrant.findMany({
+              where: {
+                ...whereBase,
+                role: actor.role,
+                actorType: {
+                  in: [AccessActorType.USER, AccessActorType.ADMIN]
+                }
+              },
+              orderBy: [{ createdAt: "asc" }]
+            })
+          : [];
+
+      const serviceScopes =
+        actor.serviceIdentityId && this.isServiceIdentityScopeEnforced()
+          ? await this.prisma.serviceIdentityScope.findMany({
+              where: {
+                serviceIdentityId: actor.serviceIdentityId,
+                isActive: true,
+                permission: normalizedRequirement.permission,
+                resourceType: normalizedRequirement.resourceType,
+                action: normalizedRequirement.action
+              },
+              orderBy: [{ createdAt: "asc" }]
+            })
+          : [];
+
+      const matchedGrantEffects: Array<{ effect: PermissionEffect; source: AccessEvaluationResult["source"] }> = [];
+      for (const grant of directGrants) {
+        if (!this.matchesScope(this.mapGrantToScope(grant), normalizedRequirement.scope ?? {})) {
+          continue;
+        }
+        matchedGrantEffects.push({
+          effect: grant.effect,
+          source: "grant"
+        });
+      }
+      for (const grant of roleGrants) {
+        if (!this.matchesScope(this.mapGrantToScope(grant), normalizedRequirement.scope ?? {})) {
+          continue;
+        }
+        matchedGrantEffects.push({
+          effect: grant.effect,
+          source: "role_assignment"
+        });
+      }
+      for (const scope of serviceScopes) {
+        if (!this.matchesScope(
+          {
+            global: scope.scopeGlobal,
+            sport: scope.scopeSport,
+            leagueId: scope.scopeLeagueId,
+            market: scope.scopeMarket,
+            horizon: scope.scopeHorizon,
+            environment: scope.scopeEnvironment
+          },
+          normalizedRequirement.scope ?? {}
+        )) {
+          continue;
+        }
+        matchedGrantEffects.push({
+          effect: scope.effect,
+          source: "service_scope"
+        });
+      }
+
+      const deny = matchedGrantEffects.find((item) => item.effect === PermissionEffect.DENY);
+      if (deny) {
+        return {
+          allowed: false,
+          effect: PermissionEffect.DENY,
+          reason: "explicit_deny",
+          source: deny.source
+        };
+      }
+
+      const allow = matchedGrantEffects.find((item) => item.effect === PermissionEffect.ALLOW);
+      if (allow) {
+        return {
+          allowed: true,
+          effect: PermissionEffect.ALLOW,
+          reason: "explicit_allow",
+          source: allow.source
+        };
+      }
+
+      const policyMatch = await this.evaluatePolicyMatrix(actor, normalizedRequirement);
+      if (policyMatch) {
+        return policyMatch;
+      }
+
       return {
         allowed: false,
         effect: PermissionEffect.DENY,
-        reason: "ip_allowlist_denied",
+        reason: "deny_by_default",
+        source: "default"
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Access governance evaluation backend error for permission="${normalizedRequirement.permission}" actorType="${actor.actorType}": ${errorMessage}`
+      );
+      const isAdminReadFallback = actor.actorType === AccessActorType.ADMIN && normalizedRequirement.action === "read";
+      if (isAdminReadFallback) {
+        return {
+          allowed: true,
+          effect: PermissionEffect.ALLOW,
+          reason: "governance_backend_error_admin_read_fallback",
+          source: "default"
+        };
+      }
+      return {
+        allowed: false,
+        effect: PermissionEffect.DENY,
+        reason: "governance_backend_error",
         source: "default"
       };
     }
-
-    const now = new Date();
-    const whereBase: Prisma.PermissionGrantWhereInput = {
-      revokedAt: null,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      permission: normalizedRequirement.permission,
-      resourceType: normalizedRequirement.resourceType,
-      action: normalizedRequirement.action
-    };
-
-    const directGrants = await this.prisma.permissionGrant.findMany({
-      where: {
-        ...whereBase,
-        actorType: actor.actorType,
-        ...(actor.userId ? { actorId: actor.userId } : {}),
-        ...(actor.serviceIdentityId ? { serviceIdentityId: actor.serviceIdentityId } : {})
-      },
-      orderBy: [{ createdAt: "asc" }]
-    });
-
-    const roleGrants =
-      actor.userId && actor.role
-        ? await this.prisma.permissionGrant.findMany({
-            where: {
-              ...whereBase,
-              role: actor.role,
-              actorType: {
-                in: [AccessActorType.USER, AccessActorType.ADMIN]
-              }
-            },
-            orderBy: [{ createdAt: "asc" }]
-          })
-        : [];
-
-    const serviceScopes =
-      actor.serviceIdentityId && this.isServiceIdentityScopeEnforced()
-        ? await this.prisma.serviceIdentityScope.findMany({
-            where: {
-              serviceIdentityId: actor.serviceIdentityId,
-              isActive: true,
-              permission: normalizedRequirement.permission,
-              resourceType: normalizedRequirement.resourceType,
-              action: normalizedRequirement.action
-            },
-            orderBy: [{ createdAt: "asc" }]
-          })
-        : [];
-
-    const matchedGrantEffects: Array<{ effect: PermissionEffect; source: AccessEvaluationResult["source"] }> = [];
-    for (const grant of directGrants) {
-      if (!this.matchesScope(this.mapGrantToScope(grant), normalizedRequirement.scope ?? {})) {
-        continue;
-      }
-      matchedGrantEffects.push({
-        effect: grant.effect,
-        source: "grant"
-      });
-    }
-    for (const grant of roleGrants) {
-      if (!this.matchesScope(this.mapGrantToScope(grant), normalizedRequirement.scope ?? {})) {
-        continue;
-      }
-      matchedGrantEffects.push({
-        effect: grant.effect,
-        source: "role_assignment"
-      });
-    }
-    for (const scope of serviceScopes) {
-      if (!this.matchesScope(
-        {
-          global: scope.scopeGlobal,
-          sport: scope.scopeSport,
-          leagueId: scope.scopeLeagueId,
-          market: scope.scopeMarket,
-          horizon: scope.scopeHorizon,
-          environment: scope.scopeEnvironment
-        },
-        normalizedRequirement.scope ?? {}
-      )) {
-        continue;
-      }
-      matchedGrantEffects.push({
-        effect: scope.effect,
-        source: "service_scope"
-      });
-    }
-
-    const deny = matchedGrantEffects.find((item) => item.effect === PermissionEffect.DENY);
-    if (deny) {
-      return {
-        allowed: false,
-        effect: PermissionEffect.DENY,
-        reason: "explicit_deny",
-        source: deny.source
-      };
-    }
-
-    const allow = matchedGrantEffects.find((item) => item.effect === PermissionEffect.ALLOW);
-    if (allow) {
-      return {
-        allowed: true,
-        effect: PermissionEffect.ALLOW,
-        reason: "explicit_allow",
-        source: allow.source
-      };
-    }
-
-    const policyMatch = await this.evaluatePolicyMatrix(actor, normalizedRequirement);
-    if (policyMatch) {
-      return policyMatch;
-    }
-
-    return {
-      allowed: false,
-      effect: PermissionEffect.DENY,
-      reason: "deny_by_default",
-      source: "default"
-    };
   }
 
   async resolveActorFromRequest(request: Request): Promise<AccessActor | null> {
@@ -664,26 +688,31 @@ export class AccessGovernanceService {
         requirement.permission.startsWith("security.") || requirement.permission.includes("privileged_action")
           ? "privileged_action_denied"
           : "access_denied";
-      await this.securityEventService.emitSecurityEvent({
-        sourceDomain: SecurityEventSourceDomain.ACCESS,
-        eventType: deniedEventType,
-        severity: SecurityEventSeverity.HIGH,
-        actorType: actor.actorType,
-        actorId: actor.userId ?? null,
-        serviceIdentityId: actor.serviceIdentityId ?? null,
-        targetResourceType: requirement.resourceType,
-        reason: decision.reason,
-        decisionResult: "DENY",
-        metadata: {
-          permission: requirement.permission,
-          action: requirement.action,
-          scope: requirement.scope ?? null
-        },
-        context: {
-          ipAddress: actor.ipAddress ?? null,
-          environment: actor.environment
-        }
-      });
+      try {
+        await this.securityEventService.emitSecurityEvent({
+          sourceDomain: SecurityEventSourceDomain.ACCESS,
+          eventType: deniedEventType,
+          severity: SecurityEventSeverity.HIGH,
+          actorType: actor.actorType,
+          actorId: actor.userId ?? null,
+          serviceIdentityId: actor.serviceIdentityId ?? null,
+          targetResourceType: requirement.resourceType,
+          reason: decision.reason,
+          decisionResult: "DENY",
+          metadata: {
+            permission: requirement.permission,
+            action: requirement.action,
+            scope: requirement.scope ?? null
+          },
+          context: {
+            ipAddress: actor.ipAddress ?? null,
+            environment: actor.environment
+          }
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Failed to emit access denial security event: ${errorMessage}`);
+      }
       throw new ForbiddenException("Access denied");
     }
     return decision;
