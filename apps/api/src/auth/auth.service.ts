@@ -340,6 +340,7 @@ export class AuthService {
     const relevantAttempts = this.filterRelevantLoginFailures(attempts, input.email, input.ipAddress);
     const nowMs = Date.now();
     const activeLockUntil = relevantAttempts
+      .filter((item) => item.result === LoginAttemptResult.LOCKED && item.reason !== "active_lockout")
       .map((item) => item.lockedUntil?.getTime() ?? 0)
       .filter((value) => value > nowMs)
       .sort((a, b) => b - a)[0];
@@ -404,8 +405,9 @@ export class AuthService {
     const since = new Date(Date.now() - this.getLockWindowMinutes(input.actorType) * 60 * 1000);
     const failures = await this.usersService.getRecentLoginFailures(input.actorType, input.email, input.ipAddress, since);
     const relevantFailures = this.filterRelevantLoginFailures(failures, input.email, input.ipAddress);
+    const failureSignals = relevantFailures.filter((item) => item.result === LoginAttemptResult.FAILURE);
     const threshold = this.getLockThreshold(input.actorType);
-    if (relevantFailures.length < threshold) {
+    if (failureSignals.length < threshold) {
       return;
     }
 
@@ -431,7 +433,7 @@ export class AuthService {
       ipAddress: input.ipAddress,
       userAgent: input.userAgent,
           metadata: {
-            failures: relevantFailures.length,
+            failures: failureSignals.length,
             threshold,
             lockedUntil: lockedUntil.toISOString()
           }
