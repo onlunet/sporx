@@ -12,6 +12,7 @@ import {
   Shield,
   BrainCircuit,
   BarChart3,
+  Gauge,
   GitCompare,
   Radio,
   BookOpen,
@@ -57,6 +58,12 @@ const sportGroups: Array<{
         label: "Lig Performansı",
         icon: BarChart3,
         aliases: ["/football/predictions/leagues"]
+      },
+      {
+        href: "/futbol/basari-oranlari",
+        label: "Başarı Oranları",
+        icon: Gauge,
+        aliases: ["/football/predictions/success-rates"]
       },
       { href: "/futbol/karsilastir", label: "Karşılaştır", icon: GitCompare, aliases: ["/football/compare/teams"] },
       { href: "/futbol/canli", label: "Canlı", icon: Radio, aliases: ["/football/live"] }

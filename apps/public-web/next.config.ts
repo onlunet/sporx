@@ -33,6 +33,7 @@ const nextConfig: NextConfig = {
       { source: "/futbol/tahminler", destination: "/football/predictions" },
       { source: "/futbol/sonuclar", destination: "/football/predictions/completed" },
       { source: "/futbol/lig-performansi", destination: "/football/predictions/leagues" },
+      { source: "/futbol/basari-oranlari", destination: "/football/predictions/success-rates" },
       { source: "/futbol/karsilastir", destination: "/compare/teams?sport=football" },
       { source: "/futbol/canli", destination: "/football/live" },
       { source: "/basketbol", destination: "/basketball" },
