@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { Prisma, PublishDecisionStatus } from "@prisma/client";
 import { AbstainPolicyService } from "./abstain-policy.service";
 import { ConflictResolutionService } from "./conflict-resolution.service";
@@ -41,12 +41,28 @@ type EvaluatePublishDecisionInput = {
 
 @Injectable()
 export class PublishDecisionService {
+  private readonly logger = new Logger(PublishDecisionService.name);
+
   constructor(
     private readonly selectionScoreService: SelectionScoreService,
     private readonly abstainPolicyService: AbstainPolicyService,
     private readonly conflictResolutionService: ConflictResolutionService,
     private readonly selectionConfigService: SelectionEngineConfigService
   ) {}
+
+  private isMissingPublishedPredictionsTableError(error: unknown) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022") &&
+      /published_predictions/i.test(error.message)
+    ) {
+      return true;
+    }
+    if (error instanceof Error && /published_predictions/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  }
 
   private toRecord(value: Prisma.JsonValue | null): Record<string, unknown> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -299,11 +315,20 @@ export class PublishDecisionService {
           publishedAt: null
         }
       });
-      await input.tx.publishedPrediction.deleteMany({
-        where: {
-          publishDecisionId: { in: suppressedDecisionIds }
+      try {
+        await input.tx.publishedPrediction.deleteMany({
+          where: {
+            publishDecisionId: { in: suppressedDecisionIds }
+          }
+        });
+      } catch (error) {
+        if (!this.isMissingPublishedPredictionsTableError(error)) {
+          throw error;
         }
-      });
+        this.logger.warn(
+          `published_predictions table missing; skipped suppressed publish cleanup for ${suppressedDecisionIds.length} decisions.`
+        );
+      }
     }
 
     await input.tx.policyEvaluationSnapshot.create({

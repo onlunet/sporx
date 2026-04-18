@@ -176,4 +176,49 @@ describe("PublishDecisionService", () => {
     expect(result.shouldPublishByDecision).toBe(false);
     expect(result.shouldPublishPublic).toBe(true);
   });
+
+  it("continues when published_predictions cleanup fails due missing table", async () => {
+    const service = new PublishDecisionService(
+      {
+        score: jest.fn().mockReturnValue({
+          score: 0.71,
+          breakdown: { confidence: 0.71 }
+        })
+      } as any,
+      {
+        evaluate: jest.fn().mockReturnValue([])
+      } as any,
+      {
+        resolve: jest.fn().mockResolvedValue({
+          suppressed: true,
+          reasons: [],
+          suppressedDecisionIds: ["suppressed-1"]
+        })
+      } as any,
+      {
+        resolveManualOverride: jest.fn().mockResolvedValue(null),
+        getConflictRules: jest.fn().mockResolvedValue([])
+      } as any
+    );
+
+    const tx = createTxStub();
+    tx.publishedPrediction.deleteMany = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("The table `public.published_predictions` does not exist in the current database."));
+
+    const result = await service.evaluateAndPersist({
+      tx,
+      ...baseInput,
+      settings: {
+        enabled: true,
+        shadowMode: false,
+        defaultProfile: "BALANCED",
+        emergencyRollback: false
+      }
+    });
+
+    expect(result.status).toBe(PublishDecisionStatus.APPROVED);
+    expect(tx.publishDecision.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.publishedPrediction.deleteMany).toHaveBeenCalledTimes(1);
+  });
 });
