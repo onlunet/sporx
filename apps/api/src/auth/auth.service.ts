@@ -495,114 +495,150 @@ export class AuthService {
       familyId?: string | null;
     }
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      let sessionId = existing?.sessionId ?? null;
-      if (!sessionId) {
-        const session = await this.usersService.createAuthSession(
-          {
-            userId: user.id,
-            actorType,
-            sessionKey: randomUUID(),
-            expiresAt: new Date(Date.now() + this.getRefreshTtlMs(actorType)),
-            ipAddress: context?.ipAddress,
-            userAgent: context?.userAgent,
-            deviceFingerprint: context?.deviceFingerprint,
-            environment: context?.environment
-          },
-          tx
-        );
-        sessionId = session.id;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        let sessionId = existing?.sessionId ?? null;
+        if (!sessionId) {
+          const session = await this.usersService.createAuthSession(
+            {
+              userId: user.id,
+              actorType,
+              sessionKey: randomUUID(),
+              expiresAt: new Date(Date.now() + this.getRefreshTtlMs(actorType)),
+              ipAddress: context?.ipAddress,
+              userAgent: context?.userAgent,
+              deviceFingerprint: context?.deviceFingerprint,
+              environment: context?.environment
+            },
+            tx
+          );
+          sessionId = session.id;
 
-        if (actorType === AuthActorType.ADMIN) {
-          await this.usersService.createAdminAccessSession(
+          if (actorType === AuthActorType.ADMIN) {
+            await this.usersService.createAdminAccessSession(
+              {
+                userId: user.id,
+                sessionId,
+                stepUpRequired: parseBoolean(process.env.ADMIN_STEP_UP_AUTH_ENABLED, false),
+                allowedIp: this.isAdminIpRestrictionEnabled() ? this.isAdminIpAllowed(context?.ipAddress ?? "unknown") : null,
+                ipAddress: context?.ipAddress,
+                userAgent: context?.userAgent
+              },
+              tx
+            );
+          }
+        } else {
+          await this.usersService.touchAuthSession(sessionId, tx);
+          if (actorType === AuthActorType.ADMIN) {
+            await this.usersService.markAdminAccessSessionSeen(sessionId, tx);
+          }
+        }
+
+        let familyId = existing?.familyId ?? null;
+        if (!familyId) {
+          const family = await this.usersService.createRefreshTokenFamily(
             {
               userId: user.id,
               sessionId,
-              stepUpRequired: parseBoolean(process.env.ADMIN_STEP_UP_AUTH_ENABLED, false),
-              allowedIp: this.isAdminIpRestrictionEnabled() ? this.isAdminIpAllowed(context?.ipAddress ?? "unknown") : null,
+              actorType,
+              expiresAt: new Date(Date.now() + this.getRefreshTtlMs(actorType))
+            },
+            tx
+          );
+          familyId = family.id;
+        } else {
+          await this.usersService.touchRefreshTokenFamily(familyId, tx);
+        }
+
+        const { refreshToken, expiresAt, tokenJti } = await this.signRefreshToken(user, actorType, sessionId, familyId);
+        const storedRefreshToken = await this.usersService.storeRefreshToken(
+          user.id,
+          refreshToken,
+          expiresAt,
+          {
+            tokenJti,
+            familyId,
+            sessionId,
+            actorType,
+            ipAddress: context?.ipAddress,
+            userAgent: context?.userAgent,
+            deviceFingerprint: context?.deviceFingerprint
+          },
+          tx
+        );
+
+        await this.usersService.createRefreshTokenEvent(
+          {
+            userId: user.id,
+            familyId,
+            tokenId: storedRefreshToken.id,
+            eventType: RefreshTokenEventType.ISSUED,
+            reason: existing?.refreshTokenId ? "refresh_rotation" : "login",
+            ipAddress: context?.ipAddress,
+            userAgent: context?.userAgent
+          },
+          tx
+        );
+
+        if (existing?.refreshTokenId) {
+          await this.usersService.markRefreshTokenRotated(existing.refreshTokenId, storedRefreshToken.id, tx);
+          await this.usersService.createRefreshTokenEvent(
+            {
+              userId: user.id,
+              familyId,
+              tokenId: existing.refreshTokenId,
+              eventType: RefreshTokenEventType.ROTATED,
+              reason: "refresh_rotation",
               ipAddress: context?.ipAddress,
               userAgent: context?.userAgent
             },
             tx
           );
         }
-      } else {
-        await this.usersService.touchAuthSession(sessionId, tx);
-        if (actorType === AuthActorType.ADMIN) {
-          await this.usersService.markAdminAccessSessionSeen(sessionId, tx);
-        }
-      }
 
-      let familyId = existing?.familyId ?? null;
-      if (!familyId) {
-        const family = await this.usersService.createRefreshTokenFamily(
-          {
-            userId: user.id,
-            sessionId,
-            actorType,
-            expiresAt: new Date(Date.now() + this.getRefreshTtlMs(actorType))
-          },
-          tx
-        );
-        familyId = family.id;
-      } else {
-        await this.usersService.touchRefreshTokenFamily(familyId, tx);
-      }
-
-      const { refreshToken, expiresAt, tokenJti } = await this.signRefreshToken(user, actorType, sessionId, familyId);
-      const storedRefreshToken = await this.usersService.storeRefreshToken(
-        user.id,
-        refreshToken,
-        expiresAt,
-        {
-          tokenJti,
-          familyId,
-          sessionId,
+        const accessToken = await this.signAccessToken(user, sessionId, actorType);
+        return {
+          accessToken,
+          refreshToken,
           actorType,
-          ipAddress: context?.ipAddress,
-          userAgent: context?.userAgent,
-          deviceFingerprint: context?.deviceFingerprint
-        },
-        tx
-      );
-
-      await this.usersService.createRefreshTokenEvent(
-        {
-          userId: user.id,
-          familyId,
-          tokenId: storedRefreshToken.id,
-          eventType: RefreshTokenEventType.ISSUED,
-          reason: existing?.refreshTokenId ? "refresh_rotation" : "login",
-          ipAddress: context?.ipAddress,
-          userAgent: context?.userAgent
-        },
-        tx
-      );
-
+          sessionId
+        };
+      });
+    } catch (error) {
       if (existing?.refreshTokenId) {
-        await this.usersService.markRefreshTokenRotated(existing.refreshTokenId, storedRefreshToken.id, tx);
-        await this.usersService.createRefreshTokenEvent(
-          {
-            userId: user.id,
-            familyId,
-            tokenId: existing.refreshTokenId,
-            eventType: RefreshTokenEventType.ROTATED,
-            reason: "refresh_rotation",
-            ipAddress: context?.ipAddress,
-            userAgent: context?.userAgent
-          },
-          tx
-        );
+        throw error;
       }
 
-      const accessToken = await this.signAccessToken(user, sessionId, actorType);
+      this.logger.warn(`[auth_resilience] issue_token_pair_fallback: ${this.describeError(error)}`);
+      const fallbackSessionId = randomUUID();
+      const fallbackFamilyId = randomUUID();
+      const { refreshToken } = await this.signRefreshToken(user, actorType, fallbackSessionId, fallbackFamilyId);
+      const accessToken = await this.signAccessToken(user, fallbackSessionId, actorType);
+
+      await this.runBestEffort("emit_issue_token_pair_fallback_event", () =>
+        this.securityEventService.emitSecurityEvent({
+          sourceDomain: SecurityEventSourceDomain.AUTH,
+          eventType: "issue_token_pair_fallback",
+          severity: actorType === AuthActorType.ADMIN ? SecurityEventSeverity.HIGH : SecurityEventSeverity.MEDIUM,
+          actorType: this.mapActorTypeForSecurity(actorType),
+          actorId: user.id,
+          targetResourceType: "auth",
+          reason: "token_persistence_unavailable",
+          context: {
+            ipAddress: context?.ipAddress ?? null,
+            userAgent: context?.userAgent ?? null,
+            environment: context?.environment ?? null
+          }
+        })
+      );
+
       return {
         accessToken,
         refreshToken,
         actorType,
-        sessionId
+        sessionId: fallbackSessionId
       };
-    });
+    }
   }
 
   private async resolveStoredRefreshToken(userId: string, refreshToken: string, payload: RefreshPayload) {

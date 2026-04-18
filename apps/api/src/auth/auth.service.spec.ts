@@ -259,6 +259,47 @@ describe("AuthService", () => {
     issueTokenPairSpy.mockRestore();
   });
 
+  it("falls back to stateless token issue when token persistence transaction fails on login", async () => {
+    const passwordHash = await bcrypt.hash("pass123", 10);
+    usersService.findByEmail.mockResolvedValue({
+      id: "u-admin",
+      email: "admin@example.com",
+      passwordHash,
+      isActive: true,
+      role: { name: "admin" }
+    });
+    usersService.getRecentLoginFailures.mockResolvedValue([]);
+    usersService.createLoginAttempt.mockResolvedValue({});
+    prismaService.$transaction.mockRejectedValueOnce(new Error("relation refresh_tokens does not exist"));
+    jwtService.signAsync.mockResolvedValueOnce("fallback-refresh-token").mockResolvedValueOnce("fallback-access-token");
+    jwtService.verifyAsync.mockResolvedValueOnce({
+      sub: "u-admin",
+      role: "admin",
+      type: "refresh",
+      exp: Math.floor(Date.now() / 1000) + 3600
+    });
+
+    const result = await service.login("admin@example.com", "pass123", {
+      actorTypeHint: AuthActorType.ADMIN,
+      ipAddress: "10.10.10.10",
+      userAgent: "jest"
+    });
+
+    expect(result).toMatchObject({
+      accessToken: "fallback-access-token",
+      refreshToken: "fallback-refresh-token",
+      user: {
+        email: "admin@example.com",
+        role: "admin"
+      }
+    });
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "issue_token_pair_fallback"
+      })
+    );
+  });
+
   it("rotates refresh token when request is valid", async () => {
     jwtService.verifyAsync
       .mockResolvedValueOnce({ sub: "u1", role: "admin", type: "refresh", jti: "jti-old", sid: "s1", fid: "f1", at: "ADMIN" })
