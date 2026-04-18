@@ -58,6 +58,20 @@ export class PredictionRunPublisherService {
     private readonly bankrollOrchestrationService: BankrollOrchestrationService
   ) {}
 
+  private isMissingPublishedPredictionsTableError(error: unknown) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022") &&
+      /published_predictions/i.test(error.message)
+    ) {
+      return true;
+    }
+    if (error instanceof Error && /published_predictions/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  }
+
   private normalizeProbability(value: number) {
     if (!Number.isFinite(value)) {
       return 0.5;
@@ -660,42 +674,58 @@ export class PredictionRunPublisherService {
 
             let publishedPredictionId: string | null = null;
             if (selectionDecision.shouldPublishPublic) {
-              const published = await tx.publishedPrediction.upsert({
-                where: {
-                  matchId_market_lineKey_horizon: {
+              try {
+                const published = await tx.publishedPrediction.upsert({
+                  where: {
+                    matchId_market_lineKey_horizon: {
+                      matchId: input.matchId,
+                      market: input.market,
+                      lineKey,
+                      horizon
+                    }
+                  },
+                  update: {
+                    line,
+                    predictionRunId: run.id,
+                    publishDecisionId: selectionDecision.decision.id,
+                    publishedAt: new Date()
+                  },
+                  create: {
+                    matchId: input.matchId,
+                    market: input.market,
+                    line,
+                    lineKey,
+                    horizon,
+                    predictionRunId: run.id,
+                    publishDecisionId: selectionDecision.decision.id,
+                    publishedAt: new Date()
+                  }
+                });
+                publishedPredictionId = `${published.matchId}:${published.market}:${published.lineKey}:${published.horizon}`;
+              } catch (error) {
+                if (this.isMissingPublishedPredictionsTableError(error)) {
+                  this.logger.warn(
+                    `published_predictions tablosu bulunamadı; publish upsert atlandı (${input.matchId}/${input.market}/${horizon}).`
+                  );
+                } else {
+                  throw error;
+                }
+              }
+            } else {
+              try {
+                await tx.publishedPrediction.deleteMany({
+                  where: {
                     matchId: input.matchId,
                     market: input.market,
                     lineKey,
                     horizon
                   }
-                },
-                update: {
-                  line,
-                  predictionRunId: run.id,
-                  publishDecisionId: selectionDecision.decision.id,
-                  publishedAt: new Date()
-                },
-                create: {
-                  matchId: input.matchId,
-                  market: input.market,
-                  line,
-                  lineKey,
-                  horizon,
-                  predictionRunId: run.id,
-                  publishDecisionId: selectionDecision.decision.id,
-                  publishedAt: new Date()
+                });
+              } catch (error) {
+                if (!this.isMissingPublishedPredictionsTableError(error)) {
+                  throw error;
                 }
-              });
-              publishedPredictionId = `${published.matchId}:${published.market}:${published.lineKey}:${published.horizon}`;
-            } else {
-              await tx.publishedPrediction.deleteMany({
-                where: {
-                  matchId: input.matchId,
-                  market: input.market,
-                  lineKey,
-                  horizon
-                }
-              });
+              }
             }
 
             return {

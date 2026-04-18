@@ -159,6 +159,20 @@ export class ProviderIngestionService {
     private readonly securityEventService: SecurityEventService
   ) {}
 
+  private isMissingPublishedPredictionsTableError(error: unknown) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022") &&
+      /published_predictions/i.test(error.message)
+    ) {
+      return true;
+    }
+    if (error instanceof Error && /published_predictions/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  }
+
   private supportsProviderFetch(jobType: string) {
     return [
       "syncFixtures",
@@ -975,7 +989,7 @@ export class ProviderIngestionService {
           }
         ];
 
-    const [upcomingCandidates, recentFinishedCandidates, backfillCandidates] = await Promise.all([
+    const [upcomingCandidates, recentFinishedCandidates] = await Promise.all([
       this.prisma.match.findMany({
         where: {
           status: { in: [MatchStatus.scheduled, MatchStatus.live] },
@@ -993,8 +1007,12 @@ export class ProviderIngestionService {
         select: matchSelect,
         orderBy: { matchDateTimeUTC: "desc" },
         take: 600
-      }),
-      this.prisma.match.findMany({
+      })
+    ]);
+
+    let backfillCandidates: typeof upcomingCandidates = [];
+    try {
+      backfillCandidates = await this.prisma.match.findMany({
         where: {
           OR: backfillPredictionFilters,
           status: MatchStatus.finished,
@@ -1003,8 +1021,16 @@ export class ProviderIngestionService {
         select: matchSelect,
         orderBy: { matchDateTimeUTC: "desc" },
         take: 1000
-      })
-    ]);
+      });
+    } catch (error) {
+      if (this.isMissingPublishedPredictionsTableError(error)) {
+        this.logger.warn(
+          "published_predictions tablosu bulunamadı; backfill seçiminde published filtresi atlanıyor."
+        );
+      } else {
+        throw error;
+      }
+    }
 
     const candidateMap = new Map<string, (typeof upcomingCandidates)[number]>();
     const pushCandidate = (candidate: (typeof upcomingCandidates)[number]) => {
