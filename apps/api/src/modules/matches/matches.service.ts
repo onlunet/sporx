@@ -97,6 +97,8 @@ export class MatchesService {
           status: MatchStatus;
           homeScore: number | null;
           awayScore: number | null;
+          halfTimeHomeScore: number | null;
+          halfTimeAwayScore: number | null;
           homeTeamId: string;
           awayTeamId: string;
           leagueId: string;
@@ -109,6 +111,8 @@ export class MatchesService {
       status: true,
       homeScore: true,
       awayScore: true,
+      halfTimeHomeScore: true,
+      halfTimeAwayScore: true,
       homeTeamId: true,
       awayTeamId: true,
       leagueId: true
@@ -152,6 +156,8 @@ export class MatchesService {
                 status: MatchStatus;
                 homeScore: number | null;
                 awayScore: number | null;
+                halfTimeHomeScore: number | null;
+                halfTimeAwayScore: number | null;
                 homeTeamId: string;
                 awayTeamId: string;
                 leagueId: string;
@@ -212,7 +218,11 @@ export class MatchesService {
       homeTeam: teamNameById.get(match.homeTeamId) ?? "Unknown Home Team",
       awayTeam: teamNameById.get(match.awayTeamId) ?? "Unknown Away Team",
       status: match.status,
-      score: { home: match.homeScore, away: match.awayScore }
+      score: { home: match.homeScore, away: match.awayScore },
+      halfTimeScore:
+        match.halfTimeHomeScore !== null && match.halfTimeAwayScore !== null
+          ? { home: match.halfTimeHomeScore, away: match.halfTimeAwayScore }
+          : null
     }));
 
     await this.cache.set(cacheKey, data, 120, ["matches"]);

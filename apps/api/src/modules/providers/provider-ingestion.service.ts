@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { AccessActorType, MatchStatus, PlayerAvailabilityStatus, Prisma, SecurityEventSeverity, SecurityEventSourceDomain } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
-import { FootballDataConnector, FootballDataHttpError } from "./football-data.connector";
+import { FootballDataConnector, FootballDataHttpError, FootballDataRateLimitMeta } from "./football-data.connector";
 import { TheSportsDbConnector } from "./the-sports-db.connector";
 import { BallDontLieConnector } from "./ball-dont-lie.connector";
 import { ApiFootballConnector } from "./api-football.connector";
@@ -20,6 +20,13 @@ import { PredictionRunPublisherService } from "./prediction-run-publisher.servic
 import { ModelAliasService } from "../predictions/model-alias.service";
 import { IncidentReadinessService } from "../security-events/incident-readiness.service";
 import { SecurityEventService } from "../security-events/security-event.service";
+import {
+  FootballCompetitionBucket,
+  FootballCompetitionSignals,
+  FootballSchedulerMode,
+  deriveFootballRequestBudget,
+  selectFootballCompetitionsForRun
+} from "./football-data-optimization.util";
 
 type SyncSummary = {
   recordsRead: number;
@@ -120,6 +127,26 @@ type MatchSeedInput = {
   dataSource: string;
 };
 
+type MatchUpsertResult = {
+  id: string;
+  kickoffAt: Date;
+  status: MatchStatus;
+  homeScore: number | null;
+  awayScore: number | null;
+  halfTimeHomeScore: number | null;
+  halfTimeAwayScore: number | null;
+};
+
+type PredictionPhase = "prematch" | "halftime" | "fulltime";
+
+type PredictionPhaseTriggerCandidate = {
+  phase: PredictionPhase;
+  dedupKey: string;
+  matchId: string;
+  horizon: string;
+  metadata: Record<string, unknown>;
+};
+
 type PredictionRiskTuningSettings = {
   lowConfidenceThreshold: number;
   infoFlagSuppressionThreshold: number;
@@ -176,7 +203,9 @@ export class ProviderIngestionService {
   private supportsProviderFetch(jobType: string) {
     return [
       "syncFixtures",
+      "syncFixturesHotPulse",
       "syncResults",
+      "syncResultsReconcile",
       "syncStandings",
       "syncLeagues",
       "syncTeams",
@@ -410,6 +439,7 @@ export class ProviderIngestionService {
   ) {
     let attempt = 0;
     let backoffMsTotal = 0;
+    let had429 = false;
 
     while (true) {
       try {
@@ -417,7 +447,8 @@ export class ProviderIngestionService {
         return {
           response,
           retries: attempt,
-          backoffMsTotal
+          backoffMsTotal,
+          had429
         };
       } catch (error) {
         const shouldRetry =
@@ -428,6 +459,7 @@ export class ProviderIngestionService {
         if (!shouldRetry) {
           throw error;
         }
+        had429 = true;
 
         const retryAfterMs =
           error.retryAfterSeconds && error.retryAfterSeconds > 0
@@ -453,6 +485,7 @@ export class ProviderIngestionService {
   ) {
     let attempt = 0;
     let backoffMsTotal = 0;
+    let had429 = false;
 
     while (true) {
       try {
@@ -465,7 +498,8 @@ export class ProviderIngestionService {
         return {
           response,
           retries: attempt,
-          backoffMsTotal
+          backoffMsTotal,
+          had429
         };
       } catch (error) {
         const shouldRetry =
@@ -476,6 +510,7 @@ export class ProviderIngestionService {
         if (!shouldRetry) {
           throw error;
         }
+        had429 = true;
 
         const retryAfterMs =
           error.retryAfterSeconds && error.retryAfterSeconds > 0
@@ -566,7 +601,12 @@ export class ProviderIngestionService {
       };
     }
 
-    if (jobType === "syncFixtures" || jobType === "syncResults") {
+    if (
+      jobType === "syncFixtures" ||
+      jobType === "syncFixturesHotPulse" ||
+      jobType === "syncResults" ||
+      jobType === "syncResultsReconcile"
+    ) {
       await this.normalizeStaleMatchStatuses(runId);
     }
 
@@ -870,11 +910,21 @@ export class ProviderIngestionService {
     return map;
   }
 
-  private async generatePredictions(runId: string): Promise<SyncSummary> {
+  private async generatePredictions(
+    runId: string,
+    options?: {
+      matchIds?: string[];
+      reason?: string;
+    }
+  ): Promise<SyncSummary> {
     const now = new Date();
     const riskTuningSettings = await this.loadPredictionRiskTuningSettings();
     const fromDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const toDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const scopedMatchIds = Array.from(
+      new Set((options?.matchIds ?? []).map((item) => item.trim()).filter((item) => item.length > 0))
+    );
+    const isScopedRun = scopedMatchIds.length > 0;
     const matchSelect = {
       id: true,
       sportId: true,
@@ -989,48 +1039,87 @@ export class ProviderIngestionService {
           }
         ];
 
-    const [upcomingCandidates, recentFinishedCandidates] = await Promise.all([
-      this.prisma.match.findMany({
-        where: {
-          status: { in: [MatchStatus.scheduled, MatchStatus.live] },
-          matchDateTimeUTC: { lte: toDate }
-        },
-        select: matchSelect,
-        orderBy: { matchDateTimeUTC: "asc" },
-        take: 1500
-      }),
-      this.prisma.match.findMany({
-        where: {
-          status: MatchStatus.finished,
-          matchDateTimeUTC: { gte: fromDate, lte: now }
-        },
-        select: matchSelect,
-        orderBy: { matchDateTimeUTC: "desc" },
-        take: 600
-      })
-    ]);
-
-    let backfillCandidates: typeof upcomingCandidates = [];
-    try {
-      backfillCandidates = await this.prisma.match.findMany({
-        where: {
-          OR: backfillPredictionFilters,
-          status: MatchStatus.finished,
-          matchDateTimeUTC: { lte: now }
-        },
-        select: matchSelect,
-        orderBy: { matchDateTimeUTC: "desc" },
-        take: 1000
-      });
-    } catch (error) {
-      if (this.isMissingPublishedPredictionsTableError(error)) {
-        this.logger.warn(
-          "published_predictions tablosu bulunamadı; backfill seçiminde published filtresi atlanıyor."
-        );
-      } else {
-        throw error;
-      }
-    }
+    const [upcomingCandidates, recentFinishedCandidates, backfillCandidates] = isScopedRun
+      ? await Promise.all([
+          this.prisma.match.findMany({
+            where: { id: { in: scopedMatchIds } },
+            select: matchSelect,
+            orderBy: { matchDateTimeUTC: "asc" },
+            take: Math.max(50, scopedMatchIds.length)
+          }),
+          Promise.resolve([] as Array<{
+            id: string;
+            sportId: string;
+            leagueId: string;
+            homeTeamId: string;
+            awayTeamId: string;
+            status: MatchStatus;
+            matchDateTimeUTC: Date;
+            homeScore: number | null;
+            awayScore: number | null;
+            homeElo: number | null;
+            awayElo: number | null;
+            form5Home: number | null;
+            form5Away: number | null;
+          }>),
+          Promise.resolve([] as Array<{
+            id: string;
+            sportId: string;
+            leagueId: string;
+            homeTeamId: string;
+            awayTeamId: string;
+            status: MatchStatus;
+            matchDateTimeUTC: Date;
+            homeScore: number | null;
+            awayScore: number | null;
+            homeElo: number | null;
+            awayElo: number | null;
+            form5Home: number | null;
+            form5Away: number | null;
+          }>)
+        ])
+      : await Promise.all([
+          this.prisma.match.findMany({
+            where: {
+              status: { in: [MatchStatus.scheduled, MatchStatus.live] },
+              matchDateTimeUTC: { lte: toDate }
+            },
+            select: matchSelect,
+            orderBy: { matchDateTimeUTC: "asc" },
+            take: 1500
+          }),
+          this.prisma.match.findMany({
+            where: {
+              status: MatchStatus.finished,
+              matchDateTimeUTC: { gte: fromDate, lte: now }
+            },
+            select: matchSelect,
+            orderBy: { matchDateTimeUTC: "desc" },
+            take: 600
+          }),
+          (async () => {
+            try {
+              return await this.prisma.match.findMany({
+                where: {
+                  OR: backfillPredictionFilters,
+                  status: MatchStatus.finished,
+                  matchDateTimeUTC: { lte: now }
+                },
+                select: matchSelect,
+                orderBy: { matchDateTimeUTC: "desc" },
+                take: 1000
+              });
+            } catch (error) {
+              if (this.isMissingPublishedPredictionsTableError(error)) {
+                this.logger.warn(
+                  "published_predictions tablosu bulunamadı; backfill seçiminde published filtresi atlanıyor."
+                );
+                return [];
+              }
+              throw error;
+            }
+          })()
+        ]);
 
     const candidateMap = new Map<string, (typeof upcomingCandidates)[number]>();
     const pushCandidate = (candidate: (typeof upcomingCandidates)[number]) => {
@@ -1063,6 +1152,8 @@ export class ProviderIngestionService {
         errors: 0,
         logs: {
           mode: "generatePredictions",
+          reason: options?.reason ?? null,
+          scopedMatchCount: scopedMatchIds.length > 0 ? scopedMatchIds.length : null,
           modelVersionId: activeModel?.id ?? null,
           modelName: activeModel?.modelName ?? null,
           modelVersion: activeModel?.version ?? null
@@ -1686,6 +1777,8 @@ export class ProviderIngestionService {
       errors,
       logs: {
         mode: "generatePredictions",
+        reason: options?.reason ?? null,
+        scopedMatchCount: scopedMatchIds.length > 0 ? scopedMatchIds.length : null,
         modelVersionId: activeModel?.id ?? null,
         modelName: activeModel?.modelName ?? null,
         modelVersion: activeModel?.version ?? null
@@ -3800,7 +3893,7 @@ export class ProviderIngestionService {
     }
   }
 
-  private async upsertMatchFromExternal(input: MatchSeedInput) {
+  private async upsertMatchFromExternal(input: MatchSeedInput): Promise<MatchUpsertResult> {
     const now = new Date();
     const normalizedStatus = this.normalizeMatchStatus(input.status, input.kickoffAt, input.homeScore, input.awayScore);
     const homeCountry = this.normalizeCountry(input.homeTeamCountry);
@@ -4172,7 +4265,15 @@ export class ProviderIngestionService {
       );
     }
 
-    return match.id;
+    return {
+      id: match.id,
+      kickoffAt: input.kickoffAt,
+      status: merged.status,
+      homeScore: merged.homeScore,
+      awayScore: merged.awayScore,
+      halfTimeHomeScore: merged.halfTimeHomeScore,
+      halfTimeAwayScore: merged.halfTimeAwayScore
+    };
   }
 
   private extractFootballDataStandingsRows(response: Record<string, unknown>) {
@@ -4388,12 +4489,351 @@ export class ProviderIngestionService {
     return true;
   }
 
+  private footballCompetitionPollCheckpointKey(mode: FootballSchedulerMode, competitionCode: string) {
+    return `football_poll:${mode}:${competitionCode.trim().toUpperCase()}`;
+  }
+
+  private parseCursorDate(value: string | null | undefined) {
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime())) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private resolveCompetitionCodeFromLeague(
+    league: { code: string | null; country: string | null },
+    allowedCompetitionCodes: Set<string>
+  ) {
+    const leagueCode = String(league.code ?? "")
+      .trim()
+      .toUpperCase();
+    if (leagueCode.length > 0 && allowedCompetitionCodes.has(leagueCode)) {
+      return leagueCode;
+    }
+
+    const leagueCountry = String(league.country ?? "")
+      .trim()
+      .toUpperCase();
+    if (leagueCountry.length > 0 && allowedCompetitionCodes.has(leagueCountry)) {
+      return leagueCountry;
+    }
+
+    return null;
+  }
+
+  private async loadFootballCompetitionSignals(competitionCodes: string[], now: Date) {
+    const allowedCodes = new Set(competitionCodes);
+    const signals: Record<string, FootballCompetitionSignals> = Object.fromEntries(
+      competitionCodes.map((code) => [
+        code,
+        {
+          hasLive: false,
+          hasKickoffInNext6Hours: false,
+          hasKickoffIn6To24Hours: false,
+          hasRecentFinishedAwaitingReconciliation: false
+        }
+      ])
+    );
+
+    const inSixHours = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+    const inTwentyFourHours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+
+    const rows = await this.prisma.match.findMany({
+      where: {
+        sport: { code: "football" },
+        league: {
+          OR: [{ code: { in: competitionCodes } }, { country: { in: competitionCodes } }]
+        },
+        OR: [
+          { status: MatchStatus.live },
+          {
+            status: MatchStatus.scheduled,
+            matchDateTimeUTC: { gte: now, lte: inTwentyFourHours }
+          },
+          {
+            status: MatchStatus.finished,
+            matchDateTimeUTC: { gte: twelveHoursAgo, lte: now }
+          }
+        ]
+      },
+      select: {
+        status: true,
+        matchDateTimeUTC: true,
+        league: {
+          select: {
+            code: true,
+            country: true
+          }
+        }
+      }
+    });
+
+    for (const row of rows) {
+      const competitionCode = this.resolveCompetitionCodeFromLeague(
+        { code: row.league.code, country: row.league.country },
+        allowedCodes
+      );
+      if (!competitionCode) {
+        continue;
+      }
+      const signal = signals[competitionCode];
+      if (!signal) {
+        continue;
+      }
+
+      if (row.status === MatchStatus.live) {
+        signal.hasLive = true;
+        continue;
+      }
+
+      if (row.status === MatchStatus.scheduled) {
+        if (row.matchDateTimeUTC <= inSixHours) {
+          signal.hasKickoffInNext6Hours = true;
+        } else {
+          signal.hasKickoffIn6To24Hours = true;
+        }
+        continue;
+      }
+
+      if (row.status === MatchStatus.finished) {
+        signal.hasRecentFinishedAwaitingReconciliation = true;
+      }
+    }
+
+    return signals;
+  }
+
+  private async loadFootballCompetitionLastPolledAt(
+    providerKey: string,
+    mode: FootballSchedulerMode,
+    competitionCodes: string[]
+  ) {
+    const entityTypes = competitionCodes.map((code) => this.footballCompetitionPollCheckpointKey(mode, code));
+    const checkpoints = await this.prisma.ingestionCheckpoint.findMany({
+      where: {
+        providerKey,
+        entityType: { in: entityTypes }
+      },
+      select: {
+        entityType: true,
+        cursor: true
+      }
+    });
+
+    const byEntityType = new Map(checkpoints.map((item) => [item.entityType, item.cursor] as const));
+    const map: Record<string, Date | null> = {};
+    for (const code of competitionCodes) {
+      const entityType = this.footballCompetitionPollCheckpointKey(mode, code);
+      map[code] = this.parseCursorDate(byEntityType.get(entityType));
+    }
+    return map;
+  }
+
+  private async setFootballCompetitionLastPolledAt(
+    providerKey: string,
+    mode: FootballSchedulerMode,
+    competitionCode: string,
+    at: Date
+  ) {
+    await this.setCheckpoint(
+      providerKey,
+      this.footballCompetitionPollCheckpointKey(mode, competitionCode),
+      at.toISOString()
+    );
+  }
+
+  private footballData429CooldownKey(providerKey: string) {
+    return `provider:${providerKey}:429_recent`;
+  }
+
+  private async hadRecentFootballData429(providerKey: string) {
+    const value = await this.cache.get<number>(this.footballData429CooldownKey(providerKey));
+    return typeof value === "number" && value > 0;
+  }
+
+  private async markRecentFootballData429(providerKey: string) {
+    await this.cache.set(this.footballData429CooldownKey(providerKey), Date.now(), 5 * 60);
+  }
+
+  private buildPredictionPhaseTriggers(match: MatchUpsertResult, now: Date): PredictionPhaseTriggerCandidate[] {
+    const triggers: PredictionPhaseTriggerCandidate[] = [];
+    const hasHalfTimeScore = this.hasHalfTimePair(match.halfTimeHomeScore, match.halfTimeAwayScore);
+    const hasFullTimeScore = this.hasScorePair(match.homeScore, match.awayScore);
+
+    if (match.status === MatchStatus.scheduled) {
+      const diffMs = match.kickoffAt.getTime() - now.getTime();
+      const windows = [
+        { hours: 24, horizon: "PRE24" },
+        { hours: 6, horizon: "PRE6" },
+        { hours: 1, horizon: "PRE1" }
+      ] as const;
+
+      for (const window of windows) {
+        if (diffMs <= window.hours * 60 * 60 * 1000 && diffMs > 0) {
+          triggers.push({
+            phase: "prematch",
+            dedupKey: `match:${match.id}:prematch:${window.hours}h`,
+            matchId: match.id,
+            horizon: window.horizon,
+            metadata: {
+              kickoffAt: match.kickoffAt.toISOString(),
+              windowHours: window.hours
+            }
+          });
+        }
+      }
+    }
+
+    if (match.status === MatchStatus.live && hasHalfTimeScore && !hasFullTimeScore) {
+      triggers.push({
+        phase: "halftime",
+        dedupKey: `match:${match.id}:ht:${match.halfTimeHomeScore}-${match.halfTimeAwayScore}`,
+        matchId: match.id,
+        horizon: "HT",
+        metadata: {
+          halfTimeHomeScore: match.halfTimeHomeScore,
+          halfTimeAwayScore: match.halfTimeAwayScore
+        }
+      });
+    }
+
+    if (match.status === MatchStatus.finished && hasFullTimeScore) {
+      triggers.push({
+        phase: "fulltime",
+        dedupKey: `match:${match.id}:ft:${match.homeScore}-${match.awayScore}`,
+        matchId: match.id,
+        horizon: "POST_MATCH",
+        metadata: {
+          homeScore: match.homeScore,
+          awayScore: match.awayScore
+        }
+      });
+    }
+
+    return triggers;
+  }
+
+  private async registerPredictionPhaseTrigger(candidate: PredictionPhaseTriggerCandidate, runId: string) {
+    const checkpointKey = {
+      providerKey_entityType: {
+        providerKey: "prediction_phase_trigger",
+        entityType: candidate.dedupKey
+      }
+    } as const;
+
+    const existing = await this.prisma.ingestionCheckpoint.findUnique({
+      where: checkpointKey,
+      select: { providerKey: true }
+    });
+    if (existing) {
+      return false;
+    }
+
+    try {
+      await this.prisma.ingestionCheckpoint.create({
+        data: {
+          providerKey: "prediction_phase_trigger",
+          entityType: candidate.dedupKey,
+          cursor: new Date().toISOString(),
+          lastSyncedAt: new Date()
+        }
+      });
+      await this.createExternalPayload("internal_prediction_engine", runId, "prediction_phase_trigger", {
+        ...candidate,
+        acceptedAt: new Date().toISOString()
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async processPredictionPhaseTriggers(
+    runId: string,
+    phaseCandidates: PredictionPhaseTriggerCandidate[]
+  ) {
+    if (phaseCandidates.length === 0) {
+      return {
+        candidates: 0,
+        accepted: 0,
+        deduped: 0,
+        executedByPhase: {
+          prematch: 0,
+          halftime: 0,
+          fulltime: 0
+        }
+      };
+    }
+
+    const uniqueByDedup = new Map<string, PredictionPhaseTriggerCandidate>();
+    for (const candidate of phaseCandidates) {
+      if (!uniqueByDedup.has(candidate.dedupKey)) {
+        uniqueByDedup.set(candidate.dedupKey, candidate);
+      }
+    }
+
+    const acceptedByPhase: Record<PredictionPhase, Set<string>> = {
+      prematch: new Set<string>(),
+      halftime: new Set<string>(),
+      fulltime: new Set<string>()
+    };
+
+    let accepted = 0;
+    for (const candidate of uniqueByDedup.values()) {
+      const isNew = await this.registerPredictionPhaseTrigger(candidate, runId);
+      if (!isNew) {
+        continue;
+      }
+      accepted += 1;
+      acceptedByPhase[candidate.phase].add(candidate.matchId);
+    }
+
+    for (const phase of ["prematch", "halftime", "fulltime"] as const) {
+      const scopedMatchIds = [...acceptedByPhase[phase]];
+      if (scopedMatchIds.length === 0) {
+        continue;
+      }
+      await this.generatePredictions(`${runId}:${phase}`, {
+        matchIds: scopedMatchIds,
+        reason: `phase_trigger_${phase}`
+      });
+    }
+
+    return {
+      candidates: phaseCandidates.length,
+      accepted,
+      deduped: uniqueByDedup.size - accepted,
+      executedByPhase: {
+        prematch: acceptedByPhase.prematch.size,
+        halftime: acceptedByPhase.halftime.size,
+        fulltime: acceptedByPhase.fulltime.size
+      }
+    };
+  }
+
   private async syncFootballData(
     provider: { id: string; key: string; baseUrl: string | null },
     runId: string,
     jobType: string
   ): Promise<ProviderSyncResult> {
-    if (jobType !== "syncFixtures" && jobType !== "syncResults" && jobType !== "syncStandings") {
+    if (
+      jobType !== "syncFixtures" &&
+      jobType !== "syncFixturesHotPulse" &&
+      jobType !== "syncResults" &&
+      jobType !== "syncResultsReconcile" &&
+      jobType !== "syncStandings"
+    ) {
       return {
         providerKey: provider.key,
         recordsRead: 0,
@@ -4417,16 +4857,45 @@ export class ProviderIngestionService {
       };
     }
 
+    const mode: FootballSchedulerMode =
+      jobType === "syncFixturesHotPulse"
+        ? "fixtures_hot_pulse"
+        : jobType === "syncResults"
+          ? "results"
+          : jobType === "syncResultsReconcile"
+            ? "results_reconcile"
+            : jobType === "syncStandings"
+              ? "standings"
+              : "fixtures";
+
     if (jobType === "syncStandings") {
-      return this.syncFootballDataStandings(provider, runId, settings);
+      return this.syncFootballDataStandings(provider, runId, settings, mode);
     }
 
-    const checkpointEntityType = jobType === "syncResults" ? "football_matches_results" : "football_matches_fixtures";
+    const now = new Date();
+    const checkpointEntityType =
+      mode === "results"
+        ? "football_matches_results"
+        : mode === "results_reconcile"
+          ? "football_matches_results_reconcile"
+          : mode === "fixtures_hot_pulse"
+            ? "football_matches_hot_pulse"
+            : "football_matches_fixtures";
     const checkpoint = await this.getCheckpoint(provider.key, checkpointEntityType);
-    const dateTo = this.todayDateString(jobType === "syncResults" ? 1 : 7);
-    const defaultDateFrom = this.todayDateString(jobType === "syncResults" ? -30 : -2);
+    const dateTo =
+      mode === "results" || mode === "results_reconcile"
+        ? this.todayDateString(1)
+        : mode === "fixtures_hot_pulse"
+          ? this.todayDateString(1)
+          : this.todayDateString(7);
+    const defaultDateFrom =
+      mode === "results" || mode === "results_reconcile"
+        ? this.todayDateString(-30)
+        : mode === "fixtures_hot_pulse"
+          ? this.todayDateString(0)
+          : this.todayDateString(-2);
     let dateFrom = defaultDateFrom;
-    if (jobType === "syncResults" && checkpoint && checkpoint.length >= 10) {
+    if (mode === "results" && checkpoint && checkpoint.length >= 10) {
       const normalized = checkpoint.slice(0, 10);
       if (normalized <= dateTo) {
         dateFrom = normalized;
@@ -4458,13 +4927,21 @@ export class ProviderIngestionService {
         settings.minuteRateBuffer,
         this.parseEnvInt("FOOTBALL_DATA_RATE_LIMIT_BUFFER", 1)
       );
+      const plannedRequestsPerMinute = this.parseConfigInt(
+        settings.plannedRequestsPerMinute,
+        this.parseEnvInt("FOOTBALL_DATA_PLANNED_REQUESTS_PER_MINUTE", 8)
+      );
+      const reserveRequestsPerMinute = this.parseConfigInt(
+        settings.reserveRequestsPerMinute,
+        this.parseEnvInt("FOOTBALL_DATA_RESERVE_REQUESTS_PER_MINUTE", 2)
+      );
       const minIntervalMs = this.parseConfigInt(
         settings.minIntervalMs,
         this.parseEnvInt("FOOTBALL_DATA_MIN_INTERVAL_MS", 7000)
       );
       const maxCallsPerRun = this.parseConfigInt(
         settings.maxCallsPerRun,
-        this.parseEnvInt("FOOTBALL_DATA_MAX_CALLS_PER_RUN", 6)
+        this.parseEnvInt("FOOTBALL_DATA_MAX_CALLS_PER_RUN", 12)
       );
       const retryMax = this.parseConfigInt(
         settings.retryMax,
@@ -4503,46 +4980,78 @@ export class ProviderIngestionService {
         new Set([...priorityCodes, ...competitionCodes])
       );
 
-      const cursorRaw = await this.getCheckpoint(provider.key, "football_matches_competition_cursor");
-      const parsedCursor = Number(cursorRaw);
-      const cursor =
-        Number.isFinite(parsedCursor) && parsedCursor >= 0
-          ? Math.floor(parsedCursor) % orderedCompetitionCodes.length
-          : 0;
+      const hadRecent429 = await this.hadRecentFootballData429(provider.key);
+      const baseBudget = deriveFootballRequestBudget({
+        hardLimitPerMinute: minuteRateLimit,
+        plannedTargetPerMinute: plannedRequestsPerMinute,
+        reservePerMinute: Math.max(reserveRequestsPerMinute, minuteRateBuffer),
+        hadRecent429
+      });
+      const competitionSignals = await this.loadFootballCompetitionSignals(orderedCompetitionCodes, now);
+      const lastPolledAtByCode = await this.loadFootballCompetitionLastPolledAt(provider.key, mode, orderedCompetitionCodes);
+      const selection = selectFootballCompetitionsForRun({
+        mode,
+        competitionCodes: orderedCompetitionCodes,
+        signalsByCode: competitionSignals,
+        lastPolledAtByCode,
+        now,
+        plannedCalls: baseBudget.plannedCalls,
+        maxCallsCap: maxCallsPerRun,
+        allowFullCycleWhenSafe: mode === "results_reconcile",
+        forceIncludeAtLeastOne: mode !== "fixtures_hot_pulse"
+      });
+      const selectedCompetitionCodes = selection.selectedCompetitionCodes;
+      const deferredCompetitionCodes = selection.deferredCompetitionCodes;
+      const nextCursor = deferredCompetitionCodes.length > 0 ? orderedCompetitionCodes.indexOf(deferredCompetitionCodes[0]) : 0;
 
-      const selectedCount = Math.min(Math.max(1, maxCallsPerRun), orderedCompetitionCodes.length);
-      const selectedCompetitionCodes = Array.from(
-        { length: selectedCount },
-        (_, index) => orderedCompetitionCodes[(cursor + index) % orderedCompetitionCodes.length]
-      );
-      const selectedSet = new Set(selectedCompetitionCodes);
-      const deferredCompetitionCodes = orderedCompetitionCodes.filter((code) => !selectedSet.has(code));
-      let nextCursor = (cursor + selectedCount) % orderedCompetitionCodes.length;
-
-    let written = 0;
-    let errors = 0;
-    let recordsRead = 0;
+      let written = 0;
+      let errors = 0;
+      let recordsRead = 0;
       let totalWaitMs = 0;
       let totalRetryCount = 0;
       let totalRetryBackoffMs = 0;
-      let firstFailedCursorIndex: number | null = null;
+      let requestsAttempted = 0;
+      let requestsSucceeded = 0;
+      let requestsRetried = 0;
+      let request429Count = hadRecent429 ? 1 : 0;
+      let skippedDueBudget = 0;
+      let halftimeReadyMatches = 0;
+      let fulltimeLagMinutesTotal = 0;
+      let fulltimeLagSamples = 0;
+      let dynamicRemainingHeader: number | undefined;
+      const phaseCandidates: PredictionPhaseTriggerCandidate[] = [];
     const perCompetition: Array<{
       competitionCode: string;
       recordsRead: number;
       recordsWritten: number;
       errors: number;
-      ok: boolean;
+        ok: boolean;
         waitMs: number;
         retries: number;
+        bucket: FootballCompetitionBucket;
+        due: boolean;
+        cadenceMinutes: number;
       message?: string;
     }> = [];
 
-      for (const [selectedIndex, competitionCode] of selectedCompetitionCodes.entries()) {
-        const absoluteCursorIndex = (cursor + selectedIndex) % orderedCompetitionCodes.length;
+      for (const competitionCode of selectedCompetitionCodes) {
+        const adaptiveBudget = deriveFootballRequestBudget({
+          hardLimitPerMinute: minuteRateLimit,
+          plannedTargetPerMinute: plannedRequestsPerMinute,
+          reservePerMinute: Math.max(reserveRequestsPerMinute, minuteRateBuffer),
+          remainingHeader: dynamicRemainingHeader,
+          hadRecent429: request429Count > 0
+        });
+        if (adaptiveBudget.plannedCalls <= 0) {
+          skippedDueBudget += 1;
+          break;
+        }
+
+        requestsAttempted += 1;
         const throttle = await this.footballDataThrottle(
           provider.key,
           minuteRateLimit,
-          minuteRateBuffer,
+          Math.max(minuteRateBuffer, Math.max(0, minuteRateLimit - adaptiveBudget.plannedCalls)),
           minIntervalMs
         );
         totalWaitMs += throttle.waitedMs;
@@ -4557,9 +5066,19 @@ export class ProviderIngestionService {
             settings.baseUrl ?? provider.baseUrl ?? undefined,
             retryMax
           );
+          requestsSucceeded += 1;
+          requestsRetried += fetched.retries;
+          if (fetched.had429) {
+            request429Count += 1;
+            await this.markRecentFootballData429(provider.key);
+          }
           totalRetryCount += fetched.retries;
           totalRetryBackoffMs += fetched.backoffMsTotal;
           const response = fetched.response;
+          const responseMeta = (response as { __meta?: FootballDataRateLimitMeta }).__meta;
+          if (typeof responseMeta?.remaining === "number" && Number.isFinite(responseMeta.remaining)) {
+            dynamicRemainingHeader = Math.max(0, Math.floor(responseMeta.remaining));
+          }
         const durationMs = Date.now() - startedAt;
         await this.logApiCall(`provider/${provider.key}/competitions/${competitionCode}/matches`, 200, durationMs, runId);
 
@@ -4592,7 +5111,7 @@ export class ProviderIngestionService {
 
           const providerMatchKey = String(raw.id ?? `${competitionCode}-${homeTeamName}-${awayTeamName}-${kickoffAt.toISOString()}`);
           const refereeName = this.pickFootballDataReferee(raw);
-          await this.upsertMatchFromExternal({
+          const upserted = await this.upsertMatchFromExternal({
             providerId: provider.id,
             providerKey: provider.key,
             providerMatchKey,
@@ -4615,7 +5134,17 @@ export class ProviderIngestionService {
           });
           written += 1;
           competitionWritten += 1;
+          const triggers = this.buildPredictionPhaseTriggers(upserted, now);
+          phaseCandidates.push(...triggers);
+          if (upserted.status === MatchStatus.live && this.hasHalfTimePair(upserted.halfTimeHomeScore, upserted.halfTimeAwayScore) && !this.hasScorePair(upserted.homeScore, upserted.awayScore)) {
+            halftimeReadyMatches += 1;
+          }
+          if (upserted.status === MatchStatus.finished && this.hasScorePair(upserted.homeScore, upserted.awayScore)) {
+            fulltimeLagMinutesTotal += Math.max(0, Math.round((now.getTime() - upserted.kickoffAt.getTime()) / 60000));
+            fulltimeLagSamples += 1;
+          }
         }
+        await this.setFootballCompetitionLastPolledAt(provider.key, mode, competitionCode, new Date());
 
         perCompetition.push({
           competitionCode,
@@ -4624,11 +5153,22 @@ export class ProviderIngestionService {
           errors: competitionErrors,
             ok: true,
             waitMs: throttle.waitedMs,
-            retries: fetched.retries
+            retries: fetched.retries,
+            bucket: selection.bucketByCompetitionCode[competitionCode],
+            due: selection.dueByCompetitionCode[competitionCode],
+            cadenceMinutes: selection.cadenceByCompetitionCodeMinutes[competitionCode]
         });
+        if (typeof dynamicRemainingHeader === "number" && dynamicRemainingHeader <= adaptiveBudget.reserveCalls) {
+          skippedDueBudget += Math.max(0, selectedCompetitionCodes.length - perCompetition.length);
+          break;
+        }
       } catch (error) {
         const durationMs = Date.now() - startedAt;
           const statusCode = error instanceof FootballDataHttpError ? error.status : 500;
+          if (statusCode === 429) {
+            request429Count += 1;
+            await this.markRecentFootballData429(provider.key);
+          }
           await this.logApiCall(
             `provider/${provider.key}/competitions/${competitionCode}/matches`,
             statusCode,
@@ -4637,9 +5177,6 @@ export class ProviderIngestionService {
           );
         const message = error instanceof Error ? error.message : "football_data fetch error";
         errors += 1;
-          if (firstFailedCursorIndex === null) {
-            firstFailedCursorIndex = absoluteCursorIndex;
-          }
         perCompetition.push({
           competitionCode,
           recordsRead: 0,
@@ -4648,26 +5185,56 @@ export class ProviderIngestionService {
           ok: false,
             waitMs: throttle.waitedMs,
             retries: 0,
+            bucket: selection.bucketByCompetitionCode[competitionCode],
+            due: selection.dueByCompetitionCode[competitionCode],
+            cadenceMinutes: selection.cadenceByCompetitionCodeMinutes[competitionCode],
           message
         });
       }
     }
 
-      if (firstFailedCursorIndex !== null) {
-        nextCursor = firstFailedCursorIndex;
-      }
+      const phaseTriggerSummary = await this.processPredictionPhaseTriggers(runId, phaseCandidates);
 
       await this.setCheckpoint(provider.key, checkpointEntityType, dateTo);
-      if (jobType === "syncFixtures") {
+      if (mode === "fixtures") {
         await this.setCheckpoint(provider.key, "football_matches", dateTo);
       }
-      await this.setCheckpoint(provider.key, "football_matches_competition_cursor", String(nextCursor));
+      await this.setCheckpoint(
+        provider.key,
+        mode === "results" || mode === "results_reconcile"
+          ? "football_matches_results_competition_cursor"
+          : "football_matches_competition_cursor",
+        String(nextCursor >= 0 ? nextCursor : 0)
+      );
+      const staleCompetitionLagMinutes = orderedCompetitionCodes.length
+        ? Math.max(
+            ...orderedCompetitionCodes.map((code) => {
+              const lastPolledAt = lastPolledAtByCode[code];
+              if (!lastPolledAt) {
+                return 99999;
+              }
+              return Math.max(0, Math.round((now.getTime() - lastPolledAt.getTime()) / 60000));
+            })
+          )
+        : 0;
+      const halftimeCaptureRate =
+        halftimeReadyMatches > 0
+          ? Number((phaseTriggerSummary.executedByPhase.halftime / halftimeReadyMatches).toFixed(4))
+          : null;
+      const fulltimeReconciliationLagMinutes =
+        fulltimeLagSamples > 0 ? Number((fulltimeLagMinutesTotal / fulltimeLagSamples).toFixed(2)) : null;
       await this.createExternalPayload(provider.key, runId, "football_data_matches", {
+        mode,
         competitionCodes,
         orderedCompetitionCodes,
         priorityCompetitionCodes: priorityCodes,
         selectedCompetitionCodes,
         deferredCompetitionCodes,
+        bucketByCompetitionCode: selection.bucketByCompetitionCode,
+        bucketSizes: selection.bucketSizes,
+        selectedCounts: selection.selectedCounts,
+        dueByCompetitionCode: selection.dueByCompetitionCode,
+        cadenceByCompetitionCodeMinutes: selection.cadenceByCompetitionCodeMinutes,
         perCompetition,
         dateFrom,
         dateTo,
@@ -4675,15 +5242,27 @@ export class ProviderIngestionService {
         recordsWritten: written,
         errors,
         checkpointEntityType,
-        checkpointCursorBefore: cursor,
         checkpointCursorAfter: nextCursor,
         rateLimit: {
           minuteRateLimit,
           minuteRateBuffer,
+          plannedRequestsPerMinute,
+          reserveRequestsPerMinute,
           minIntervalMs,
           maxCallsPerRun,
           retryMax
         },
+        requestBudget: baseBudget,
+        requestsAttempted,
+        requestsSucceeded,
+        requestsRetried,
+        request429Count,
+        skippedDueBudget,
+        adaptiveRemainingHeader: dynamicRemainingHeader ?? null,
+        phaseTriggers: phaseTriggerSummary,
+        halftimeCaptureRate,
+        fulltimeReconciliationLagMinutes,
+        staleCompetitionLagMinutes,
         waitMs: totalWaitMs,
         retryCount: totalRetryCount,
         retryBackoffMs: totalRetryBackoffMs
@@ -4696,24 +5275,42 @@ export class ProviderIngestionService {
       errors,
       details: {
         jobType,
+        mode,
         competitionCodes,
         orderedCompetitionCodes,
         priorityCompetitionCodes: priorityCodes,
         selectedCompetitionCodes,
         deferredCompetitionCodes,
+        bucketByCompetitionCode: selection.bucketByCompetitionCode,
+        bucketSizes: selection.bucketSizes,
+        selectedCounts: selection.selectedCounts,
+        dueByCompetitionCode: selection.dueByCompetitionCode,
+        cadenceByCompetitionCodeMinutes: selection.cadenceByCompetitionCodeMinutes,
         perCompetition,
         dateFrom,
         dateTo,
         checkpointEntityType,
-        checkpointCursorBefore: cursor,
         checkpointCursorAfter: nextCursor,
         rateLimit: {
           minuteRateLimit,
           minuteRateBuffer,
+          plannedRequestsPerMinute,
+          reserveRequestsPerMinute,
           minIntervalMs,
           maxCallsPerRun,
           retryMax
         },
+        requestBudget: baseBudget,
+        requestsAttempted,
+        requestsSucceeded,
+        requestsRetried,
+        request429Count,
+        skippedDueBudget,
+        adaptiveRemainingHeader: dynamicRemainingHeader ?? null,
+        phaseTriggers: phaseTriggerSummary,
+        halftimeCaptureRate,
+        fulltimeReconciliationLagMinutes,
+        staleCompetitionLagMinutes,
         waitMs: totalWaitMs,
         retryCount: totalRetryCount,
         retryBackoffMs: totalRetryBackoffMs
@@ -4736,10 +5333,13 @@ export class ProviderIngestionService {
       priorityCompetitionCodes?: string[];
       minuteRateLimit?: number;
       minuteRateBuffer?: number;
+      plannedRequestsPerMinute?: number;
+      reserveRequestsPerMinute?: number;
       minIntervalMs?: number;
       maxCallsPerRun?: number;
       retryMax?: number;
-    }
+    },
+    mode: FootballSchedulerMode = "standings"
   ): Promise<ProviderSyncResult> {
     const lockKey = `provider-sync:${provider.key}`;
     const lockOwner = `${runId}:${Date.now()}`;
@@ -4759,6 +5359,7 @@ export class ProviderIngestionService {
     }
 
     try {
+      const now = new Date();
       const minuteRateLimit = this.parseConfigInt(
         settings.minuteRateLimit,
         this.parseEnvInt("FOOTBALL_DATA_RATE_LIMIT_PER_MINUTE", 10)
@@ -4767,13 +5368,21 @@ export class ProviderIngestionService {
         settings.minuteRateBuffer,
         this.parseEnvInt("FOOTBALL_DATA_RATE_LIMIT_BUFFER", 1)
       );
+      const plannedRequestsPerMinute = this.parseConfigInt(
+        settings.plannedRequestsPerMinute,
+        this.parseEnvInt("FOOTBALL_DATA_PLANNED_REQUESTS_PER_MINUTE", 8)
+      );
+      const reserveRequestsPerMinute = this.parseConfigInt(
+        settings.reserveRequestsPerMinute,
+        this.parseEnvInt("FOOTBALL_DATA_RESERVE_REQUESTS_PER_MINUTE", 2)
+      );
       const minIntervalMs = this.parseConfigInt(
         settings.minIntervalMs,
         this.parseEnvInt("FOOTBALL_DATA_MIN_INTERVAL_MS", 7000)
       );
       const maxCallsPerRun = this.parseConfigInt(
         settings.maxCallsPerRun,
-        this.parseEnvInt("FOOTBALL_DATA_MAX_CALLS_PER_RUN", 6)
+        this.parseEnvInt("FOOTBALL_DATA_MAX_CALLS_PER_RUN", 12)
       );
       const retryMax = this.parseConfigInt(
         settings.retryMax,
@@ -4810,22 +5419,44 @@ export class ProviderIngestionService {
         .filter((code) => code.length > 0 && competitionCodes.includes(code));
       const orderedCompetitionCodes = Array.from(new Set([...priorityCodes, ...competitionCodes]));
 
-      const cursorEntityType = "football_standings_competition_cursor";
-      const cursorRaw = await this.getCheckpoint(provider.key, cursorEntityType);
-      const parsedCursor = Number(cursorRaw);
-      const cursor =
-        Number.isFinite(parsedCursor) && parsedCursor >= 0
-          ? Math.floor(parsedCursor) % orderedCompetitionCodes.length
-          : 0;
+      const hadRecent429 = await this.hadRecentFootballData429(provider.key);
+      const baseBudget = deriveFootballRequestBudget({
+        hardLimitPerMinute: minuteRateLimit,
+        plannedTargetPerMinute: plannedRequestsPerMinute,
+        reservePerMinute: Math.max(reserveRequestsPerMinute, minuteRateBuffer),
+        hadRecent429
+      });
+      const competitionSignals = await this.loadFootballCompetitionSignals(orderedCompetitionCodes, now);
+      const lastPolledAtByCode = await this.loadFootballCompetitionLastPolledAt(provider.key, mode, orderedCompetitionCodes);
+      const selection = selectFootballCompetitionsForRun({
+        mode,
+        competitionCodes: orderedCompetitionCodes,
+        signalsByCode: competitionSignals,
+        lastPolledAtByCode,
+        now,
+        plannedCalls: baseBudget.plannedCalls,
+        maxCallsCap: maxCallsPerRun,
+        allowFullCycleWhenSafe: true,
+        forceIncludeAtLeastOne: false
+      });
 
-      const selectedCount = Math.min(Math.max(1, maxCallsPerRun), orderedCompetitionCodes.length);
-      const selectedCompetitionCodes = Array.from(
-        { length: selectedCount },
-        (_, index) => orderedCompetitionCodes[(cursor + index) % orderedCompetitionCodes.length]
-      );
-      const selectedSet = new Set(selectedCompetitionCodes);
-      const deferredCompetitionCodes = orderedCompetitionCodes.filter((code) => !selectedSet.has(code));
-      let nextCursor = (cursor + selectedCount) % orderedCompetitionCodes.length;
+      const selectedCompetitionCodes = selection.selectedCompetitionCodes;
+      const deferredCompetitionCodes = selection.deferredCompetitionCodes;
+      const nextCursor = deferredCompetitionCodes.length > 0 ? orderedCompetitionCodes.indexOf(deferredCompetitionCodes[0]) : 0;
+
+      if (selectedCompetitionCodes.length === 0) {
+        return {
+          providerKey: provider.key,
+          recordsRead: 0,
+          recordsWritten: 0,
+          errors: 0,
+          details: {
+            mode: "syncStandings",
+            message: "Standings kadansina gore bu calismada due competition bulunamadi.",
+            competitionCodes: orderedCompetitionCodes
+          }
+        };
+      }
 
       const seasonFilter = settings.season?.trim();
       let recordsRead = 0;
@@ -4834,7 +5465,12 @@ export class ProviderIngestionService {
       let totalWaitMs = 0;
       let totalRetryCount = 0;
       let totalRetryBackoffMs = 0;
-      let firstFailedCursorIndex: number | null = null;
+      let requestsAttempted = 0;
+      let requestsSucceeded = 0;
+      let requestsRetried = 0;
+      let request429Count = hadRecent429 ? 1 : 0;
+      let skippedDueBudget = 0;
+      let dynamicRemainingHeader: number | undefined;
       const perCompetition: Array<{
         competitionCode: string;
         recordsRead: number;
@@ -4843,16 +5479,30 @@ export class ProviderIngestionService {
         ok: boolean;
         waitMs: number;
         retries: number;
+        bucket: FootballCompetitionBucket;
+        due: boolean;
+        cadenceMinutes: number;
         seasonLabel?: string | null;
         message?: string;
       }> = [];
 
-      for (const [selectedIndex, competitionCode] of selectedCompetitionCodes.entries()) {
-        const absoluteCursorIndex = (cursor + selectedIndex) % orderedCompetitionCodes.length;
+      for (const competitionCode of selectedCompetitionCodes) {
+        const adaptiveBudget = deriveFootballRequestBudget({
+          hardLimitPerMinute: minuteRateLimit,
+          plannedTargetPerMinute: plannedRequestsPerMinute,
+          reservePerMinute: Math.max(reserveRequestsPerMinute, minuteRateBuffer),
+          remainingHeader: dynamicRemainingHeader,
+          hadRecent429: request429Count > 0
+        });
+        if (adaptiveBudget.plannedCalls <= 0) {
+          skippedDueBudget += 1;
+          break;
+        }
+        requestsAttempted += 1;
         const throttle = await this.footballDataThrottle(
           provider.key,
           minuteRateLimit,
-          minuteRateBuffer,
+          Math.max(minuteRateBuffer, Math.max(0, minuteRateLimit - adaptiveBudget.plannedCalls)),
           minIntervalMs
         );
         totalWaitMs += throttle.waitedMs;
@@ -4866,9 +5516,19 @@ export class ProviderIngestionService {
             settings.baseUrl ?? provider.baseUrl ?? undefined,
             retryMax
           );
+          requestsSucceeded += 1;
+          requestsRetried += fetched.retries;
+          if (fetched.had429) {
+            request429Count += 1;
+            await this.markRecentFootballData429(provider.key);
+          }
           totalRetryCount += fetched.retries;
           totalRetryBackoffMs += fetched.backoffMsTotal;
           const response = fetched.response;
+          const responseMeta = (response as { __meta?: FootballDataRateLimitMeta }).__meta;
+          if (typeof responseMeta?.remaining === "number" && Number.isFinite(responseMeta.remaining)) {
+            dynamicRemainingHeader = Math.max(0, Math.floor(responseMeta.remaining));
+          }
           const durationMs = Date.now() - startedAt;
           await this.logApiCall(`provider/${provider.key}/competitions/${competitionCode}/standings`, 200, durationMs, runId);
 
@@ -4902,6 +5562,7 @@ export class ProviderIngestionService {
               competitionErrors += 1;
             }
           }
+          await this.setFootballCompetitionLastPolledAt(provider.key, mode, competitionCode, new Date());
 
           perCompetition.push({
             competitionCode,
@@ -4911,14 +5572,25 @@ export class ProviderIngestionService {
             ok: true,
             waitMs: throttle.waitedMs,
             retries: fetched.retries,
+            bucket: selection.bucketByCompetitionCode[competitionCode],
+            due: selection.dueByCompetitionCode[competitionCode],
+            cadenceMinutes: selection.cadenceByCompetitionCodeMinutes[competitionCode],
             seasonLabel:
               seasonStartDateRaw.length > 0
                 ? this.footballSeasonLabel(this.parseEventDate(seasonStartDateRaw) ?? new Date())
                 : null
           });
+          if (typeof dynamicRemainingHeader === "number" && dynamicRemainingHeader <= adaptiveBudget.reserveCalls) {
+            skippedDueBudget += Math.max(0, selectedCompetitionCodes.length - perCompetition.length);
+            break;
+          }
         } catch (error) {
           const durationMs = Date.now() - startedAt;
           const statusCode = error instanceof FootballDataHttpError ? error.status : 500;
+          if (statusCode === 429) {
+            request429Count += 1;
+            await this.markRecentFootballData429(provider.key);
+          }
           await this.logApiCall(
             `provider/${provider.key}/competitions/${competitionCode}/standings`,
             statusCode,
@@ -4927,9 +5599,6 @@ export class ProviderIngestionService {
           );
           const message = error instanceof Error ? error.message : "football_data standings fetch error";
           errors += 1;
-          if (firstFailedCursorIndex === null) {
-            firstFailedCursorIndex = absoluteCursorIndex;
-          }
           perCompetition.push({
             competitionCode,
             recordsRead: 0,
@@ -4938,40 +5607,65 @@ export class ProviderIngestionService {
             ok: false,
             waitMs: throttle.waitedMs,
             retries: 0,
+            bucket: selection.bucketByCompetitionCode[competitionCode],
+            due: selection.dueByCompetitionCode[competitionCode],
+            cadenceMinutes: selection.cadenceByCompetitionCodeMinutes[competitionCode],
             message
           });
         }
       }
 
-      if (firstFailedCursorIndex !== null) {
-        nextCursor = firstFailedCursorIndex;
-      }
-
       const checkpointDate = this.todayDateString(0);
       await this.setCheckpoint(provider.key, "football_standings", checkpointDate);
-      await this.setCheckpoint(provider.key, cursorEntityType, String(nextCursor));
+      await this.setCheckpoint(provider.key, "football_standings_competition_cursor", String(nextCursor >= 0 ? nextCursor : 0));
+      const staleCompetitionLagMinutes = orderedCompetitionCodes.length
+        ? Math.max(
+            ...orderedCompetitionCodes.map((code) => {
+              const lastPolledAt = lastPolledAtByCode[code];
+              if (!lastPolledAt) {
+                return 99999;
+              }
+              return Math.max(0, Math.round((now.getTime() - lastPolledAt.getTime()) / 60000));
+            })
+          )
+        : 0;
 
       await this.createExternalPayload(provider.key, runId, "football_data_standings", {
+        mode,
         competitionCodes,
         orderedCompetitionCodes,
         priorityCompetitionCodes: priorityCodes,
         selectedCompetitionCodes,
         deferredCompetitionCodes,
+        bucketByCompetitionCode: selection.bucketByCompetitionCode,
+        bucketSizes: selection.bucketSizes,
+        selectedCounts: selection.selectedCounts,
+        dueByCompetitionCode: selection.dueByCompetitionCode,
+        cadenceByCompetitionCodeMinutes: selection.cadenceByCompetitionCodeMinutes,
         perCompetition,
         seasonFilter: seasonFilter ?? null,
         recordsRead,
         recordsWritten,
         errors,
         checkpointDate,
-        checkpointCursorBefore: cursor,
         checkpointCursorAfter: nextCursor,
         rateLimit: {
           minuteRateLimit,
           minuteRateBuffer,
+          plannedRequestsPerMinute,
+          reserveRequestsPerMinute,
           minIntervalMs,
           maxCallsPerRun,
           retryMax
         },
+        requestBudget: baseBudget,
+        requestsAttempted,
+        requestsSucceeded,
+        requestsRetried,
+        request429Count,
+        skippedDueBudget,
+        adaptiveRemainingHeader: dynamicRemainingHeader ?? null,
+        staleCompetitionLagMinutes,
         waitMs: totalWaitMs,
         retryCount: totalRetryCount,
         retryBackoffMs: totalRetryBackoffMs
@@ -4988,10 +5682,22 @@ export class ProviderIngestionService {
           orderedCompetitionCodes,
           selectedCompetitionCodes,
           deferredCompetitionCodes,
+          bucketByCompetitionCode: selection.bucketByCompetitionCode,
+          bucketSizes: selection.bucketSizes,
+          selectedCounts: selection.selectedCounts,
+          dueByCompetitionCode: selection.dueByCompetitionCode,
+          cadenceByCompetitionCodeMinutes: selection.cadenceByCompetitionCodeMinutes,
           seasonFilter: seasonFilter ?? null,
-          checkpointCursorBefore: cursor,
           checkpointCursorAfter: nextCursor,
-          perCompetition
+          perCompetition,
+          requestBudget: baseBudget,
+          requestsAttempted,
+          requestsSucceeded,
+          requestsRetried,
+          request429Count,
+          skippedDueBudget,
+          adaptiveRemainingHeader: dynamicRemainingHeader ?? null,
+          staleCompetitionLagMinutes
         }
       };
     } finally {

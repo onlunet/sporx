@@ -1,5 +1,26 @@
 import { Injectable } from "@nestjs/common";
 
+export type FootballDataRateLimitMeta = {
+  remaining?: number;
+  limit?: number;
+  resetSeconds?: number;
+  retryAfterSeconds?: number;
+};
+
+type FootballDataMatchesResponse = {
+  matches?: Array<Record<string, unknown>>;
+  __meta?: FootballDataRateLimitMeta;
+};
+
+type FootballDataCompetitionsResponse = {
+  competitions?: Array<Record<string, unknown>>;
+  __meta?: FootballDataRateLimitMeta;
+};
+
+type FootballDataStandingsResponse = Record<string, unknown> & {
+  __meta?: FootballDataRateLimitMeta;
+};
+
 export class FootballDataHttpError extends Error {
   readonly status: number;
   readonly retryAfterSeconds?: number;
@@ -44,6 +65,43 @@ export class FootballDataConnector {
     }
     const diffSeconds = Math.ceil((dateMs - Date.now()) / 1000);
     return diffSeconds > 0 ? diffSeconds : undefined;
+  }
+
+  private parseHeaderNumber(headers: Headers, candidates: string[]) {
+    for (const key of candidates) {
+      const raw = headers.get(key);
+      if (!raw) {
+        continue;
+      }
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.floor(parsed);
+      }
+    }
+    return undefined;
+  }
+
+  private parseRateLimitMeta(headers: Headers): FootballDataRateLimitMeta {
+    return {
+      remaining: this.parseHeaderNumber(headers, [
+        "x-ratelimit-remaining",
+        "x-requests-available-minute",
+        "x-requests-remaining",
+        "x-rate-limit-remaining"
+      ]),
+      limit: this.parseHeaderNumber(headers, [
+        "x-ratelimit-limit",
+        "x-requests-limit",
+        "x-rate-limit-limit"
+      ]),
+      resetSeconds:
+        this.parseHeaderNumber(headers, [
+          "x-ratelimit-reset",
+          "x-requestcounter-reset",
+          "x-rate-limit-reset"
+        ]) ?? this.parseRetryAfterSeconds(headers.get("retry-after")),
+      retryAfterSeconds: this.parseRetryAfterSeconds(headers.get("retry-after"))
+    };
   }
 
   private numberFromEnv(key: string, fallback: number) {
@@ -108,7 +166,11 @@ export class FootballDataConnector {
         this.parseRetryAfterSeconds(res.headers.get("retry-after"))
       );
     }
-    return (await res.json()) as { competitions?: Array<Record<string, unknown>> };
+    const payload = (await res.json()) as { competitions?: Array<Record<string, unknown>> };
+    return {
+      ...payload,
+      __meta: this.parseRateLimitMeta(res.headers)
+    } as FootballDataCompetitionsResponse;
   }
 
   async fetchMatches(apiKey: string, competitionCode: string, dateFrom?: string, dateTo?: string, baseUrl?: string) {
@@ -134,7 +196,11 @@ export class FootballDataConnector {
       );
     }
 
-    return (await res.json()) as { matches?: Array<Record<string, unknown>> };
+    const payload = (await res.json()) as { matches?: Array<Record<string, unknown>> };
+    return {
+      ...payload,
+      __meta: this.parseRateLimitMeta(res.headers)
+    } as FootballDataMatchesResponse;
   }
 
   async fetchStandings(
@@ -166,6 +232,10 @@ export class FootballDataConnector {
       );
     }
 
-    return (await res.json()) as Record<string, unknown>;
+    const payload = (await res.json()) as Record<string, unknown>;
+    return {
+      ...payload,
+      __meta: this.parseRateLimitMeta(res.headers)
+    } as FootballDataStandingsResponse;
   }
 }

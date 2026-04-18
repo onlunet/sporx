@@ -6,6 +6,9 @@ import { IngestionService } from "../ingestion/ingestion.service";
 
 type JobType =
   | "syncFixtures"
+  | "syncFixturesHotPulse"
+  | "syncResults"
+  | "syncResultsReconcile"
   | "syncStandings"
   | "generatePredictions"
   | "providerHealthCheck"
@@ -19,6 +22,9 @@ type JobType =
 
 const JOB_TYPES: JobType[] = [
   "syncFixtures",
+  "syncFixturesHotPulse",
+  "syncResults",
+  "syncResultsReconcile",
   "syncStandings",
   "generatePredictions",
   "providerHealthCheck",
@@ -110,6 +116,9 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
 
       const schedulePlan: Array<readonly [JobType, number]> = [
         ["syncFixtures", syncEveryMinutes],
+        ["syncFixturesHotPulse", intervals.hotPulseMinutes],
+        ["syncResults", intervals.resultsMinutes],
+        ["syncResultsReconcile", intervals.resultsReconcileMinutes],
         ["syncStandings", intervals.standingsMinutes],
         ["generatePredictions", syncEveryMinutes],
         ["providerHealthCheck", intervals.providerHealthMinutes],
@@ -212,6 +221,11 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     const intervalKeys = [
       "sync.interval.defaultMinutes",
       "sync.interval.matchDayMinutes",
+      "sync.interval.hotPulseMinutes",
+      "sync.interval.resultsMinutes",
+      "sync.interval.resultsReconcileMinutes",
+      "sync.interval.standingsHotMinutes",
+      "sync.interval.standingsQuietMinutes",
       "sync.interval.standingsMinutes",
       "sync.interval.aliasMinutes",
       "sync.interval.teamProfileMinutes",
@@ -223,7 +237,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       "sync.interval.marketAnalysisMinutes"
     ] as const;
 
-    const [settings, nextDayMatches] = await Promise.all([
+    const [settings, nextDayMatches, hotFootballMatches] = await Promise.all([
       this.prisma.systemSetting.findMany({
         where: {
           key: { in: [...intervalKeys] }
@@ -237,17 +251,40 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
             lte: new Date(Date.now() + 24 * 60 * 60 * 1000)
           }
         }
+      }),
+      this.prisma.match.count({
+        where: {
+          sport: { code: "football" },
+          OR: [
+            { status: "live" },
+            {
+              status: "scheduled",
+              matchDateTimeUTC: {
+                gte: new Date(),
+                lte: new Date(Date.now() + 6 * 60 * 60 * 1000)
+              }
+            }
+          ]
+        }
       })
     ]);
 
     const settingMap = new Map(settings.map((setting) => [setting.key, setting.value] as const));
     const defaultMinutes = this.settingNumber(settingMap.get("sync.interval.defaultMinutes"), 60);
-    const matchDayMinutes = this.settingNumber(settingMap.get("sync.interval.matchDayMinutes"), 15);
+    const matchDayMinutes = this.settingNumber(settingMap.get("sync.interval.matchDayMinutes"), 5);
+    const standingsHotMinutes = this.settingNumber(
+      settingMap.get("sync.interval.standingsHotMinutes") ?? settingMap.get("sync.interval.standingsMinutes"),
+      360
+    );
+    const standingsQuietMinutes = this.settingNumber(settingMap.get("sync.interval.standingsQuietMinutes"), 720);
 
     return {
       syncEveryMinutes: nextDayMatches > 0 ? matchDayMinutes : defaultMinutes,
       intervals: {
-        standingsMinutes: this.settingNumber(settingMap.get("sync.interval.standingsMinutes"), 360),
+        hotPulseMinutes: hotFootballMatches > 0 ? this.settingNumber(settingMap.get("sync.interval.hotPulseMinutes"), 3) : 30,
+        resultsMinutes: this.settingNumber(settingMap.get("sync.interval.resultsMinutes"), 30),
+        resultsReconcileMinutes: this.settingNumber(settingMap.get("sync.interval.resultsReconcileMinutes"), 1440),
+        standingsMinutes: hotFootballMatches > 0 ? standingsHotMinutes : standingsQuietMinutes,
         aliasSyncMinutes: this.settingNumber(settingMap.get("sync.interval.aliasMinutes"), 360),
         teamProfileMinutes: this.settingNumber(settingMap.get("sync.interval.teamProfileMinutes"), 240),
         detailMinutes: this.settingNumber(settingMap.get("sync.interval.matchDetailMinutes"), 120),

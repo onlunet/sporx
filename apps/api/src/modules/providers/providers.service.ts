@@ -32,6 +32,8 @@ type ProviderRuntimeSettings = {
   priorityCompetitionCodes?: string[];
   minuteRateLimit?: number;
   minuteRateBuffer?: number;
+  plannedRequestsPerMinute?: number;
+  reserveRequestsPerMinute?: number;
   minIntervalMs?: number;
   maxCallsPerRun?: number;
   retryMax?: number;
@@ -75,8 +77,10 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
       priorityCompetitionCodes: "PL,CL,SA,PD,BL1,FL1",
       minuteRateLimit: "10",
       minuteRateBuffer: "1",
+      plannedRequestsPerMinute: "8",
+      reserveRequestsPerMinute: "2",
       minIntervalMs: "7000",
-      maxCallsPerRun: "6",
+      maxCallsPerRun: "12",
       retryMax: "2"
     }
   },
@@ -355,6 +359,8 @@ export class ProvidersService {
       priorityCompetitionCodes: this.toStringList(configs.priorityCompetitionCodes),
       minuteRateLimit: this.toInt(configs.minuteRateLimit),
       minuteRateBuffer: this.toInt(configs.minuteRateBuffer),
+      plannedRequestsPerMinute: this.toInt(configs.plannedRequestsPerMinute),
+      reserveRequestsPerMinute: this.toInt(configs.reserveRequestsPerMinute),
       minIntervalMs: this.toInt(configs.minIntervalMs),
       maxCallsPerRun: this.toInt(configs.maxCallsPerRun),
       retryMax: this.toInt(configs.retryMax),
