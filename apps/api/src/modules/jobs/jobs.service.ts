@@ -44,8 +44,9 @@ type SchedulerLockState = {
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
-  // Run scheduler by default when SERVICE_ROLE is missing; explicit SERVICE_ROLE=api can still disable it.
-  private readonly isWorker = (process.env.SERVICE_ROLE ?? "worker") === "worker";
+  // Scheduler must keep running in production even if worker process is unavailable.
+  // By default enable for worker/api roles; SCHEDULER_ENABLED can explicitly override.
+  private readonly schedulerEnabled = this.resolveSchedulerEnabled();
   private readonly tickMs = this.readSchedulerTickMs();
   private readonly staleThresholdMs = this.readStaleThresholdMs();
   private readonly staleRecoveryIntervalMs = this.readStaleRecoveryIntervalMs();
@@ -63,7 +64,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
-    if (!this.isWorker) {
+    if (!this.schedulerEnabled) {
       return;
     }
 
@@ -76,6 +77,19 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     }, this.tickMs);
 
     this.logger.log("Background job scheduler started");
+  }
+
+  private resolveSchedulerEnabled() {
+    const explicit = (process.env.SCHEDULER_ENABLED ?? "").trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(explicit)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(explicit)) {
+      return false;
+    }
+
+    const role = (process.env.SERVICE_ROLE ?? "worker").trim().toLowerCase();
+    return role === "worker" || role === "api";
   }
 
   async onModuleDestroy() {
