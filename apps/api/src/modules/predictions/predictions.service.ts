@@ -576,7 +576,23 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
   };
 }
 
+function normalizeFallbackSummary(
+  summary: string,
+  match: { homeTeam: { name: string }; awayTeam: { name: string } },
+  probabilitySource: unknown
+) {
+  if (!hasSyntheticSummary(summary)) {
+    return summary;
+  }
+  const probabilities = asRecord(probabilitySource) ?? {};
+  const homePct = Math.round((asFinite(probabilities.home) ?? 0.34) * 100);
+  const drawPct = Math.round((asFinite(probabilities.draw) ?? 0.33) * 100);
+  const awayPct = Math.round((asFinite(probabilities.away) ?? 0.33) * 100);
+  return `${match.homeTeam.name} - ${match.awayTeam.name}: Ev ${homePct}%, Beraberlik ${drawPct}%, Deplasman ${awayPct}%.`;
+}
+
 function normalizeLegacyRow(row: LegacyPredictionRecord) {
+  const probabilitySource = row.calibratedProbabilities ?? row.probabilities ?? row.rawProbabilities;
   return {
     matchId: row.matchId,
     modelVersionId: row.modelVersionId,
@@ -585,7 +601,7 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
     rawProbabilities: row.rawProbabilities,
     expectedScore: row.expectedScore,
     confidenceScore: row.confidenceScore,
-    summary: row.summary,
+    summary: normalizeFallbackSummary(row.summary, row.match, probabilitySource),
     riskFlags: row.riskFlags,
     avoidReason: row.avoidReason,
     updatedAt: row.updatedAt,
@@ -612,6 +628,7 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
     summaryFromExplanation.length > 0
       ? summaryFromExplanation
       : `${row.match.homeTeam.name} - ${row.match.awayTeam.name}: prediction run ${row.market} tahmini.`;
+  const summarySafe = normalizeFallbackSummary(summary, row.match, calibratedProbabilities ?? probabilities);
 
   return {
     matchId: row.matchId,
@@ -621,7 +638,7 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
     rawProbabilities,
     expectedScore,
     confidenceScore: row.confidence,
-    summary,
+    summary: summarySafe,
     riskFlags: row.riskFlagsJson,
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.createdAt,
