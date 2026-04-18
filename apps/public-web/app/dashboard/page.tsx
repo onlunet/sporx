@@ -82,7 +82,7 @@ export default async function DashboardPage() {
   activityRows.push({
     id: `dashboard-refresh-${dashboard.generatedAt}`,
     type: "info",
-    message: "Dashboard metrikleri guncellendi.",
+    message: "Panel metrikleri güncellendi.",
     at: safeIsoDate(dashboard.generatedAt)
   });
 
@@ -91,7 +91,7 @@ export default async function DashboardPage() {
     activityRows.push({
       id: `live-${dashboard.generatedAt}`,
       type: "info",
-      message: `${liveCount} canli mac takip ediliyor.`,
+      message: `${liveCount} canlı maç takip ediliyor.`,
       at: safeIsoDate(dashboard.generatedAt)
     });
   }
@@ -105,7 +105,7 @@ export default async function DashboardPage() {
     activityRows.push({
       id: `completed-${match.id}`,
       type: "success",
-      message: `${match.homeTeam} - ${match.awayTeam} maci ${match.score.home}-${match.score.away} tamamlandi.`,
+      message: `${match.homeTeam} - ${match.awayTeam} maçı ${match.score.home}-${match.score.away} tamamlandı.`,
       at: safeIsoDate(match.kickoffAt, safeIsoDate(dashboard.generatedAt))
     });
   }
@@ -123,7 +123,7 @@ export default async function DashboardPage() {
     activityRows.push({
       id: `high-${item.matchId}-${item.confidenceScore}`,
       type: "success",
-      message: `Yuksek guvenli tahmin: ${item.homeTeam} - ${item.awayTeam} (%${Math.round(item.confidenceScore * 100)}).`,
+      message: `Yüksek güvenli tahmin: ${item.homeTeam} - ${item.awayTeam} (%${Math.round(item.confidenceScore * 100)}).`,
       at: safeIsoDate(dashboard.generatedAt)
     });
   }
@@ -137,7 +137,7 @@ export default async function DashboardPage() {
     activityRows.push({
       id: `low-${firstLowConfidence.matchId}`,
       type: "warning",
-      message: `Dusuk guven uyarisi: ${firstLowConfidence.homeTeam} - ${firstLowConfidence.awayTeam}.`,
+      message: `Düşük güven uyarısı: ${firstLowConfidence.homeTeam} - ${firstLowConfidence.awayTeam}.`,
       at: safeIsoDate(dashboard.generatedAt)
     });
   }
@@ -160,26 +160,26 @@ export default async function DashboardPage() {
             </div>
             <div>
               <h1 className="gradient-text font-display text-2xl sm:text-3xl font-bold">Panel</h1>
-              <p className="text-xs sm:text-sm text-slate-400">Sistem genel bakis ve analitikler</p>
+              <p className="text-xs sm:text-sm text-slate-400">Sistem genel bakış ve analitikler</p>
             </div>
           </div>
 
           {dashboardUnavailable ? (
-            <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-              Dashboard verisi su anda sinirli. Arka plan servisleri toparlandiginda metrikler otomatik guncellenir.
-            </div>
-          ) : null}
+              <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+              Panel verisi şu anda sınırlı. Arka plan servisleri toparlandığında metrikler otomatik güncellenir.
+              </div>
+            ) : null}
 
           <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-            <MetricCard label="Toplam Mac" value={dashboard.matchCount} icon={<Trophy className="h-5 w-5" />} color="cyan" trend="up" trendValue="%12" />
-            <MetricCard label="Tahmin Sayisi" value={dashboard.predictionCount} icon={<BrainCircuit className="h-5 w-5" />} color="purple" trend="up" trendValue="%8" />
-            <MetricCard label="Dusuk Guven" value={dashboard.lowConfidenceCount} icon={<AlertTriangle className="h-5 w-5" />} color="amber" trend="down" trendValue="%5" />
-            <MetricCard label="Basarisiz Analiz" value={dashboard.failedCount} icon={<TrendingUp className="h-5 w-5" />} color="red" trend="neutral" trendValue="0%" />
+            <MetricCard label="Toplam Maç" value={dashboard.matchCount} icon={<Trophy className="h-5 w-5" />} color="cyan" trend="up" trendValue="%12" />
+            <MetricCard label="Tahmin Sayısı" value={dashboard.predictionCount} icon={<BrainCircuit className="h-5 w-5" />} color="purple" trend="up" trendValue="%8" />
+            <MetricCard label="Düşük Güven" value={dashboard.lowConfidenceCount} icon={<AlertTriangle className="h-5 w-5" />} color="amber" trend="down" trendValue="%5" />
+            <MetricCard label="Başarısız Analiz" value={dashboard.failedCount} icon={<TrendingUp className="h-5 w-5" />} color="red" trend="neutral" trendValue="0%" />
           </div>
 
           <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
             <Clock className="h-3.5 w-3.5" />
-            <span>Son guncelleme: {new Date(dashboard.generatedAt).toLocaleString("tr-TR")}</span>
+            <span>Son güncelleme: {new Date(dashboard.generatedAt).toLocaleString("tr-TR")}</span>
           </div>
         </div>
       </div>
@@ -189,12 +189,12 @@ export default async function DashboardPage() {
           <section className="glass-card rounded-xl sm:rounded-2xl p-4 sm:p-6">
             <div className="mb-4 sm:mb-6 flex items-center gap-2">
               <BrainCircuit className="h-5 w-5 text-neon-cyan" />
-              <h2 className="text-base sm:text-lg font-semibold text-white">Tahmin Guven Dagilimi</h2>
+              <h2 className="text-base sm:text-lg font-semibold text-white">Tahmin Güven Dağılımı</h2>
             </div>
             {predictionOverview ? (
               <ConfidenceChart high={predictionOverview.highConfidence} medium={predictionOverview.mediumConfidence} low={predictionOverview.lowConfidence} />
             ) : (
-              <p className="py-8 text-center text-slate-400">Guven dagilimi verisi alinamadi.</p>
+              <p className="py-8 text-center text-slate-400">Güven dağılımı verisi alınamadı.</p>
             )}
           </section>
 

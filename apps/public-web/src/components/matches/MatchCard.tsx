@@ -12,15 +12,17 @@ interface MatchCardProps {
     kickoffAt: string;
     score?: { home: number | null; away: number | null } | null;
   };
+  href?: string;
 }
 
-export function MatchCard({ match }: MatchCardProps) {
+export function MatchCard({ match, href }: MatchCardProps) {
   const matchDate = new Date(match.kickoffAt);
   const isLive = match.status.toLowerCase() === 'live';
   const hasScore = match.score?.home !== null && match.score?.away !== null;
+  const detailHref = href ?? `/futbol/maclar/${match.id}`;
   
   return (
-    <Link href={`/matches/${match.id}`}>
+    <Link href={detailHref}>
       <article className='group relative overflow-hidden rounded-xl sm:rounded-2xl bg-gradient-to-br from-surface/80 to-abyss/90 border border-white/5 hover:border-neon-cyan/30 transition-all duration-500 hover:shadow-glow-cyan/20 hover:shadow-lg'>
         <div className='absolute inset-0 bg-gradient-to-br from-neon-cyan/5 via-transparent to-neon-purple/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500' />
         

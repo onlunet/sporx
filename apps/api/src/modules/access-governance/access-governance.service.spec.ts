@@ -13,6 +13,7 @@ describe("AccessGovernanceService", () => {
   };
 
   let prisma: any;
+  let securityEventService: any;
   let service: AccessGovernanceService;
 
   beforeEach(() => {
@@ -39,13 +40,33 @@ describe("AccessGovernanceService", () => {
       }
     };
 
-    service = new AccessGovernanceService(prisma);
+    securityEventService = {
+      emitAuditEvent: jest.fn().mockResolvedValue({ id: "audit-1" }),
+      emitSecurityEvent: jest.fn().mockResolvedValue({ id: "security-1" })
+    };
+
+    service = new AccessGovernanceService(prisma, securityEventService);
   });
 
   afterEach(() => {
     delete process.env.ACCESS_GOVERNANCE_ENABLED;
     delete process.env.SCOPED_PERMISSION_ENFORCEMENT_ENABLED;
     delete process.env.SERVICE_IDENTITY_SCOPE_ENFORCED;
+    delete process.env.APP_ENV;
+  });
+
+  it("enables governance by default in production when env flag is unset", () => {
+    delete process.env.ACCESS_GOVERNANCE_ENABLED;
+    process.env.APP_ENV = "production";
+
+    expect(service.isEnabled()).toBe(true);
+  });
+
+  it("keeps governance opt-in in development when env flag is unset", () => {
+    delete process.env.ACCESS_GOVERNANCE_ENABLED;
+    process.env.APP_ENV = "development";
+
+    expect(service.isEnabled()).toBe(false);
   });
 
   it("denies by default when no policy or grant exists", async () => {
@@ -208,5 +229,7 @@ describe("AccessGovernanceService", () => {
         })
       })
     );
+    expect(securityEventService.emitAuditEvent).toHaveBeenCalled();
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
+import type { Server } from "node:http";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 import { IngestionQueueService } from "./modules/ingestion/ingestion-queue.service";
+import { RuntimeHardeningService } from "./modules/security-hardening/runtime-hardening.service";
 
 type WorkerHealthState = {
   phase: "starting" | "ready" | "failed";
@@ -57,9 +59,10 @@ function resolveHealthPorts() {
 function startHealthServers(state: WorkerHealthState) {
   const ports = resolveHealthPorts();
   if (ports.length === 0) {
-    return;
+    return [] as Server[];
   }
 
+  const servers: Server[] = [];
   for (const port of ports) {
     const server = createServer((req, res) => {
       const path = (req.url ?? "").split("?")[0];
@@ -92,7 +95,25 @@ function startHealthServers(state: WorkerHealthState) {
     server.listen(port, () => {
       console.log(`[worker] health server listening on :${port}`);
     });
+    servers.push(server);
   }
+
+  return servers;
+}
+
+async function closeHealthServers(servers: Server[]) {
+  await Promise.all(
+    servers.map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          if (!server.listening) {
+            resolve();
+            return;
+          }
+          server.close(() => resolve());
+        })
+    )
+  );
 }
 
 async function bootstrapWorker() {
@@ -103,10 +124,35 @@ async function bootstrapWorker() {
     error: null
   };
 
-  startHealthServers(state);
+  const healthServers = startHealthServers(state);
+  let app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>> | null = null;
+  let shutdownStarted = false;
+
+  const shutdown = async (reason: string, exitCode: number) => {
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
+    console.log(`[worker] shutting down (${reason})`);
+    if (app) {
+      await app.close().catch(() => undefined);
+    }
+    await closeHealthServers(healthServers);
+    process.exit(exitCode);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT", 0);
+  });
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM", 0);
+  });
 
   try {
-    const app = await NestFactory.createApplicationContext(AppModule);
+    app = await NestFactory.createApplicationContext(AppModule);
+    app.enableShutdownHooks();
+    const runtimeHardeningService = app.get(RuntimeHardeningService);
+    await runtimeHardeningService.assertStartupHardeningOrThrow();
     const queue = app.get(IngestionQueueService);
     await queue.startWorker();
     state.phase = "ready";
@@ -117,9 +163,7 @@ async function bootstrapWorker() {
     state.phase = "failed";
     state.error = message;
     console.error(`[worker] bootstrap failed: ${message}`);
-    setTimeout(() => {
-      process.exit(1);
-    }, 250);
+    await shutdown("bootstrap_failed", 1);
   }
 }
 

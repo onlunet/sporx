@@ -43,14 +43,19 @@ export async function refreshAdminTokens(refreshToken?: string) {
     return null;
   }
 
-  const response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/refresh`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
+      cache: "no-store"
+    });
+  } catch {
+    return null;
+  }
 
   if (!response.ok) {
     return null;

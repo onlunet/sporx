@@ -1,6 +1,6 @@
 ﻿import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
-import { MatchStatus, PlayerAvailabilityStatus, Prisma } from "@prisma/client";
+import { AccessActorType, MatchStatus, PlayerAvailabilityStatus, Prisma, SecurityEventSeverity, SecurityEventSourceDomain } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { FootballDataConnector, FootballDataHttpError } from "./football-data.connector";
@@ -18,6 +18,8 @@ import { BasketballPredictionEngineService } from "../predictions/basketball/bas
 import { MatchContextEnrichmentService } from "./match-context-enrichment.service";
 import { PredictionRunPublisherService } from "./prediction-run-publisher.service";
 import { ModelAliasService } from "../predictions/model-alias.service";
+import { IncidentReadinessService } from "../security-events/incident-readiness.service";
+import { SecurityEventService } from "../security-events/security-event.service";
 
 type SyncSummary = {
   recordsRead: number;
@@ -152,7 +154,9 @@ export class ProviderIngestionService {
     private readonly basketballPredictionEngine: BasketballPredictionEngineService,
     private readonly matchContextEnrichment: MatchContextEnrichmentService,
     private readonly predictionRunPublisher: PredictionRunPublisherService,
-    private readonly modelAliasService: ModelAliasService
+    private readonly modelAliasService: ModelAliasService,
+    private readonly incidentReadinessService: IncidentReadinessService,
+    private readonly securityEventService: SecurityEventService
   ) {}
 
   private supportsProviderFetch(jobType: string) {
@@ -214,6 +218,33 @@ export class ProviderIngestionService {
       }
     }
     return fallback;
+  }
+
+  private parseDisabledProviderPaths(value: unknown) {
+    if (!value) {
+      return new Set<string>();
+    }
+    if (typeof value === "string") {
+      return new Set(
+        value
+          .split(",")
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean)
+      );
+    }
+    if (Array.isArray(value)) {
+      return new Set(value.map((item) => String(item).trim().toLowerCase()).filter(Boolean));
+    }
+    if (typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (Array.isArray(record.providers)) {
+        return new Set(record.providers.map((item) => String(item).trim().toLowerCase()).filter(Boolean));
+      }
+      if (typeof record.provider === "string") {
+        return new Set([record.provider.trim().toLowerCase()]);
+      }
+    }
+    return new Set<string>();
   }
 
   private clampNumeric(value: number, min: number, max: number) {
@@ -526,9 +557,38 @@ export class ProviderIngestionService {
     }
 
     const activeProviders = await this.providersService.listActiveApiProviders();
+    const emergencyControls = await this.incidentReadinessService.getEmergencyControlStatus();
+    const disabledProviders = this.parseDisabledProviderPaths(emergencyControls.disabledProviderPath);
     const results: ProviderSyncResult[] = [];
 
     for (const provider of activeProviders) {
+      if (disabledProviders.has(provider.key.toLowerCase())) {
+        await this.securityEventService.emitSecurityEvent({
+          sourceDomain: SecurityEventSourceDomain.PROVIDER,
+          eventType: "provider_path_blocked_by_emergency_control",
+          severity: SecurityEventSeverity.HIGH,
+          actorType: AccessActorType.SYSTEM,
+          targetResourceType: "provider",
+          targetResourceId: provider.key,
+          reason: "disabled_provider_path",
+          metadata: {
+            providerKey: provider.key,
+            jobType
+          }
+        });
+        results.push({
+          providerKey: provider.key,
+          recordsRead: 0,
+          recordsWritten: 0,
+          errors: 0,
+          details: {
+            skipped: true,
+            reason: "disabled_provider_path"
+          }
+        });
+        continue;
+      }
+
       try {
         if (provider.key === "football_data") {
           results.push(await this.syncFootballData(provider, runId, jobType));

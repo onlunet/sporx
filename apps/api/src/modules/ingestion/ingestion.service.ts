@@ -1,10 +1,12 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { IngestionQueueService } from "./ingestion-queue.service";
 import { ProviderIngestionService } from "../providers/provider-ingestion.service";
 
 @Injectable()
 export class IngestionService {
+  private readonly logger = new Logger(IngestionService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly queue: IngestionQueueService,
@@ -44,7 +46,15 @@ export class IngestionService {
       }
     });
 
-    await this.queue.enqueuePipeline(jobType, { runId: run.id, jobType });
+    try {
+      await this.queue.enqueuePipeline(jobType, { runId: run.id, jobType });
+    } catch (error) {
+      this.logger.warn(
+        `Queue enqueue failed for run ${run.id}; continuing with inline fallback: ${
+          error instanceof Error ? error.message : "unknown enqueue error"
+        }`
+      );
+    }
     this.queue.runInlineFallback(run.id, jobType);
 
     return {

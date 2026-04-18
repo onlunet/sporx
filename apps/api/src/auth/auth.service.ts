@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import {
+  AccessActorType,
   AdminStepUpStatus,
   AuthActorType,
   AuthRiskSeverity,
@@ -7,13 +8,17 @@ import {
   AuthSessionStatus,
   LoginAttemptResult,
   RefreshToken,
-  RefreshTokenEventType
+  RefreshTokenEventType,
+  SecurityEventSeverity,
+  SecurityEventSourceDomain
 } from "@prisma/client";
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcrypt";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { UsersService } from "../users/users.service";
+import { IncidentReadinessService } from "../modules/security-events/incident-readiness.service";
+import { SecurityEventService } from "../modules/security-events/security-event.service";
 
 type RefreshPayload = {
   sub: string;
@@ -95,8 +100,14 @@ export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
+    private readonly securityEventService: SecurityEventService,
+    private readonly incidentReadinessService: IncidentReadinessService
   ) {}
+
+  private mapActorTypeForSecurity(actorType: AuthActorType) {
+    return actorType === AuthActorType.ADMIN ? AccessActorType.ADMIN : AccessActorType.USER;
+  }
 
   private throwAuthFailed(): never {
     throw new UnauthorizedException("Authentication failed");
@@ -348,6 +359,23 @@ export class AuthService {
       reason: input.reason
     });
 
+    await this.securityEventService.emitSecurityEvent({
+      sourceDomain: SecurityEventSourceDomain.AUTH,
+      eventType: input.actorType === AuthActorType.ADMIN ? "admin_login_failure" : "login_failure",
+      severity: input.actorType === AuthActorType.ADMIN ? SecurityEventSeverity.HIGH : SecurityEventSeverity.MEDIUM,
+      actorType: this.mapActorTypeForSecurity(input.actorType),
+      actorId: input.userId ?? null,
+      targetResourceType: "auth",
+      reason: input.reason,
+      context: {
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent ?? null
+      },
+      metadata: {
+        email: input.email
+      }
+    });
+
     if (!this.isAuthLockoutEnabled()) {
       return;
     }
@@ -583,6 +611,30 @@ export class AuthService {
         },
         tx
       );
+
+      await this.securityEventService.emitSecurityEvent(
+        {
+          eventKey: `auth:refresh_reuse:${token.id}:${token.usedAt?.getTime() ?? token.revokedAt?.getTime() ?? Date.now()}`,
+          sourceDomain: SecurityEventSourceDomain.AUTH,
+          eventType: "refresh_token_reuse",
+          severity: SecurityEventSeverity.CRITICAL,
+          actorType: this.mapActorTypeForSecurity(actorType),
+          actorId: token.userId,
+          targetResourceType: "refresh_token",
+          targetResourceId: token.id,
+          reason: "refresh_token_reuse_detected",
+          context: {
+            ipAddress: context?.ipAddress ?? null,
+            userAgent: context?.userAgent ?? null,
+            environment: context?.environment ?? null
+          },
+          metadata: {
+            sessionId: token.sessionId,
+            familyId: token.familyId
+          }
+        },
+        tx
+      );
     });
   }
 
@@ -661,6 +713,24 @@ export class AuthService {
       reason: "login_success"
     });
 
+    await this.securityEventService.emitSecurityEvent({
+      sourceDomain: SecurityEventSourceDomain.AUTH,
+      eventType: actorType === AuthActorType.ADMIN ? "admin_login_success" : "login_success",
+      severity: SecurityEventSeverity.INFO,
+      actorType: this.mapActorTypeForSecurity(actorType),
+      actorId: activeUser.id,
+      targetResourceType: "auth",
+      reason: "login_success",
+      context: {
+        ipAddress,
+        userAgent: userAgent ?? null,
+        environment: context?.environment ?? null
+      },
+      metadata: {
+        email: activeUser.email
+      }
+    });
+
     const { accessToken, refreshToken, sessionId } = await this.issueTokenPair(activeUser, actorType, context);
 
     return {
@@ -681,6 +751,24 @@ export class AuthService {
     const actorType = payload.at ?? verified.actorType ?? AuthActorType.PUBLIC;
     const ipAddress = context?.ipAddress ?? "unknown";
     const userAgent = context?.userAgent;
+
+    if (await this.incidentReadinessService.isEmergencyControlActive("disable_refresh_global")) {
+      await this.securityEventService.emitSecurityEvent({
+        sourceDomain: SecurityEventSourceDomain.AUTH,
+        eventType: "refresh_blocked_by_emergency_control",
+        severity: SecurityEventSeverity.CRITICAL,
+        actorType: this.mapActorTypeForSecurity(actorType),
+        actorId: payload.sub ?? null,
+        targetResourceType: "auth_refresh",
+        reason: "disable_refresh_global",
+        context: {
+          ipAddress,
+          userAgent: userAgent ?? null,
+          environment: context?.environment ?? null
+        }
+      });
+      this.throwAuthFailed();
+    }
 
     if (payload.type !== "refresh" || !payload.sub) {
       this.throwAuthFailed();

@@ -2,6 +2,46 @@ import { ManualOverrideAction } from "@prisma/client";
 import { AdminPredictionsController } from "./admin-predictions.controller";
 
 describe("AdminPredictionsController", () => {
+  it("low-confidence reads from published predictions and prediction runs", async () => {
+    const prisma = {
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            predictionRun: {
+              id: "run-1",
+              matchId: "match-1",
+              market: "match_outcome",
+              line: null,
+              horizon: "PRE6",
+              confidence: 0.42,
+              riskFlagsJson: [{ code: "LOW_CONFIDENCE", severity: "MEDIUM" }],
+              explanationJson: { summary: "low confidence" },
+              createdAt: new Date("2026-04-18T10:00:00.000Z")
+            }
+          }
+        ])
+      },
+      prediction: {
+        findMany: jest.fn()
+      }
+    } as any;
+
+    const controller = new AdminPredictionsController(prisma, {} as any, {} as any);
+    const rows = await controller.lowConfidence("10", "0.55");
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        id: "run-1",
+        matchId: "match-1",
+        confidenceScore: 0.42,
+        summary: "low confidence"
+      })
+    );
+  });
+
   it("manual force publish is audited", async () => {
     const prisma = {
       manualPublishOverride: {

@@ -295,6 +295,165 @@ enum PrivilegedActionStatus {
   EXPIRED
 }
 
+enum SecurityEventSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SecurityEventSourceDomain {
+  AUTH
+  ACCESS
+  ADMIN
+  PROVIDER
+  DATA
+  QUEUE
+  RUNTIME
+  COMPLIANCE
+}
+
+enum SecurityAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  SUPPRESSED
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  MITIGATING
+  CONTAINED
+  RESOLVED
+  POSTMORTEM_PENDING
+  CLOSED
+}
+
+enum IncidentEventType {
+  OPENED
+  STATUS_CHANGED
+  NOTE
+  LINKED_EVENT
+  EMERGENCY_CONTROL
+  OWNER_ASSIGNED
+}
+
+enum AbuseEventType {
+  RATE_LIMIT_EXCEEDED
+  AUTH_BRUTE_FORCE
+  SUSPICIOUS_ADMIN_ACCESS
+  QUEUE_INVOCATION_ANOMALY
+  PROVIDER_ABUSE
+  OTHER
+}
+
+enum SecretLifecycleStatus {
+  PLANNED
+  ACTIVE
+  RETIRING
+  REVOKED
+}
+
+enum SecretCategory {
+  JWT_SIGNING_KEY
+  REFRESH_SECRET
+  PROVIDER_API_KEY
+  DB_CREDENTIAL
+  REDIS_CREDENTIAL
+  WEBHOOK_SIGNING_KEY
+  OTHER
+}
+
+enum ApiKeyStatus {
+  PLANNED
+  ACTIVE
+  RETIRING
+  REVOKED
+}
+
+enum QueueAccessScopeClass {
+  OPERATIONAL
+  RESEARCH
+  BACKGROUND
+}
+
+enum VulnerabilitySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum VulnerabilityDisposition {
+  OPEN
+  IGNORED
+  RESOLVED
+}
+
+enum SecurityScanRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum DataClassificationLevel {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  RESTRICTED
+  PII
+}
+
+enum RetentionActionType {
+  DELETE
+  ANONYMIZE
+  ARCHIVE
+}
+
+enum GovernanceRequestType {
+  DATA_ACCESS
+  PRIVACY_EXPORT
+  PRIVACY_DELETE
+}
+
+enum GovernanceRequestStatus {
+  OPEN
+  POLICY_REVIEW
+  APPROVED
+  REJECTED
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ConsentStatus {
+  GRANTED
+  DENIED
+  REVOKED
+}
+
+enum PrivacyJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum LegalBasisHook {
+  CONSENT
+  CONTRACT
+  LEGAL_OBLIGATION
+  LEGITIMATE_INTEREST
+  OPERATIONAL_SECURITY
+  OTHER
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique
@@ -3382,6 +3541,551 @@ model ApiLog {
   requestId  String?
   createdAt  DateTime @default(now())
   user       User?    @relation(fields: [userId], references: [id])
+}
+
+model AuditEvent {
+  id                String               @id @default(uuid())
+  eventKey          String?              @unique @map("event_key")
+  actorType         AccessActorType      @map("actor_type")
+  actorId           String?              @map("actor_id")
+  serviceIdentityId String?              @map("service_identity_id")
+  action            String
+  resourceType      String               @map("resource_type")
+  resourceId        String?              @map("resource_id")
+  scopeJson         Json?                @map("scope_jsonb")
+  policyVersionId   String?              @map("policy_version_id")
+  decisionResult    String?              @map("decision_result")
+  reason            String?
+  severity          SecurityEventSeverity @default(INFO)
+  correlationId     String?              @map("correlation_id")
+  traceId           String?              @map("trace_id")
+  requestId         String?              @map("request_id")
+  ipAddress         String?              @map("ip")
+  userAgent         String?              @map("user_agent")
+  environment       String?
+  metadata          Json?                @map("metadata_jsonb")
+  createdAt         DateTime             @default(now()) @map("created_at")
+
+  @@index([createdAt, severity])
+  @@index([action, resourceType, environment])
+  @@index([actorType, actorId, serviceIdentityId, createdAt])
+  @@map("audit_events")
+}
+
+model SecurityEvent {
+  id                String                  @id @default(uuid())
+  eventKey          String?                 @unique @map("event_key")
+  sourceDomain      SecurityEventSourceDomain @map("source_domain")
+  eventType         String                  @map("event_type")
+  severity          SecurityEventSeverity   @default(INFO)
+  actorType         AccessActorType?        @map("actor_type")
+  actorId           String?                 @map("actor_id")
+  serviceIdentityId String?                 @map("service_identity_id")
+  targetResourceType String?                @map("target_resource_type")
+  targetResourceId  String?                 @map("target_resource_id")
+  scopeJson         Json?                   @map("scope_jsonb")
+  policyVersionId   String?                 @map("policy_version_id")
+  decisionResult    String?                 @map("decision_result")
+  reason            String?
+  correlationId     String?                 @map("correlation_id")
+  traceId           String?                 @map("trace_id")
+  requestId         String?                 @map("request_id")
+  ipAddress         String?                 @map("ip")
+  userAgent         String?                 @map("user_agent")
+  environment       String?
+  metadata          Json?                   @map("metadata_jsonb")
+  createdAt         DateTime                @default(now()) @map("created_at")
+
+  @@index([sourceDomain, eventType, createdAt])
+  @@index([severity, createdAt])
+  @@index([actorType, actorId, serviceIdentityId, createdAt])
+  @@map("security_events")
+}
+
+model SecurityAlert {
+  id               String                  @id @default(uuid())
+  alertKey         String?                 @unique @map("alert_key")
+  sourceDomain     SecurityEventSourceDomain @map("source_domain")
+  ruleKey          String                  @map("rule_key")
+  severity         SecurityEventSeverity
+  status           SecurityAlertStatus     @default(OPEN)
+  title            String
+  summary          String?
+  eventId          String?                 @map("event_id")
+  ownerUserId      String?                 @map("owner_user_id")
+  correlationId    String?                 @map("correlation_id")
+  traceId          String?                 @map("trace_id")
+  requestId        String?                 @map("request_id")
+  environment      String?
+  reason           String?
+  metadata         Json?                   @map("metadata_jsonb")
+  acknowledgedAt   DateTime?               @map("acknowledged_at")
+  resolvedAt       DateTime?               @map("resolved_at")
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, severity, createdAt])
+  @@index([sourceDomain, ruleKey, createdAt])
+  @@map("security_alerts")
+}
+
+model IncidentResponseEvent {
+  id                 String                @id @default(uuid())
+  incidentId         String                @map("incident_id")
+  eventKey           String?               @unique @map("event_key")
+  eventType          IncidentEventType     @map("event_type")
+  status             IncidentStatus
+  severity           SecurityEventSeverity
+  title              String
+  note               String?
+  ownerUserId        String?               @map("owner_user_id")
+  actorType          AccessActorType?      @map("actor_type")
+  actorId            String?               @map("actor_id")
+  serviceIdentityId  String?               @map("service_identity_id")
+  action             String?
+  targetResourceType String?               @map("target_resource_type")
+  targetResourceId   String?               @map("target_resource_id")
+  relatedAuditEventId String?              @map("related_audit_event_id")
+  relatedSecurityEventId String?           @map("related_security_event_id")
+  relatedAlertId     String?               @map("related_alert_id")
+  scopeJson          Json?                 @map("scope_jsonb")
+  policyVersionId    String?               @map("policy_version_id")
+  decisionResult     String?               @map("decision_result")
+  reason             String?
+  correlationId      String?               @map("correlation_id")
+  traceId            String?               @map("trace_id")
+  requestId          String?               @map("request_id")
+  ipAddress          String?               @map("ip")
+  userAgent          String?               @map("user_agent")
+  environment        String?
+  metadata           Json?                 @map("metadata_jsonb")
+  createdAt          DateTime              @default(now()) @map("created_at")
+
+  @@index([incidentId, createdAt])
+  @@index([status, severity, createdAt])
+  @@map("incident_response_events")
+}
+
+model AbuseEvent {
+  id                 String                @id @default(uuid())
+  eventKey           String?               @unique @map("event_key")
+  eventType          AbuseEventType        @map("event_type")
+  sourceDomain       SecurityEventSourceDomain @map("source_domain")
+  severity           SecurityEventSeverity @default(LOW)
+  actorType          AccessActorType?      @map("actor_type")
+  actorId            String?               @map("actor_id")
+  serviceIdentityId  String?               @map("service_identity_id")
+  targetResourceType String?               @map("target_resource_type")
+  targetResourceId   String?               @map("target_resource_id")
+  method             String?
+  path               String?
+  reason             String?
+  count              Int                   @default(1)
+  windowSeconds      Int?                  @map("window_seconds")
+  correlationId      String?               @map("correlation_id")
+  traceId            String?               @map("trace_id")
+  requestId          String?               @map("request_id")
+  ipAddress          String?               @map("ip")
+  userAgent          String?               @map("user_agent")
+  environment        String?
+  metadata           Json?                 @map("metadata_jsonb")
+  createdAt          DateTime              @default(now()) @map("created_at")
+
+  @@index([eventType, createdAt])
+  @@index([severity, createdAt])
+  @@index([ipAddress, createdAt])
+  @@map("abuse_events")
+}
+
+model SecretRotationEvent {
+  id                String               @id @default(uuid())
+  rotationKey       String?              @unique @map("rotation_key")
+  category          SecretCategory
+  secretRef         String               @map("secret_ref")
+  lifecycleStatus   SecretLifecycleStatus @default(ACTIVE) @map("lifecycle_status")
+  reason            String?
+  plannedAt         DateTime?            @map("planned_at")
+  activatedAt       DateTime?            @map("activated_at")
+  retiringAt        DateTime?            @map("retiring_at")
+  revokedAt         DateTime?            @map("revoked_at")
+  actorType         AccessActorType?     @map("actor_type")
+  actorId           String?              @map("actor_id")
+  serviceIdentityId String?              @map("service_identity_id")
+  correlationId     String?              @map("correlation_id")
+  traceId           String?              @map("trace_id")
+  requestId         String?              @map("request_id")
+  environment       String?
+  metadata          Json?                @map("metadata_jsonb")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  @@index([category, lifecycleStatus, createdAt])
+  @@index([secretRef, environment, createdAt])
+  @@map("secret_rotation_events")
+}
+
+model ApiKeyRegistry {
+  id                 String        @id @default(uuid())
+  keyHash            String        @unique @map("key_hash")
+  keyPrefix          String?       @map("key_prefix")
+  ownerService       String?       @map("owner_service")
+  status             ApiKeyStatus  @default(ACTIVE)
+  scopesJson         Json?         @map("scopes_jsonb")
+  expiresAt          DateTime?     @map("expires_at")
+  retiredAt          DateTime?     @map("retired_at")
+  revokedAt          DateTime?     @map("revoked_at")
+  lastUsedAt         DateTime?     @map("last_used_at")
+  rotatedFromKeyHash String?       @map("rotated_from_key_hash")
+  environment        String?
+  metadata           Json?         @map("metadata_jsonb")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  @@index([ownerService, status, createdAt])
+  @@index([environment, status, createdAt])
+  @@map("api_key_registry")
+}
+
+model ApiKeyUsage {
+  id                String   @id @default(uuid())
+  usageKey          String?  @unique @map("usage_key")
+  apiKeyHash        String?  @map("api_key_hash")
+  serviceIdentityId String?  @map("service_identity_id")
+  method            String?
+  path              String?
+  statusCode        Int?     @map("status_code")
+  requestId         String?  @map("request_id")
+  correlationId     String?  @map("correlation_id")
+  traceId           String?  @map("trace_id")
+  ipAddress         String?  @map("ip")
+  userAgent         String?  @map("user_agent")
+  environment       String?
+  metadata          Json?    @map("metadata_jsonb")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([apiKeyHash, createdAt])
+  @@index([serviceIdentityId, createdAt])
+  @@index([path, method, createdAt])
+  @@map("api_key_usages")
+}
+
+model QueueAccessScope {
+  id                String               @id @default(uuid())
+  queueName         String               @map("queue_name")
+  serviceIdentityId String               @map("service_identity_id")
+  scopeClass        QueueAccessScopeClass @default(OPERATIONAL) @map("scope_class")
+  allowEnqueue      Boolean              @default(true) @map("allow_enqueue")
+  allowProcess      Boolean              @default(false) @map("allow_process")
+  allowedJobsJson   Json?                @map("allowed_jobs_jsonb")
+  environment       String
+  metadata          Json?                @map("metadata_jsonb")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  @@unique([queueName, serviceIdentityId, environment])
+  @@index([scopeClass, environment, queueName])
+  @@map("queue_access_scopes")
+}
+
+model RateLimitBucket {
+  id             String   @id @default(uuid())
+  bucketKey      String   @unique @map("bucket_key")
+  ruleId         String   @map("rule_id")
+  actorType      AccessActorType? @map("actor_type")
+  actorId        String?  @map("actor_id")
+  ipAddress      String?  @map("ip")
+  hits           Int      @default(0)
+  blockedCount   Int      @default(0) @map("blocked_count")
+  windowSeconds  Int      @map("window_seconds")
+  limitValue     Int      @map("limit_value")
+  lastSeenAt     DateTime @default(now()) @map("last_seen_at")
+  lastBlockedAt  DateTime? @map("last_blocked_at")
+  environment    String?
+  metadata       Json?    @map("metadata_jsonb")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([ruleId, environment, lastSeenAt])
+  @@index([ipAddress, lastSeenAt])
+  @@map("rate_limit_buckets")
+}
+
+model WebhookSigningKey {
+  id              String               @id @default(uuid())
+  keyRef          String?              @unique @map("key_ref")
+  provider        String
+  keyId           String               @map("key_id")
+  algorithm       String               @default("HMAC-SHA256")
+  secretRef       String               @map("secret_ref")
+  lifecycleStatus SecretLifecycleStatus @default(ACTIVE) @map("lifecycle_status")
+  activatedAt     DateTime?            @map("activated_at")
+  retiringAt      DateTime?            @map("retiring_at")
+  revokedAt       DateTime?            @map("revoked_at")
+  environment     String
+  metadata        Json?                @map("metadata_jsonb")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@unique([provider, keyId, environment])
+  @@index([provider, lifecycleStatus, createdAt])
+  @@map("webhook_signing_keys")
+}
+
+model SecurityScanRun {
+  id           String                @id @default(uuid())
+  runKey       String?               @unique @map("run_key")
+  source       String
+  status       SecurityScanRunStatus @default(QUEUED)
+  startedAt    DateTime?             @map("started_at")
+  completedAt  DateTime?             @map("completed_at")
+  summary      Json?                 @map("summary_jsonb")
+  environment  String?
+  metadata     Json?                 @map("metadata_jsonb")
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([source, createdAt])
+  @@map("security_scan_runs")
+}
+
+model VulnerabilityFinding {
+  id                 String                   @id @default(uuid())
+  findingKey         String?                  @unique @map("finding_key")
+  scanRunId          String?                  @map("scan_run_id")
+  packageName        String                   @map("package_name")
+  packageVersion     String                   @map("package_version")
+  advisoryId         String?                  @map("advisory_id")
+  severity           VulnerabilitySeverity
+  title              String
+  description        String?
+  fixedVersion       String?                  @map("fixed_version")
+  cvssScore          Float?                   @map("cvss_score")
+  disposition        VulnerabilityDisposition @default(OPEN)
+  ignoreReason       String?                  @map("ignore_reason")
+  ignoreExpiresAt    DateTime?                @map("ignore_expires_at")
+  resolvedAt         DateTime?                @map("resolved_at")
+  environment        String?
+  metadata           Json?                    @map("metadata_jsonb")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+
+  @@index([severity, disposition, createdAt])
+  @@index([packageName, advisoryId, createdAt])
+  @@index([scanRunId, createdAt])
+  @@map("vulnerability_findings")
+}
+
+model DependencyInventorySnapshot {
+  id             String   @id @default(uuid())
+  snapshotKey    String?  @unique @map("snapshot_key")
+  scope          String
+  manifestPath   String?  @map("manifest_path")
+  lockfileHash   String?  @map("lockfile_hash")
+  packageCount   Int      @default(0) @map("package_count")
+  packagesJson   Json     @map("packages_jsonb")
+  environment    String?
+  metadata       Json?    @map("metadata_jsonb")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([scope, createdAt])
+  @@map("dependency_inventory_snapshots")
+}
+
+model ReleaseAttestation {
+  id                    String                @id @default(uuid())
+  attestationKey        String?               @unique @map("attestation_key")
+  gitSha                String                @map("git_sha")
+  buildTime             DateTime              @map("build_time")
+  environment           String
+  dependencySnapshotId  String?               @map("dependency_snapshot_id")
+  scanRunId             String?               @map("scan_run_id")
+  scanStatus            SecurityScanRunStatus? @map("scan_status")
+  metadata              Json?                 @map("metadata_jsonb")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+
+  @@index([environment, createdAt])
+  @@index([gitSha, createdAt])
+  @@map("release_attestations")
+}
+
+model DataClassification {
+  id                String                  @id @default(uuid())
+  domain            String
+  entity            String
+  fieldName         String?                 @map("field_name")
+  dataClass         DataClassificationLevel @map("data_class")
+  redactionStrategy String?                 @map("redaction_strategy")
+  policyVersion     String                  @map("policy_version")
+  legalBasisHook    LegalBasisHook?         @map("legal_basis_hook")
+  active            Boolean                 @default(true)
+  metadata          Json?                   @map("metadata_jsonb")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  @@unique([domain, entity, fieldName, policyVersion])
+  @@index([domain, dataClass, active])
+  @@map("data_classifications")
+}
+
+model RetentionPolicy {
+  id                String                  @id @default(uuid())
+  policyKey         String                  @unique @map("policy_key")
+  domain            String
+  tableName         String?                 @map("table_name")
+  dataClass         DataClassificationLevel? @map("data_class")
+  retentionDays     Int                     @map("retention_days")
+  action            RetentionActionType
+  legalHoldBlockable Boolean                @default(true) @map("legal_hold_blockable")
+  immutableProtected Boolean                @default(false) @map("immutable_protected")
+  policyVersion     String                  @map("policy_version")
+  legalBasisHook    LegalBasisHook?         @map("legal_basis_hook")
+  reason            String?
+  active            Boolean                 @default(true)
+  metadata          Json?                   @map("metadata_jsonb")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  @@index([domain, tableName, active])
+  @@index([dataClass, active, createdAt])
+  @@map("retention_policies")
+}
+
+model DeletionRequest {
+  id                String                  @id @default(uuid())
+  requestKey        String?                 @unique @map("request_key")
+  userId            String?                 @map("user_id")
+  actorType         AccessActorType?        @map("actor_type")
+  actorId           String?                 @map("actor_id")
+  serviceIdentityId String?                 @map("service_identity_id")
+  targetDomain      String                  @map("target_domain")
+  targetEntity      String?                 @map("target_entity")
+  targetId          String?                 @map("target_id")
+  requestType       GovernanceRequestType   @default(PRIVACY_DELETE) @map("request_type")
+  status            GovernanceRequestStatus @default(OPEN)
+  legalBasisHook    LegalBasisHook?         @map("legal_basis_hook")
+  policyVersion     String?                 @map("policy_version")
+  reason            String?
+  dryRun            Boolean                 @default(true) @map("dry_run")
+  auditEventId      String?                 @map("audit_event_id")
+  securityEventId   String?                 @map("security_event_id")
+  metadata          Json?                   @map("metadata_jsonb")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  completedAt       DateTime?               @map("completed_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([userId, targetDomain, createdAt])
+  @@map("deletion_requests")
+}
+
+model DataAccessRequest {
+  id                String                  @id @default(uuid())
+  requestKey        String?                 @unique @map("request_key")
+  userId            String?                 @map("user_id")
+  actorType         AccessActorType?        @map("actor_type")
+  actorId           String?                 @map("actor_id")
+  serviceIdentityId String?                 @map("service_identity_id")
+  targetDomain      String                  @map("target_domain")
+  targetEntity      String?                 @map("target_entity")
+  targetId          String?                 @map("target_id")
+  requestType       GovernanceRequestType   @default(DATA_ACCESS) @map("request_type")
+  status            GovernanceRequestStatus @default(OPEN)
+  legalBasisHook    LegalBasisHook?         @map("legal_basis_hook")
+  policyVersion     String?                 @map("policy_version")
+  reason            String?
+  dryRun            Boolean                 @default(true) @map("dry_run")
+  auditEventId      String?                 @map("audit_event_id")
+  securityEventId   String?                 @map("security_event_id")
+  metadata          Json?                   @map("metadata_jsonb")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  completedAt       DateTime?               @map("completed_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([userId, targetDomain, createdAt])
+  @@map("data_access_requests")
+}
+
+model ConsentRecord {
+  id                String            @id @default(uuid())
+  consentKey        String?           @unique @map("consent_key")
+  userId            String?           @map("user_id")
+  actorType         AccessActorType?  @map("actor_type")
+  actorId           String?           @map("actor_id")
+  serviceIdentityId String?           @map("service_identity_id")
+  subjectDomain     String            @map("subject_domain")
+  purpose           String
+  status            ConsentStatus     @default(GRANTED)
+  legalBasisHook    LegalBasisHook?   @map("legal_basis_hook")
+  policyVersion     String?           @map("policy_version")
+  reason            String?
+  grantedAt         DateTime?         @map("granted_at")
+  revokedAt         DateTime?         @map("revoked_at")
+  metadata          Json?             @map("metadata_jsonb")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  @@index([userId, subjectDomain, createdAt])
+  @@index([status, createdAt])
+  @@map("consent_records")
+}
+
+model PrivacyExportJob {
+  id                 String                  @id @default(uuid())
+  jobKey             String?                 @unique @map("job_key")
+  requestId          String?                 @map("request_id")
+  userId             String?                 @map("user_id")
+  status             PrivacyJobStatus        @default(QUEUED)
+  policyVersion      String?                 @map("policy_version")
+  legalBasisHook     LegalBasisHook?         @map("legal_basis_hook")
+  dryRun             Boolean                 @default(true) @map("dry_run")
+  legalHoldBlocked   Boolean                 @default(false) @map("legal_hold_blocked")
+  attempts           Int                     @default(0)
+  inputScopeJson     Json?                   @map("input_scope_jsonb")
+  outputRef          String?                 @map("output_ref")
+  errorMessage       String?                 @map("error_message")
+  auditEventId       String?                 @map("audit_event_id")
+  securityEventId    String?                 @map("security_event_id")
+  metadata           Json?                   @map("metadata_jsonb")
+  startedAt          DateTime?               @map("started_at")
+  completedAt        DateTime?               @map("completed_at")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([requestId, userId, createdAt])
+  @@map("privacy_export_jobs")
+}
+
+model PrivacyDeletionJob {
+  id                 String                  @id @default(uuid())
+  jobKey             String?                 @unique @map("job_key")
+  requestId          String?                 @map("request_id")
+  userId             String?                 @map("user_id")
+  status             PrivacyJobStatus        @default(QUEUED)
+  policyVersion      String?                 @map("policy_version")
+  legalBasisHook     LegalBasisHook?         @map("legal_basis_hook")
+  dryRun             Boolean                 @default(true) @map("dry_run")
+  legalHoldBlocked   Boolean                 @default(false) @map("legal_hold_blocked")
+  attempts           Int                     @default(0)
+  inputScopeJson     Json?                   @map("input_scope_jsonb")
+  deletedCount       Int                     @default(0) @map("deleted_count")
+  anonymizedCount    Int                     @default(0) @map("anonymized_count")
+  skippedProtectedCount Int                  @default(0) @map("skipped_protected_count")
+  errorMessage       String?                 @map("error_message")
+  auditEventId       String?                 @map("audit_event_id")
+  securityEventId    String?                 @map("security_event_id")
+  metadata           Json?                   @map("metadata_jsonb")
+  startedAt          DateTime?               @map("started_at")
+  completedAt        DateTime?               @map("completed_at")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([requestId, userId, createdAt])
+  @@map("privacy_deletion_jobs")
 }
 
 model AuditLog {

@@ -22,35 +22,35 @@ type QuarterSource = NonNullable<MatchPredictionItem["quarterBreakdown"]>["sourc
 type MatchOption = { matchId: string; label: string; kickoff?: string };
 
 const FOOTBALL_FILTERS: Array<{ value: FilterOption; label: string; icon: typeof Brain }> = [
-  { value: "all", label: "Tum Tahminler", icon: Target },
-  { value: "fullTimeResult", label: "Mac Sonucu", icon: TrendingUp },
-  { value: "firstHalfResult", label: "Ilk Yari", icon: Clock },
+  { value: "all", label: "Tüm Tahminler", icon: Target },
+  { value: "fullTimeResult", label: "Maç Sonucu", icon: TrendingUp },
+  { value: "firstHalfResult", label: "İlk Yarı", icon: Clock },
   { value: "halfTimeFullTime", label: "IY/MS", icon: Clock },
   { value: "bothTeamsToScore", label: "KG Var/Yok", icon: ShieldAlert },
-  { value: "totalGoalsOverUnder", label: "Alt/Ust", icon: BarChart3 },
-  { value: "correctScore", label: "Dogru Skor", icon: Target }
+  { value: "totalGoalsOverUnder", label: "Alt/Üst", icon: BarChart3 },
+  { value: "correctScore", label: "Doğru Skor", icon: Target }
 ];
 
 const BASKETBALL_FILTERS: Array<{ value: FilterOption; label: string; icon: typeof Brain }> = [
-  { value: "all", label: "Tum Tahminler", icon: Target },
-  { value: "fullTimeResult", label: "Mac Kazanani", icon: TrendingUp },
-  { value: "firstHalfResult", label: "Ilk 2 Periyot", icon: Clock },
-  { value: "totalGoalsOverUnder", label: "Toplam Sayi Alt/Ust", icon: BarChart3 },
-  { value: "firstHalfGoals", label: "Ilk 2 Periyot Sayi", icon: Clock },
-  { value: "secondHalfGoals", label: "Son 2 Periyot Sayi", icon: Clock },
-  { value: "correctScore", label: "Skor Dagilimi", icon: Target }
+  { value: "all", label: "Tüm Tahminler", icon: Target },
+  { value: "fullTimeResult", label: "Maç Kazananı", icon: TrendingUp },
+  { value: "firstHalfResult", label: "İlk 2 Periyot", icon: Clock },
+  { value: "totalGoalsOverUnder", label: "Toplam Sayı Alt/Üst", icon: BarChart3 },
+  { value: "firstHalfGoals", label: "İlk 2 Periyot Sayı", icon: Clock },
+  { value: "secondHalfGoals", label: "Son 2 Periyot Sayı", icon: Clock },
+  { value: "correctScore", label: "Skor Dağılımı", icon: Target }
 ];
 
 const BASKETBALL_TYPE_LABELS: Partial<Record<PredictionType, string>> = {
-  fullTimeResult: "Mac Kazanani",
-  firstHalfResult: "Ilk 2 Periyot Kazanani",
-  halfTimeFullTime: "Devre/Mac Sonucu",
-  bothTeamsToScore: "Takim Skor Analizi",
-  totalGoalsOverUnder: "Toplam Sayi Alt/Ust",
-  correctScore: "Skor Dagilimi",
-  goalRange: "Sayi Araligi",
-  firstHalfGoals: "Ilk 2 Periyot Toplam Sayi",
-  secondHalfGoals: "Son 2 Periyot Toplam Sayi"
+  fullTimeResult: "Maç Kazananı",
+  firstHalfResult: "İlk 2 Periyot Kazananı",
+  halfTimeFullTime: "Devre/Maç Sonucu",
+  bothTeamsToScore: "Takım Skor Analizi",
+  totalGoalsOverUnder: "Toplam Sayı Alt/Üst",
+  correctScore: "Skor Dağılımı",
+  goalRange: "Sayı Aralığı",
+  firstHalfGoals: "İlk 2 Periyot Toplam Sayı",
+  secondHalfGoals: "Son 2 Periyot Toplam Sayı"
 };
 
 function getFilters(sport?: SportScope) {
@@ -94,7 +94,7 @@ function probabilitySummary(item: MatchPredictionItem, sport?: SportScope) {
     }
     if (typeof p.over === "number" || typeof p.under === "number") {
       return [
-        { label: "Ust", value: Math.round((p.over ?? 0) * 100), color: "bg-neon-cyan" },
+        { label: "Üst", value: Math.round((p.over ?? 0) * 100), color: "bg-neon-cyan" },
         { label: "Alt", value: Math.round((p.under ?? 0) * 100), color: "bg-neon-purple" }
       ];
     }
@@ -115,7 +115,7 @@ function probabilitySummary(item: MatchPredictionItem, sport?: SportScope) {
   }
   if (typeof p.over === "number" || typeof p.under === "number") {
     return [
-      { label: "Ust", value: Math.round((p.over ?? 0) * 100), color: "bg-neon-cyan" },
+      { label: "Üst", value: Math.round((p.over ?? 0) * 100), color: "bg-neon-cyan" },
       { label: "Alt", value: Math.round((p.under ?? 0) * 100), color: "bg-neon-purple" }
     ];
   }
@@ -209,25 +209,25 @@ function resolveMatchState(item: MatchPredictionItem) {
     !isCompleted;
 
   if (isLiveMatchStatus(normalizedStatus) || hasLiveScore) {
-    return { label: "Oynaniyor", className: "bg-red-500/10 text-red-300 border-red-500/30", isPlayed: false };
+    return { label: "Oynanıyor", className: "bg-red-500/10 text-red-300 border-red-500/30", isPlayed: false };
   }
   if (isCompleted) {
-    return { label: "Tamamlandi", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30", isPlayed: true };
+    return { label: "Tamamlandı", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30", isPlayed: true };
   }
   if (normalizedStatus === "postponed") {
     return { label: "Ertelendi", className: "bg-amber-500/10 text-amber-300 border-amber-500/30", isPlayed: false };
   }
   if (normalizedStatus === "cancelled") {
-    return { label: "Iptal", className: "bg-rose-500/10 text-rose-300 border-rose-500/30", isPlayed: false };
+    return { label: "İptal", className: "bg-rose-500/10 text-rose-300 border-rose-500/30", isPlayed: false };
   }
-  return { label: "Henuz Oynanmadi", className: "bg-slate-500/10 text-slate-300 border-slate-500/30", isPlayed: false };
+  return { label: "Henüz Oynanmadı", className: "bg-slate-500/10 text-slate-300 border-slate-500/30", isPlayed: false };
 }
 
 function detailHref(matchId: string, sport?: SportScope) {
   if (sport === "basketball") {
-    return `/basketball/matches/${matchId}`;
+    return `/basketbol/maclar/${matchId}`;
   }
-  return `/matches/${matchId}`;
+  return `/futbol/maclar/${matchId}`;
 }
 
 function quarterBreakdownLine(item: MatchPredictionItem) {
@@ -245,7 +245,7 @@ function quarterSourceLabel(source?: QuarterSource) {
   if (source === "projected") {
     return "model projeksiyonu";
   }
-  return "skordan tahmini dagilim";
+  return "skordan tahmini dağılım";
 }
 
 function asPct(value?: number | null) {
@@ -261,10 +261,10 @@ function marketDirectionLabel(direction?: string) {
   }
   const normalized = direction.trim().toLowerCase();
   if (normalized === "up") {
-    return "yukari";
+    return "yukarı";
   }
   if (normalized === "down") {
-    return "asagi";
+    return "aşağı";
   }
   return "yatay";
 }
@@ -277,7 +277,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
   const matchState = resolveMatchState(item);
   const hasScore = item.homeScore !== null && item.homeScore !== undefined && item.awayScore !== null && item.awayScore !== undefined;
   const scoreText = hasScore ? `${item.homeScore} - ${item.awayScore}` : null;
-  const matchLabel = item.homeTeam && item.awayTeam ? `${item.homeTeam} - ${item.awayTeam}` : `Mac ${item.matchId.slice(0, 8)}`;
+  const matchLabel = item.homeTeam && item.awayTeam ? `${item.homeTeam} - ${item.awayTeam}` : `Maç ${item.matchId.slice(0, 8)}`;
   const expectedHome = item.expectedScore?.home;
   const expectedAway = item.expectedScore?.away;
   const hasExpected = Number.isFinite(expectedHome) && Number.isFinite(expectedAway);
@@ -299,7 +299,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
     >
       <Link
         href={detailHref(item.matchId, sport)}
-        aria-label={`${matchLabel} mac detayina git`}
+        aria-label={`${matchLabel} maç detayına git`}
         className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-neon-cyan/70 rounded-2xl"
       >
         <div className="absolute -inset-0.5 bg-gradient-to-r from-neon-cyan/20 to-neon-purple/20 rounded-2xl opacity-0 group-hover:opacity-100 blur-xl transition-opacity duration-500" />
@@ -315,7 +315,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
                 </span>
                 {item.line !== undefined && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider bg-neon-amber/10 text-neon-amber border border-neon-amber/20">
-                    Cizgi {item.line.toFixed(1)}
+                    Çizgi {item.line.toFixed(1)}
                   </span>
                 )}
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider border ${matchState.className}`}>
@@ -324,7 +324,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
               </div>
 
               <h3 className="text-lg font-display font-semibold text-white group-hover:text-neon-cyan transition-colors">
-                {item.homeTeam && item.awayTeam ? `${item.homeTeam} vs ${item.awayTeam}` : `Mac #${item.matchId.slice(0, 8)}`}
+                {item.homeTeam && item.awayTeam ? `${item.homeTeam} vs ${item.awayTeam}` : `Maç #${item.matchId.slice(0, 8)}`}
               </h3>
 
               {item.matchDateTimeUTC && (
@@ -339,7 +339,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
                 </div>
               )}
               {scoreText && matchState.isPlayed ? (
-                <p className="mt-1 text-xs text-emerald-300">{sport === "basketball" ? "Mac Skoru" : "Mac Sonucu"}: {scoreText}</p>
+                <p className="mt-1 text-xs text-emerald-300">{sport === "basketball" ? "Maç Skoru" : "Maç Sonucu"}: {scoreText}</p>
               ) : null}
             </div>
 
@@ -347,7 +347,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
               <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${confidenceGradient} p-[2px]`}>
                 <div className="w-full h-full rounded-full bg-surface flex flex-col items-center justify-center">
                   <span className="text-lg font-display font-bold text-white">{Math.round(confidence * 100)}%</span>
-                  <span className="text-[8px] text-slate-500 uppercase tracking-wider">Guven</span>
+                  <span className="text-[8px] text-slate-500 uppercase tracking-wider">Güven</span>
                 </div>
               </div>
               <div className={`absolute inset-0 rounded-full ${getConfidenceGlow(confidence)} opacity-50`} />
@@ -406,13 +406,13 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
 
           {item.marketAnalysis ? (
             <div className="mb-3 rounded-lg border border-neon-purple/20 bg-neon-purple/5 p-3 text-xs text-slate-200">
-              <p className="font-medium text-neon-purple">Piyasa Karsilastirmasi</p>
+              <p className="font-medium text-neon-purple">Piyasa Karşılaştırması</p>
               <div className="mt-1 grid gap-1 md:grid-cols-2">
                 <span>
-                  Model olasiligi: <span className="text-slate-100">{asPct(item.marketAnalysis.modelProbability)}</span>
+                  Model olasılığı: <span className="text-slate-100">{asPct(item.marketAnalysis.modelProbability)}</span>
                 </span>
                 <span>
-                  Piyasa olasiligi: <span className="text-slate-100">{asPct(item.marketAnalysis.marketImpliedProbability)}</span>
+                  Piyasa olasılığı: <span className="text-slate-100">{asPct(item.marketAnalysis.marketImpliedProbability)}</span>
                 </span>
                 <span>
                   Sapma:{" "}
@@ -438,7 +438,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
 
           {sport === "basketball" && quarterLine ? (
             <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3">
-              <p className="text-xs text-slate-400">4 Periyot Dagilimi ({quarterSourceLabel(item.quarterBreakdown?.source)})</p>
+              <p className="text-xs text-slate-400">4 Periyot Dağılımı ({quarterSourceLabel(item.quarterBreakdown?.source)})</p>
               <p className="mt-1 text-sm text-slate-200">{quarterLine}</p>
             </div>
           ) : null}
@@ -449,7 +449,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
             <div className="flex items-center gap-2 mb-3 p-3 rounded-lg bg-neon-cyan/5 border border-neon-cyan/10">
               <Target className="w-4 h-4 text-neon-cyan" />
               <span className="text-sm text-slate-300">
-                {sport === "basketball" ? "Olasi skor dagilimi" : "Tahmini Skor"}:{" "}
+                {sport === "basketball" ? "Olası skor dağılımı" : "Tahmini Skor"}:{" "}
                 <span className="text-neon-cyan font-semibold">{topScore.label}</span>{" "}
                 (<span className="text-slate-400">%{Math.round(topScore.probability * 100)}</span>)
               </span>
@@ -468,7 +468,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
           </div>
 
           <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-3 text-xs text-slate-500">
-            <span>Mac detayi ve analizlere git</span>
+            <span>Maç detayı ve analizlere git</span>
             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1 group-hover:text-neon-cyan" />
           </div>
         </div>
@@ -490,7 +490,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
   const [awayTeamQuery, setAwayTeamQuery] = useState("");
   const [selectedMatchId, setSelectedMatchId] = useState("");
   const filters = useMemo(() => getFilters(sport), [sport]);
-  const completedLink = sport ? `/${sport}/predictions/completed` : "/football/predictions/completed";
+  const completedLink = sport === "basketball" ? "/basketbol/sonuclar" : "/futbol/sonuclar";
   const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
   const requestedTake = scope === "completed" ? 260 : 120;
   const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
@@ -629,17 +629,17 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
       </>
     ) : (
       <>
-        Mac <span className="gradient-text">Tahminleri</span>
+        Maç <span className="gradient-text">Tahminleri</span>
       </>
     ));
 
   const defaultDescription =
     description ??
     (scope === "completed"
-      ? "Sonuclanan maclar icin uretilen tahminlerin detay listesi."
+      ? "Sonuçlanan maçlar için üretilen tahminlerin detay listesi."
       : sport === "basketball"
-        ? "Basketbol maclari icin 4 periyot dinamiklerini dikkate alan, henuz oynanmamis mac tahminleri."
-        : "Yapay zeka destekli analizler ve henuz oynanmamis mac tahminleri.");
+        ? "Basketbol maçları için 4 periyot dinamiklerini dikkate alan, henüz oynanmamış maç tahminleri."
+        : "Yapay zeka destekli analizler ve henüz oynanmamış maç tahminleri.");
 
   return (
     <div className="space-y-8">
@@ -665,7 +665,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
                 href={completedLink}
                 className="inline-flex items-center gap-2 rounded-lg border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-2 text-xs font-medium text-neon-cyan hover:bg-neon-cyan/20"
               >
-                Sonuclanan tahmin analizine git
+                Sonuçlanan tahmin analizine git
               </Link>
             </div>
           )}
@@ -712,7 +712,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
       <div className="rounded-xl border border-white/10 bg-surface/40 p-4">
         <div className="mb-3 flex items-center gap-2 text-xs font-display uppercase tracking-wider text-slate-400">
           <Search className="h-4 w-4 text-neon-cyan" />
-          Takim ve karsilasma filtreleri
+          Takım ve karşılaşma filtreleri
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
@@ -722,7 +722,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
               value={homeTeamQuery}
               onChange={(event) => setHomeTeamQuery(event.target.value)}
               list="prediction-home-team-suggestions"
-              placeholder="Orn: Galatasaray"
+              placeholder="Örn: Galatasaray"
               className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none ring-0 transition focus:border-neon-cyan/50"
             />
             <datalist id="prediction-home-team-suggestions">
@@ -738,7 +738,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
               value={awayTeamQuery}
               onChange={(event) => setAwayTeamQuery(event.target.value)}
               list="prediction-away-team-suggestions"
-              placeholder="Orn: Fenerbahce"
+              placeholder="Örn: Fenerbahçe"
               className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none ring-0 transition focus:border-neon-purple/50"
             />
             <datalist id="prediction-away-team-suggestions">
@@ -752,13 +752,13 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
         {(homeTeamQuery.trim().length > 0 || awayTeamQuery.trim().length > 0) ? (
           <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
             <label className="space-y-1 text-xs text-slate-400">
-              <span>Karsilasma secimi</span>
+              <span>Karşılaşma seçimi</span>
               <select
                 value={selectedMatchId}
                 onChange={(event) => setSelectedMatchId(event.target.value)}
                 className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white outline-none transition focus:border-neon-cyan/50"
               >
-                <option value="">Tum uygun karsilasmalar ({matchOptions.length})</option>
+                <option value="">Tüm uygun karşılaşmalar ({matchOptions.length})</option>
                 {matchOptions.map((option) => (
                   <option key={option.matchId} value={option.matchId}>
                     {option.label}
@@ -776,7 +776,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
               }}
               className="rounded-lg border border-white/15 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-white/30 hover:text-white"
             >
-              Filtreyi sifirla
+              Filtreyi sıfırla
             </button>
           </div>
         ) : null}
@@ -791,7 +791,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
 
         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
           <Zap className="w-4 h-4 text-neon-green" />
-          <span className="text-sm text-slate-400">Yuksek Guven:</span>
+          <span className="text-sm text-slate-400">Yüksek Güven:</span>
           <span className="text-sm font-semibold text-neon-green">{filteredItems.filter((i) => (i.confidenceScore ?? 0) >= 0.7).length}</span>
         </div>
 
@@ -809,7 +809,7 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
 
             <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
               <Target className="w-4 h-4 text-neon-purple" />
-              <span className="text-sm text-slate-400">Beklenen Aralik:</span>
+              <span className="text-sm text-slate-400">Beklenen Aralık:</span>
               <span className="text-sm font-semibold text-white">
                 {basketballTotalStats?.min !== null && basketballTotalStats?.max !== null
                   ? `${basketballTotalStats?.min?.toFixed(1)} - ${basketballTotalStats?.max?.toFixed(1)}`
@@ -840,8 +840,8 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-neon-red/10 flex items-center justify-center">
             <ShieldAlert className="w-8 h-8 text-neon-red" />
           </div>
-          <h3 className="text-lg font-display font-semibold text-white mb-2">Veri Alinamadi</h3>
-          <p className="text-slate-400">Tahmin listesi yuklenirken bir hata olustu. Lutfen tekrar deneyin.</p>
+          <h3 className="text-lg font-display font-semibold text-white mb-2">Veri Alınamadı</h3>
+          <p className="text-slate-400">Tahmin listesi yüklenirken bir hata oluştu. Lütfen tekrar deneyin.</p>
         </div>
       )}
 
@@ -851,12 +851,12 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
             <Target className="w-10 h-10 text-slate-500" />
           </div>
           <h3 className="text-xl font-display font-semibold text-white mb-2">
-            {scope === "completed" ? "Sonuclanan Tahmin Bulunamadi" : "Oynanmamis Tahmin Bulunamadi"}
+            {scope === "completed" ? "Sonuçlanan Tahmin Bulunamadı" : "Oynanmamış Tahmin Bulunamadı"}
           </h3>
           <p className="text-slate-400">
             {scope === "completed"
-              ? "Secili kriterlere uygun sonuclanmis tahmin bulunmuyor."
-              : "Su an oynanmamis maca ait tahmin yok. Sonuclanan tahminler sayfasini inceleyebilirsiniz."}
+              ? "Seçili kriterlere uygun sonuçlanmış tahmin bulunmuyor."
+              : "Şu an oynanmamış maça ait tahmin yok. Sonuçlanan tahminler sayfasını inceleyebilirsiniz."}
           </p>
         </div>
       )}

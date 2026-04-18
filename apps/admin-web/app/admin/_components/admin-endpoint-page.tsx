@@ -1,5 +1,5 @@
 ﻿import { MetricChip, SectionCard } from "@sporx/ui";
-import { adminApiGet } from "../_lib/admin-api";
+import { AdminApiResult, adminApiGet } from "../_lib/admin-api";
 
 type TableColumn = {
   key: string;
@@ -13,6 +13,7 @@ type AdminEndpointPageProps = {
   emptyText?: string;
   columns?: TableColumn[];
   insight?: string;
+  result?: AdminApiResult<unknown>;
 };
 
 type DistributionItem = {
@@ -492,13 +493,15 @@ export async function AdminEndpointPage({
   endpoint,
   emptyText,
   columns,
-  insight
+  insight,
+  result
 }: AdminEndpointPageProps) {
-  const result = await adminApiGet<unknown>(endpoint);
-  const tableData = result.ok && Array.isArray(result.data) ? (result.data as Array<Record<string, unknown>>) : null;
+  const resolvedResult = result ?? (await adminApiGet<unknown>(endpoint));
+  const tableData =
+    resolvedResult.ok && Array.isArray(resolvedResult.data) ? (resolvedResult.data as Array<Record<string, unknown>>) : null;
   const objectData =
-    result.ok && result.data && !Array.isArray(result.data) && typeof result.data === "object"
-      ? (result.data as Record<string, unknown>)
+    resolvedResult.ok && resolvedResult.data && !Array.isArray(resolvedResult.data) && typeof resolvedResult.data === "object"
+      ? (resolvedResult.data as Record<string, unknown>)
       : null;
 
   const statusField = tableData ? pickStatusField(tableData, columns) : null;
@@ -510,8 +513,8 @@ export async function AdminEndpointPage({
         {insight ?? inferInsight(endpoint)}
       </div>
 
-      {!result.ok ? (
-        <p className="rounded-md border border-red-900/70 bg-red-950/40 p-3 text-sm text-red-200">{result.error}</p>
+      {!resolvedResult.ok ? (
+        <p className="rounded-md border border-red-900/70 bg-red-950/40 p-3 text-sm text-red-200">{resolvedResult.error}</p>
       ) : null}
 
       {tableData && tableData.length > 0 ? (
@@ -538,7 +541,7 @@ export async function AdminEndpointPage({
 
       {distribution ? <div className="mb-4">{renderDistribution(distribution)}</div> : null}
 
-      {result.ok && tableData && tableData.length === 0 ? (
+      {resolvedResult.ok && tableData && tableData.length === 0 ? (
         <p className="text-sm text-slate-300">{emptyText ?? "Kayıt bulunamadı."}</p>
       ) : null}
 

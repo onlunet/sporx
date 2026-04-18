@@ -6,7 +6,7 @@ interface LiveStatsProps {
   scoreLabel?: string;
 }
 
-export function LiveStats({ matches, matchLabel = "Canli Mac", scoreLabel = "Toplam Gol" }: LiveStatsProps) {
+export function LiveStats({ matches, matchLabel = "Canlı Maç", scoreLabel = "Toplam Gol" }: LiveStatsProps) {
   const totalMatches = matches.length;
   const withPredictions = matches.filter((m) => m.predictions.length > 0).length;
   const totalScore = matches.reduce((acc, m) => acc + (m.score.home ?? 0) + (m.score.away ?? 0), 0);

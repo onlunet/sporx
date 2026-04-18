@@ -164,24 +164,24 @@ export const PREDICTION_TYPE_ORDER: PredictionType[] = [
 ];
 
 export const PREDICTION_TYPE_LABELS: Record<PredictionType, string> = {
-  fullTimeResult: "Mac Sonucu",
-  firstHalfResult: "Ilk Yari Sonucu",
+  fullTimeResult: "Maç Sonucu",
+  firstHalfResult: "İlk Yarı Sonucu",
   halfTimeFullTime: "IY/MS",
   bothTeamsToScore: "KG Var/Yok",
-  totalGoalsOverUnder: "Alt/Ust",
-  correctScore: "Dogru Skor",
-  goalRange: "Gol Araligi",
-  firstHalfGoals: "Ilk Yari Golleri",
-  secondHalfGoals: "Ikinci Yari Golleri"
+  totalGoalsOverUnder: "Alt/Üst",
+  correctScore: "Doğru Skor",
+  goalRange: "Gol Aralığı",
+  firstHalfGoals: "İlk Yarı Golleri",
+  secondHalfGoals: "İkinci Yarı Golleri"
 };
 
 export const PREDICTION_TABS: Array<{ key: PredictionTabKey; label: string }> = [
   { key: "general", label: "Genel" },
   { key: "firstHalfFullTime", label: "IY/MS" },
   { key: "btts", label: "KG Var/Yok" },
-  { key: "overUnder", label: "Alt/Ust" },
-  { key: "scoreline", label: "Skor Dagilimi" },
-  { key: "firstHalf", label: "Ilk Yari" },
-  { key: "secondHalf", label: "Ikinci Yari" },
+  { key: "overUnder", label: "Alt/Üst" },
+  { key: "scoreline", label: "Skor Dağılımı" },
+  { key: "firstHalf", label: "İlk Yarı" },
+  { key: "secondHalf", label: "İkinci Yarı" },
   { key: "commentary", label: "Yorumlar" }
 ];

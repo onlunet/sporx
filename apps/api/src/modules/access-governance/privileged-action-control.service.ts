@@ -4,10 +4,13 @@ import {
   PermissionEffect,
   PrivilegedActionSeverity,
   PrivilegedActionStatus,
-  Prisma
+  Prisma,
+  SecurityEventSeverity,
+  SecurityEventSourceDomain
 } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AccessGovernanceService } from "./access-governance.service";
+import { SecurityEventService } from "../security-events/security-event.service";
 import {
   AccessActor,
   PrivilegedActionApprovalInput,
@@ -32,7 +35,8 @@ function parseBoolean(value: string | undefined, fallback: boolean) {
 export class PrivilegedActionControlService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly accessGovernanceService: AccessGovernanceService
+    private readonly accessGovernanceService: AccessGovernanceService,
+    private readonly securityEventService: SecurityEventService
   ) {}
 
   private isApprovalEnabled() {
@@ -92,17 +96,42 @@ export class PrivilegedActionControlService {
       }
     });
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId: actor.userId ?? null,
-        action: "privileged_action.request",
-        resourceType: input.resourceType,
-        resourceId: created.id,
-        metadata: {
-          privilegedAction: input.action,
-          severity,
-          status
-        } as Prisma.InputJsonValue
+    await this.securityEventService.emitAuditEvent({
+      eventKey: `audit:privileged_action.request:${created.id}`,
+      actorType: actor.actorType,
+      actorId: actor.userId ?? null,
+      serviceIdentityId: actor.serviceIdentityId ?? null,
+      action: "privileged_action.request",
+      resourceType: input.resourceType,
+      resourceId: created.id,
+      reason: input.reason,
+      decisionResult: status,
+      severity: severity === PrivilegedActionSeverity.CRITICAL ? SecurityEventSeverity.CRITICAL : SecurityEventSeverity.HIGH,
+      context: {
+        ipAddress: actor.ipAddress ?? null,
+        environment: actor.environment
+      },
+      metadata: {
+        privilegedAction: input.action,
+        severity,
+        status
+      }
+    });
+
+    await this.securityEventService.emitSecurityEvent({
+      eventKey: `security:privileged_action.request:${created.id}`,
+      sourceDomain: SecurityEventSourceDomain.ACCESS,
+      eventType: "privileged_action_requested",
+      severity: severity === PrivilegedActionSeverity.CRITICAL ? SecurityEventSeverity.CRITICAL : SecurityEventSeverity.HIGH,
+      actorType: actor.actorType,
+      actorId: actor.userId ?? null,
+      serviceIdentityId: actor.serviceIdentityId ?? null,
+      targetResourceType: input.resourceType,
+      targetResourceId: created.id,
+      reason: input.reason,
+      decisionResult: status,
+      metadata: {
+        action: input.action
       }
     });
 
@@ -155,17 +184,32 @@ export class PrivilegedActionControlService {
       });
     });
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId: approverUserId,
-        action: "privileged_action.approve",
-        resourceType: request.resourceType,
-        resourceId: request.id,
-        metadata: {
-          status: approvalStatus,
-          reason: input.reason ?? null
-        } as Prisma.InputJsonValue
+    await this.securityEventService.emitAuditEvent({
+      eventKey: `audit:privileged_action.approve:${request.id}:${approvalStatus}`,
+      actorType: AccessActorType.ADMIN,
+      actorId: approverUserId,
+      action: "privileged_action.approve",
+      resourceType: request.resourceType,
+      resourceId: request.id,
+      reason: input.reason ?? null,
+      decisionResult: approvalStatus,
+      severity: approvalStatus === PrivilegedActionStatus.REJECTED ? SecurityEventSeverity.MEDIUM : SecurityEventSeverity.HIGH,
+      metadata: {
+        status: approvalStatus
       }
+    });
+
+    await this.securityEventService.emitSecurityEvent({
+      eventKey: `security:privileged_action.approve:${request.id}:${approvalStatus}`,
+      sourceDomain: SecurityEventSourceDomain.ACCESS,
+      eventType: approvalStatus === PrivilegedActionStatus.REJECTED ? "privileged_action_rejected" : "privileged_action_approved",
+      severity: approvalStatus === PrivilegedActionStatus.REJECTED ? SecurityEventSeverity.MEDIUM : SecurityEventSeverity.HIGH,
+      actorType: AccessActorType.ADMIN,
+      actorId: approverUserId,
+      targetResourceType: request.resourceType,
+      targetResourceId: request.id,
+      reason: input.reason ?? null,
+      decisionResult: approvalStatus
     });
 
     return updated;
@@ -199,16 +243,34 @@ export class PrivilegedActionControlService {
       }
     });
 
-    await this.prisma.auditLog.create({
-      data: {
-        userId: executorUserId ?? null,
-        action: "privileged_action.execute",
-        resourceType: request.resourceType,
-        resourceId: request.id,
-        metadata: {
-          action: request.action
-        } as Prisma.InputJsonValue
+    await this.securityEventService.emitAuditEvent({
+      eventKey: `audit:privileged_action.execute:${request.id}`,
+      actorType: executorUserId ? AccessActorType.ADMIN : request.actorType,
+      actorId: executorUserId ?? null,
+      serviceIdentityId: request.serviceIdentityId ?? null,
+      action: "privileged_action.execute",
+      resourceType: request.resourceType,
+      resourceId: request.id,
+      reason: request.reason,
+      decisionResult: PrivilegedActionStatus.EXECUTED,
+      severity: request.severity === PrivilegedActionSeverity.CRITICAL ? SecurityEventSeverity.CRITICAL : SecurityEventSeverity.HIGH,
+      metadata: {
+        action: request.action
       }
+    });
+
+    await this.securityEventService.emitSecurityEvent({
+      eventKey: `security:privileged_action.execute:${request.id}`,
+      sourceDomain: SecurityEventSourceDomain.ACCESS,
+      eventType: "privileged_action_executed",
+      severity: request.severity === PrivilegedActionSeverity.CRITICAL ? SecurityEventSeverity.CRITICAL : SecurityEventSeverity.HIGH,
+      actorType: executorUserId ? AccessActorType.ADMIN : request.actorType,
+      actorId: executorUserId ?? null,
+      serviceIdentityId: request.serviceIdentityId ?? null,
+      targetResourceType: request.resourceType,
+      targetResourceId: request.id,
+      reason: request.reason,
+      decisionResult: PrivilegedActionStatus.EXECUTED
     });
 
     return updated;
@@ -268,6 +330,23 @@ export class PrivilegedActionControlService {
     });
 
     await this.executeRequest(approved.id, input.approverUserId);
+    await this.securityEventService.emitSecurityEvent({
+      eventKey: `security:break_glass.granted:${grant.id}`,
+      sourceDomain: SecurityEventSourceDomain.ACCESS,
+      eventType: "break_glass_granted",
+      severity: SecurityEventSeverity.CRITICAL,
+      actorType: AccessActorType.ADMIN,
+      actorId: input.approverUserId,
+      targetResourceType: input.resourceType,
+      targetResourceId: input.userId,
+      reason: input.reason,
+      decisionResult: "ALLOW",
+      metadata: {
+        permission: input.permission,
+        action: input.action,
+        expiresAt: input.expiresAt.toISOString()
+      }
+    });
     return {
       request: approved,
       grant

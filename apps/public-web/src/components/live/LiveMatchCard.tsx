@@ -15,9 +15,10 @@ interface LiveMatchCardProps {
       probabilities?: { home?: number; draw?: number; away?: number };
     }[];
   };
+  href: string;
 }
 
-export function LiveMatchCard({ match }: LiveMatchCardProps) {
+export function LiveMatchCard({ match, href }: LiveMatchCardProps) {
   const scoreHome = match.score.home ?? 0;
   const scoreAway = match.score.away ?? 0;
   
@@ -25,7 +26,7 @@ export function LiveMatchCard({ match }: LiveMatchCardProps) {
   const probs = hasPrediction ? match.predictions[0].probabilities : null;
   
   return (
-    <Link href={`/matches/${match.id}`}>
+    <Link href={href}>
       <article className='group relative overflow-hidden rounded-xl sm:rounded-2xl bg-gradient-to-br from-surface/80 to-abyss/90 border border-neon-red/20 hover:border-neon-red/50 transition-all duration-500'>
         <div className='absolute inset-0 bg-gradient-to-br from-neon-red/5 via-transparent to-neon-cyan/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500' />        
         <div className='absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-neon-red via-neon-amber to-neon-cyan animate-pulse' />

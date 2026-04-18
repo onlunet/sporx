@@ -9,6 +9,31 @@ import { Request, Response } from "express";
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
+  private sanitizeMessage(status: number, payload: unknown) {
+    const sensitivePattern = /(secret|token|password|credential|apikey|api_key)/i;
+    let rawMessage = "Request failed";
+    if (typeof payload === "string") {
+      rawMessage = payload;
+    } else if (payload && typeof payload === "object" && "message" in payload) {
+      const value = (payload as Record<string, unknown>).message;
+      rawMessage = Array.isArray(value) ? value.join(", ") : String(value);
+    }
+
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      return "Internal server error";
+    }
+    if (status === HttpStatus.UNAUTHORIZED || status === HttpStatus.FORBIDDEN) {
+      return "Access denied";
+    }
+    if (status === HttpStatus.TOO_MANY_REQUESTS) {
+      return "Too many requests. Please retry later.";
+    }
+    if (sensitivePattern.test(rawMessage)) {
+      return "Request failed";
+    }
+    return rawMessage;
+  }
+
   catch(exception: unknown, host: ArgumentsHost) {
     const context = host.switchToHttp();
     const response = context.getResponse<Response>();
@@ -16,7 +41,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const status = exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     const payload = exception instanceof HttpException ? exception.getResponse() : "Internal server error";
-    const message = typeof payload === "string" ? payload : (payload as Record<string, unknown>).message ?? "Error";
+    const message = this.sanitizeMessage(status, payload);
 
     if (!(exception instanceof HttpException)) {
       // Keep minimal runtime diagnostics for unexpected server errors.
@@ -36,7 +61,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
         code: `HTTP_${status}`,
         message,
         details: {
-          path: request.url
+          path: request.url,
+          requestId: request.headers["x-request-id"] ?? null
         }
       }
     });

@@ -274,11 +274,11 @@ function engineLabel(type: PredictionType): string {
     firstHalfResult: "IY Motoru",
     halfTimeFullTime: "IY/MS Motoru",
     bothTeamsToScore: "KG Motoru",
-    totalGoalsOverUnder: "Alt/Ust Motoru",
+    totalGoalsOverUnder: "Alt/Üst Motoru",
     correctScore: "Skor Motoru",
-    goalRange: "Gol Araligi Motoru",
-    firstHalfGoals: "Ilk Yari Gol Motoru",
-    secondHalfGoals: "Ikinci Yari Gol Motoru"
+    goalRange: "Gol Aralığı Motoru",
+    firstHalfGoals: "İlk Yarı Gol Motoru",
+    secondHalfGoals: "İkinci Yarı Gol Motoru"
   };
   return map[type];
 }
@@ -413,7 +413,7 @@ export function buildLeaguePredictionPerformanceReport(items: MatchPredictionIte
       failed,
       successRate: evaluatedResults.length > 0 ? roundPercentage(correct / evaluatedResults.length) : 0,
       uniqueMatchCount: leagueData.uniqueMatchIds.size,
-      topTypeLabel: topType?.label ?? "Degerlendirilebilir tur yok",
+      topTypeLabel: topType?.label ?? "Değerlendirilebilir tür yok",
       topTypeAccuracy: topType?.accuracy ?? 0,
       byType
     });

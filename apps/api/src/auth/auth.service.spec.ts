@@ -1,4 +1,4 @@
-import { AuthActorType } from "@prisma/client";
+import { AuthActorType, SecurityEventSourceDomain } from "@prisma/client";
 import { UnauthorizedException } from "@nestjs/common";
 import bcrypt from "bcrypt";
 import { AuthService } from "./auth.service";
@@ -50,7 +50,21 @@ describe("AuthService", () => {
     }
   };
 
-  const service = new AuthService(usersService as any, jwtService as any, prismaService as any);
+  const securityEventService = {
+    emitSecurityEvent: jest.fn().mockResolvedValue({})
+  };
+
+  const incidentReadinessService = {
+    isEmergencyControlActive: jest.fn().mockResolvedValue(false)
+  };
+
+  const service = new AuthService(
+    usersService as any,
+    jwtService as any,
+    prismaService as any,
+    securityEventService as any,
+    incidentReadinessService as any
+  );
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -58,6 +72,7 @@ describe("AuthService", () => {
     process.env.JWT_REFRESH_SECRET_ADMIN = "test-refresh-secret";
     process.env.AUTH_LOCKOUT_ENABLED = "true";
     process.env.REFRESH_REUSE_DETECTION_ENABLED = "true";
+    incidentReadinessService.isEmergencyControlActive.mockResolvedValue(false);
   });
 
   it("sanitizes login error for unknown user", async () => {
@@ -175,6 +190,31 @@ describe("AuthService", () => {
     await expect(service.refresh("reused-token")).rejects.toThrow("Authentication failed");
     expect(usersService.revokeRefreshTokenFamily).toHaveBeenCalledWith("f1", "reuse_detected", expect.any(Object));
     expect(usersService.revokeAuthSession).toHaveBeenCalledWith("s1", "reuse_detected", expect.any(Object));
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceDomain: SecurityEventSourceDomain.AUTH,
+        eventType: "refresh_token_reuse"
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it("blocks refresh when emergency control disables refresh globally", async () => {
+    incidentReadinessService.isEmergencyControlActive.mockResolvedValue(true);
+    jwtService.verifyAsync.mockResolvedValue({
+      sub: "u1",
+      role: "admin",
+      type: "refresh",
+      at: "ADMIN"
+    });
+
+    await expect(service.refresh("refresh-token")).rejects.toThrow("Authentication failed");
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceDomain: SecurityEventSourceDomain.AUTH,
+        eventType: "refresh_blocked_by_emergency_control"
+      })
+    );
   });
 
   it("supports global logout by actor scope", async () => {

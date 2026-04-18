@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const RESTRICTED_PUBLIC_PROXY_ROOT_SEGMENTS = new Set(["admin", "security", "compliance", "internal"]);
 
 function trimTrailingSlash(value: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
@@ -47,7 +48,52 @@ function buildTargetUrl(baseUrl: string, incomingPathname: string, search: strin
   return `${baseUrl}${incomingPathname}${search}`;
 }
 
+function normalizePathToken(value: string) {
+  try {
+    return decodeURIComponent(value).trim().toLowerCase();
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
+function resolveRootSegment(pathParts: string[]) {
+  for (const rawPart of pathParts) {
+    const tokenized = normalizePathToken(rawPart).split("/");
+    for (const token of tokenized) {
+      if (token.length > 0) {
+        return token;
+      }
+    }
+  }
+
+  return "";
+}
+
+function isRestrictedPublicBoundaryPath(pathParts: string[]) {
+  const rootSegment = resolveRootSegment(pathParts);
+  return RESTRICTED_PUBLIC_PROXY_ROOT_SEGMENTS.has(rootSegment);
+}
+
+function buildPublicBoundaryDeniedResponse() {
+  return NextResponse.json(
+    {
+      success: false,
+      data: null,
+      meta: null,
+      error: {
+        code: "PUBLIC_ROUTE_FORBIDDEN",
+        message: "Requested route is not available from public API."
+      }
+    },
+    { status: 403 }
+  );
+}
+
 async function proxyRequest(request: NextRequest, pathParts: string[]) {
+  if (isRestrictedPublicBoundaryPath(pathParts)) {
+    return buildPublicBoundaryDeniedResponse();
+  }
+
   const incomingPathname = `/api/v1/${pathParts.join("/")}`;
   const incomingSearch = request.nextUrl.search ?? "";
   const upstreamCandidates = buildUpstreamCandidates();
@@ -55,6 +101,7 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
   const proxyHeaders = new Headers(request.headers);
   proxyHeaders.delete("host");
   proxyHeaders.delete("content-length");
+  proxyHeaders.set("x-public-web-request", "1");
   const forwardedProtoHeader = request.headers.get("x-forwarded-proto");
   const effectiveProto =
     forwardedProtoHeader?.split(",")[0]?.trim() || request.nextUrl.protocol.replace(":", "");
@@ -126,8 +173,7 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
       meta: null,
       error: {
         code: "UPSTREAM_UNAVAILABLE",
-        message: "Upstream API ulasilamiyor.",
-        detail: lastError instanceof Error ? lastError.message : "unknown_error"
+        message: "Upstream API ulasilamiyor."
       }
     },
     { status: 502 }

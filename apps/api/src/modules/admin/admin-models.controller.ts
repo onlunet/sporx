@@ -95,28 +95,12 @@ export class AdminModelsController {
   }
 
   private async backfillPredictionsWithoutModelVersion(activeModelId: string | null) {
-    if (!activeModelId) {
-      return;
-    }
-
-    const nullCount = await this.prisma.prediction.count({ where: { modelVersionId: null } });
-    if (nullCount === 0) {
-      return;
-    }
-
-    await this.prisma.prediction.updateMany({
-      where: { modelVersionId: null },
-      data: {
-        modelVersionId: activeModelId,
-        updatedByProcess: "model_registry_backfill"
-      }
-    });
+    void activeModelId;
   }
 
   private async ensureModelRegistry() {
     await this.bootstrapBaselineModelRegistry();
-    const activeModelId = await this.ensureSingleActiveModel();
-    await this.backfillPredictionsWithoutModelVersion(activeModelId);
+    await this.ensureSingleActiveModel();
   }
 
   private normalizeConfidence(value: unknown): number {
@@ -134,8 +118,8 @@ export class AdminModelsController {
     rows: Array<{
       id: string;
       modelVersionId: string | null;
-      confidenceScore: number;
-      riskFlags: Prisma.JsonValue;
+      confidence: number;
+      riskFlagsJson: Prisma.JsonValue;
       createdAt: Date;
     }>
   ) {
@@ -165,9 +149,9 @@ export class AdminModelsController {
         riskyCount: 0
       };
 
-      const riskFlags = Array.isArray(row.riskFlags) ? row.riskFlags : [];
+      const riskFlags = Array.isArray(row.riskFlagsJson) ? row.riskFlagsJson : [];
       current.count += 1;
-      current.confidenceTotal += this.normalizeConfidence(row.confidenceScore);
+      current.confidenceTotal += this.normalizeConfidence(row.confidence);
       current.riskyCount += riskFlags.length > 0 ? 1 : 0;
       bucket.set(key, current);
     }
@@ -302,23 +286,23 @@ export class AdminModelsController {
     return normalized.slice(0, 12);
   }
 
-  private predictionFallbackRows(
+  private predictionRunFallbackRows(
     countRows: Array<{ modelVersionId: string | null; _count: { _all: number } }>,
-    metaRows: Array<{ modelVersionId: string | null; updatedByProcess: string | null; dataSource: string | null; createdAt: Date }>
+    metaRows: Array<{ modelVersionId: string | null; market: string; horizon: string; createdAt: Date }>
   ) {
     if (countRows.length === 0) {
       return [];
     }
 
-    const latestMetaByModelVersionId = new Map<string, { updatedByProcess: string | null; dataSource: string | null; createdAt: Date }>();
-    let latestUnversionedMeta: { updatedByProcess: string | null; dataSource: string | null; createdAt: Date } | null = null;
+    const latestMetaByModelVersionId = new Map<string, { market: string; horizon: string; createdAt: Date }>();
+    let latestUnversionedMeta: { market: string; horizon: string; createdAt: Date } | null = null;
 
     for (const row of metaRows) {
       if (row.modelVersionId) {
         if (!latestMetaByModelVersionId.has(row.modelVersionId)) {
           latestMetaByModelVersionId.set(row.modelVersionId, {
-            updatedByProcess: row.updatedByProcess,
-            dataSource: row.dataSource,
+            market: row.market,
+            horizon: row.horizon,
             createdAt: row.createdAt
           });
         }
@@ -327,8 +311,8 @@ export class AdminModelsController {
 
       if (!latestUnversionedMeta) {
         latestUnversionedMeta = {
-          updatedByProcess: row.updatedByProcess,
-          dataSource: row.dataSource,
+          market: row.market,
+          horizon: row.horizon,
           createdAt: row.createdAt
         };
       }
@@ -338,7 +322,7 @@ export class AdminModelsController {
       .map((row) => {
         if (row.modelVersionId) {
           const meta = latestMetaByModelVersionId.get(row.modelVersionId) ?? null;
-          const modelName = this.normalizeModelName(meta?.updatedByProcess);
+          const modelName = this.normalizeModelName(meta?.market ?? "prediction_pipeline");
           const version = this.shortModelVersion(row.modelVersionId);
           return {
             modelVersionId: row.modelVersionId,
@@ -346,22 +330,22 @@ export class AdminModelsController {
             version,
             modelLabel: `${modelName}:${version}`,
             predictionCount: row._count._all,
-            updatedByProcess: meta?.updatedByProcess ?? null,
-            dataSource: meta?.dataSource ?? null,
+            updatedByProcess: meta ? `prediction_run:${meta.market}:${meta.horizon}` : null,
+            dataSource: "prediction_runs",
             createdAt: meta?.createdAt ?? new Date(0)
           };
         }
 
         const meta = latestUnversionedMeta;
-        const modelName = this.normalizeModelName(meta?.updatedByProcess ?? "legacy_pipeline");
+        const modelName = this.normalizeModelName(meta?.market ?? "prediction_pipeline");
         return {
           modelVersionId: null,
           modelName,
           version: "unversioned",
           modelLabel: `${modelName}:unversioned`,
           predictionCount: row._count._all,
-          updatedByProcess: meta?.updatedByProcess ?? null,
-          dataSource: meta?.dataSource ?? null,
+          updatedByProcess: meta ? `prediction_run:${meta.market}:${meta.horizon}` : null,
+          dataSource: "prediction_runs",
           createdAt: meta?.createdAt ?? new Date(0)
         };
       })
@@ -446,34 +430,77 @@ export class AdminModelsController {
     return Math.max(min, Math.min(max, value));
   }
 
-  private parseOutcomeProbabilities(
-    calibratedProbabilities: Prisma.JsonValue,
-    rawProbabilities: Prisma.JsonValue
-  ): { home: number; draw: number; away: number } | null {
-    const calibrated = this.asObject(calibratedProbabilities);
-    const raw = this.asObject(rawProbabilities);
-    const candidate = calibrated ?? raw;
+  private normalizeSelectionToken(value: string | null | undefined): "home" | "draw" | "away" | null {
+    const normalized = (value ?? "").trim().toLowerCase();
+    if (["home", "h", "1"].includes(normalized)) {
+      return "home";
+    }
+    if (["draw", "d", "x"].includes(normalized)) {
+      return "draw";
+    }
+    if (["away", "a", "2"].includes(normalized)) {
+      return "away";
+    }
+    return null;
+  }
+
+  private parseOutcomeProbabilitiesFromMap(value: unknown): { home: number; draw: number; away: number } | null {
+    const candidate = this.asObject(value);
     if (!candidate) {
       return null;
     }
-
     const home = this.asNumber(candidate.home);
     const draw = this.asNumber(candidate.draw);
     const away = this.asNumber(candidate.away);
     if (home === null || draw === null || away === null) {
       return null;
     }
-
     const sum = home + draw + away;
     if (!Number.isFinite(sum) || sum <= 0) {
       return null;
     }
-
     return {
       home: this.round(home / sum, 6),
       draw: this.round(draw / sum, 6),
       away: this.round(away / sum, 6)
     };
+  }
+
+  private parseOutcomeProbabilitiesFromRun(run: {
+    market: string;
+    probability: number;
+    explanationJson: Prisma.JsonValue;
+  }): { home: number; draw: number; away: number } | null {
+    const normalizedMarket = run.market.trim().toLowerCase();
+    if (!["match_outcome", "match_result", "moneyline", "full_time_result"].includes(normalizedMarket)) {
+      return null;
+    }
+
+    const explanation = this.asObject(run.explanationJson);
+    const mapped = [
+      this.parseOutcomeProbabilitiesFromMap(explanation?.calibratedProbabilities),
+      this.parseOutcomeProbabilitiesFromMap(explanation?.probabilities),
+      this.parseOutcomeProbabilitiesFromMap(explanation?.rawProbabilities)
+    ].find((item) => Boolean(item));
+
+    if (mapped) {
+      return mapped;
+    }
+
+    const selected = this.normalizeSelectionToken(typeof explanation?.selectedSide === "string" ? explanation.selectedSide : null);
+    const probability = Number.isFinite(run.probability) ? this.clamp(run.probability, 0.000001, 0.999999) : null;
+    if (!selected || probability === null) {
+      return null;
+    }
+
+    const remainder = this.round((1 - probability) / 2, 6);
+    if (selected === "home") {
+      return { home: this.round(probability, 6), draw: remainder, away: remainder };
+    }
+    if (selected === "draw") {
+      return { home: remainder, draw: this.round(probability, 6), away: remainder };
+    }
+    return { home: remainder, draw: remainder, away: this.round(probability, 6) };
   }
 
   private outcomeFromScore(homeScore: number | null, awayScore: number | null): "home" | "draw" | "away" | null {
@@ -489,14 +516,17 @@ export class AdminModelsController {
     return "draw";
   }
 
-  private buildPerformanceRowsFromPredictions(
+  private buildPerformanceRowsFromPublishedRuns(
     rows: Array<{
-      id: string;
-      modelVersionId: string | null;
-      calibratedProbabilities: Prisma.JsonValue;
-      rawProbabilities: Prisma.JsonValue;
-      confidenceScore: number;
-      riskFlags: Prisma.JsonValue;
+      predictionRunId: string;
+      predictionRun: {
+        modelVersionId: string | null;
+        market: string;
+        probability: number;
+        confidence: number;
+        riskFlagsJson: Prisma.JsonValue;
+        explanationJson: Prisma.JsonValue;
+      };
       match: { homeScore: number | null; awayScore: number | null; matchDateTimeUTC: Date };
     }>
   ) {
@@ -515,10 +545,14 @@ export class AdminModelsController {
     >();
 
     for (const row of rows) {
-      if (!row.modelVersionId) {
+      if (!row.predictionRun.modelVersionId) {
         continue;
       }
-      const probabilities = this.parseOutcomeProbabilities(row.calibratedProbabilities, row.rawProbabilities);
+      const probabilities = this.parseOutcomeProbabilitiesFromRun({
+        market: row.predictionRun.market,
+        probability: row.predictionRun.probability,
+        explanationJson: row.predictionRun.explanationJson
+      });
       if (!probabilities) {
         continue;
       }
@@ -529,9 +563,9 @@ export class AdminModelsController {
       }
 
       const measuredAt = new Date(row.match.matchDateTimeUTC.toISOString().slice(0, 10));
-      const key = `${row.modelVersionId}|${measuredAt.toISOString()}`;
+      const key = `${row.predictionRun.modelVersionId}|${measuredAt.toISOString()}`;
       const current = bucket.get(key) ?? {
-        modelVersionId: row.modelVersionId,
+        modelVersionId: row.predictionRun.modelVersionId,
         measuredAt,
         count: 0,
         correct: 0,
@@ -556,13 +590,13 @@ export class AdminModelsController {
       const pActual = actual === "home" ? pHome : actual === "draw" ? pDraw : pAway;
       const brier = ((pHome - oHome) ** 2 + (pDraw - oDraw) ** 2 + (pAway - oAway) ** 2) / 3;
       const logLoss = -Math.log(Math.max(1e-6, pActual));
-      const riskFlags = Array.isArray(row.riskFlags) ? row.riskFlags : [];
+      const riskFlags = Array.isArray(row.predictionRun.riskFlagsJson) ? row.predictionRun.riskFlagsJson : [];
 
       current.count += 1;
       current.correct += predicted === actual ? 1 : 0;
       current.brier += brier;
       current.logLoss += logLoss;
-      current.confidence += Number.isFinite(row.confidenceScore) ? row.confidenceScore : 0;
+      current.confidence += Number.isFinite(row.predictionRun.confidence) ? row.predictionRun.confidence : 0;
       current.riskRateCount += riskFlags.length > 0 ? 1 : 0;
 
       bucket.set(key, current);
@@ -640,20 +674,39 @@ export class AdminModelsController {
     return driftRows.sort((left, right) => right.measuredAt.getTime() - left.measuredAt.getTime());
   }
 
-  private buildFeatureImportanceRowsFromPredictions(
+  private parseExpectedTotalGoalsFromExplanation(explanationJson: Prisma.JsonValue): number | null {
+    const explanation = this.asObject(explanationJson);
+    const expectedScore = this.asObject(explanation?.expectedScore);
+    const home = this.asNumber(expectedScore?.home);
+    const away = this.asNumber(expectedScore?.away);
+    if (home !== null && away !== null) {
+      return home + away;
+    }
+
+    const expectedGoals = this.asObject(explanation?.expectedGoals);
+    const goalsHome = this.asNumber(expectedGoals?.home ?? expectedGoals?.homeGoals);
+    const goalsAway = this.asNumber(expectedGoals?.away ?? expectedGoals?.awayGoals);
+    if (goalsHome !== null && goalsAway !== null) {
+      return goalsHome + goalsAway;
+    }
+
+    return null;
+  }
+
+  private buildFeatureImportanceRowsFromPredictionRuns(
     modelVersions: Array<{ id: string; modelName: string; version: string }>,
-    predictionRows: Array<{
+    predictionRunRows: Array<{
       modelVersionId: string | null;
-      confidenceScore: number;
-      expectedScore: Prisma.JsonValue;
-      calibratedProbabilities: Prisma.JsonValue;
-      rawProbabilities: Prisma.JsonValue;
-      riskFlags: Prisma.JsonValue;
-      updatedAt: Date;
+      market: string;
+      probability: number;
+      confidence: number;
+      riskFlagsJson: Prisma.JsonValue;
+      explanationJson: Prisma.JsonValue;
+      createdAt: Date;
     }>
   ) {
-    const rowsByModel = new Map<string, typeof predictionRows>();
-    for (const row of predictionRows) {
+    const rowsByModel = new Map<string, typeof predictionRunRows>();
+    for (const row of predictionRunRows) {
       if (!row.modelVersionId) {
         continue;
       }
@@ -682,20 +735,16 @@ export class AdminModelsController {
         }
 
         const totalGoals = rows
-          .map((row) => {
-            const expected = this.asObject(row.expectedScore);
-            const home = this.asNumber(expected?.home);
-            const away = this.asNumber(expected?.away);
-            if (home === null || away === null) {
-              return null;
-            }
-            return home + away;
-          })
+          .map((row) => this.parseExpectedTotalGoalsFromExplanation(row.explanationJson))
           .filter((value): value is number => value !== null);
 
         const outcomeGap = rows
           .map((row) => {
-            const probabilities = this.parseOutcomeProbabilities(row.calibratedProbabilities, row.rawProbabilities);
+            const probabilities = this.parseOutcomeProbabilitiesFromRun({
+              market: row.market,
+              probability: row.probability,
+              explanationJson: row.explanationJson
+            });
             if (!probabilities) {
               return null;
             }
@@ -704,10 +753,10 @@ export class AdminModelsController {
           .filter((value): value is number => value !== null);
 
         const confidenceSeries = rows
-          .map((row) => (Number.isFinite(row.confidenceScore) ? row.confidenceScore : null))
+          .map((row) => (Number.isFinite(row.confidence) ? row.confidence : null))
           .filter((value): value is number => value !== null);
         const riskRate =
-          rows.filter((row) => (Array.isArray(row.riskFlags) ? row.riskFlags.length > 0 : false)).length / rows.length;
+          rows.filter((row) => (Array.isArray(row.riskFlagsJson) ? row.riskFlagsJson.length > 0 : false)).length / rows.length;
         const avgGoals = this.avg(totalGoals) ?? 2.2;
         const avgGap = this.avg(outcomeGap) ?? 0.2;
         const confidenceStability = this.clamp(1 - this.std(confidenceSeries) / 0.25);
@@ -718,7 +767,7 @@ export class AdminModelsController {
         return {
           id: `synthetic-fi-${model.id}-${index}`,
           modelVersionId: model.id,
-          measuredAt: rows[0]?.updatedAt ?? new Date(),
+          measuredAt: rows[0]?.createdAt ?? new Date(),
           values: {
             eloSignal: this.round(eloSignal),
             goalDynamics: this.round(goalDynamics),
@@ -770,7 +819,7 @@ export class AdminModelsController {
   @Get()
   async modelsInventory() {
     const modelVersions = await this.modelVersionsForInventory();
-    const [performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionCounts, predictionMetaRows] =
+    const [performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionRunCounts, predictionRunMetaRows] =
       await Promise.all([
       this.prisma.modelPerformanceTimeseries.findMany({
         orderBy: { measuredAt: "desc" },
@@ -788,19 +837,19 @@ export class AdminModelsController {
         by: ["modelVersionId"],
         _count: { _all: true }
       }),
-      this.prisma.prediction.groupBy({
+      this.prisma.predictionRun.groupBy({
         by: ["modelVersionId"],
         _count: { _all: true }
       }),
-      this.prisma.prediction.findMany({
-        select: { modelVersionId: true, updatedByProcess: true, dataSource: true, createdAt: true },
+      this.prisma.predictionRun.findMany({
+        select: { modelVersionId: true, market: true, horizon: true, createdAt: true },
         orderBy: { createdAt: "desc" },
         take: 20000
       })
     ]);
 
     if (modelVersions.length === 0) {
-      const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+      const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
       return fallbackRows.map((row, index) => ({
         id: row.modelVersionId ? `fallback-${row.modelVersionId}` : "fallback-unversioned",
         modelVersionId: row.modelVersionId,
@@ -819,7 +868,7 @@ export class AdminModelsController {
         brier: null,
         logLoss: null,
         lastMeasuredAt: null,
-        source: "prediction_fallback",
+        source: "prediction_run_fallback",
         createdAt: row.createdAt
       }));
     }
@@ -862,7 +911,7 @@ export class AdminModelsController {
     const calibrationCountByModelId = toCountMap(calibrationCounts);
     const backtestCountByModelId = toCountMap(backtestCounts);
     const comparisonCountByModelId = toCountMap(snapshotCounts);
-    const predictionCountByModelId = toCountMap(predictionCounts);
+    const predictionCountByModelId = toCountMap(predictionRunCounts);
 
     const rows = modelVersions.map((model) => {
       const latest = latestMetricsByModelId.get(model.id);
@@ -892,7 +941,7 @@ export class AdminModelsController {
     });
 
     const knownModelIds = new Set(modelVersions.map((model) => model.id));
-    const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+    const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
     const orphanRows = fallbackRows
       .filter((row) => row.modelVersionId && !knownModelIds.has(row.modelVersionId))
       .map((row) => ({
@@ -913,7 +962,7 @@ export class AdminModelsController {
         brier: null,
         logLoss: null,
         lastMeasuredAt: null,
-        source: "prediction_orphan",
+        source: "prediction_run_orphan",
         createdAt: row.createdAt
       }));
 
@@ -938,19 +987,19 @@ export class AdminModelsController {
     ]);
 
     if (modelVersions.length === 0) {
-      const [predictionCounts, predictionMetaRows] = await Promise.all([
-        this.prisma.prediction.groupBy({
+      const [predictionRunCounts, predictionRunMetaRows] = await Promise.all([
+        this.prisma.predictionRun.groupBy({
           by: ["modelVersionId"],
           _count: { _all: true }
         }),
-        this.prisma.prediction.findMany({
-          select: { modelVersionId: true, updatedByProcess: true, dataSource: true, createdAt: true },
+        this.prisma.predictionRun.findMany({
+          select: { modelVersionId: true, market: true, horizon: true, createdAt: true },
           orderBy: { createdAt: "desc" },
           take: 20000
         })
       ]);
 
-      const fallbackRows = this.predictionFallbackRows(predictionCounts, predictionMetaRows);
+      const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
       if (fallbackRows.length === 0) {
         return [];
       }
@@ -973,12 +1022,12 @@ export class AdminModelsController {
             modelLabel: candidate.modelLabel
           })),
         details: {
-          source: "prediction_fallback",
+          source: "prediction_run_fallback",
           predictionCount: row.predictionCount,
           updatedByProcess: row.updatedByProcess,
           dataSource: row.dataSource
         },
-        source: "prediction_fallback",
+        source: "prediction_run_fallback",
         createdAt: row.createdAt
       }));
     }
@@ -1103,28 +1152,28 @@ export class AdminModelsController {
       return rows;
     }
 
-    const [modelVersions, predictionRows] = await Promise.all([
+    const [modelVersions, predictionRunRows] = await Promise.all([
       this.prisma.modelVersion.findMany({
         select: { id: true, modelName: true, version: true },
         orderBy: [{ active: "desc" }, { createdAt: "desc" }]
       }),
-      this.prisma.prediction.findMany({
+      this.prisma.predictionRun.findMany({
         where: { modelVersionId: { not: null } },
         select: {
           modelVersionId: true,
-          confidenceScore: true,
-          expectedScore: true,
-          calibratedProbabilities: true,
-          rawProbabilities: true,
-          riskFlags: true,
-          updatedAt: true
+          market: true,
+          probability: true,
+          confidence: true,
+          riskFlagsJson: true,
+          explanationJson: true,
+          createdAt: true
         },
-        orderBy: { updatedAt: "desc" },
+        orderBy: { createdAt: "desc" },
         take: 12000
       })
     ]);
 
-    const syntheticRows = this.buildFeatureImportanceRowsFromPredictions(modelVersions, predictionRows);
+    const syntheticRows = this.buildFeatureImportanceRowsFromPredictionRuns(modelVersions, predictionRunRows);
     if (syntheticRows.length > 0) {
       return syntheticRows;
     }
@@ -1152,21 +1201,28 @@ export class AdminModelsController {
       return rows;
     }
 
-    const syntheticBaseRows = await this.prisma.prediction.findMany({
+    const syntheticBaseRows = await this.prisma.publishedPrediction.findMany({
       where: {
-        modelVersionId: { not: null },
+        predictionRun: {
+          modelVersionId: { not: null }
+        },
         match: {
           homeScore: { not: null },
           awayScore: { not: null }
         }
       },
       select: {
-        id: true,
-        modelVersionId: true,
-        calibratedProbabilities: true,
-        rawProbabilities: true,
-        confidenceScore: true,
-        riskFlags: true,
+        predictionRunId: true,
+        predictionRun: {
+          select: {
+            modelVersionId: true,
+            market: true,
+            probability: true,
+            confidence: true,
+            riskFlagsJson: true,
+            explanationJson: true
+          }
+        },
         match: {
           select: {
             homeScore: true,
@@ -1179,18 +1235,18 @@ export class AdminModelsController {
       take: 30000
     });
 
-    const syntheticRows = this.buildPerformanceRowsFromPredictions(syntheticBaseRows).slice(0, 200);
+    const syntheticRows = this.buildPerformanceRowsFromPublishedRuns(syntheticBaseRows).slice(0, 200);
     if (syntheticRows.length > 0) {
       return syntheticRows;
     }
 
-    const proxyBaseRows = await this.prisma.prediction.findMany({
+    const proxyBaseRows = await this.prisma.predictionRun.findMany({
       where: { modelVersionId: { not: null } },
       select: {
         id: true,
         modelVersionId: true,
-        confidenceScore: true,
-        riskFlags: true,
+        confidence: true,
+        riskFlagsJson: true,
         createdAt: true
       },
       orderBy: { createdAt: "desc" },
@@ -1208,21 +1264,28 @@ export class AdminModelsController {
       return rows;
     }
 
-    const syntheticBaseRows = await this.prisma.prediction.findMany({
+    const syntheticBaseRows = await this.prisma.publishedPrediction.findMany({
       where: {
-        modelVersionId: { not: null },
+        predictionRun: {
+          modelVersionId: { not: null }
+        },
         match: {
           homeScore: { not: null },
           awayScore: { not: null }
         }
       },
       select: {
-        id: true,
-        modelVersionId: true,
-        calibratedProbabilities: true,
-        rawProbabilities: true,
-        confidenceScore: true,
-        riskFlags: true,
+        predictionRunId: true,
+        predictionRun: {
+          select: {
+            modelVersionId: true,
+            market: true,
+            probability: true,
+            confidence: true,
+            riskFlagsJson: true,
+            explanationJson: true
+          }
+        },
         match: {
           select: {
             homeScore: true,
@@ -1235,7 +1298,7 @@ export class AdminModelsController {
       take: 30000
     });
 
-    let performanceRows = this.buildPerformanceRowsFromPredictions(syntheticBaseRows).map((row) => ({
+    let performanceRows = this.buildPerformanceRowsFromPublishedRuns(syntheticBaseRows).map((row) => ({
       id: row.id,
       modelVersionId: row.modelVersionId,
       measuredAt: row.measuredAt,
@@ -1243,13 +1306,13 @@ export class AdminModelsController {
     }));
 
     if (performanceRows.length === 0) {
-      const proxyBaseRows = await this.prisma.prediction.findMany({
+      const proxyBaseRows = await this.prisma.predictionRun.findMany({
         where: { modelVersionId: { not: null } },
         select: {
           id: true,
           modelVersionId: true,
-          confidenceScore: true,
-          riskFlags: true,
+          confidence: true,
+          riskFlagsJson: true,
           createdAt: true
         },
         orderBy: { createdAt: "desc" },

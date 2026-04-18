@@ -3,7 +3,9 @@ import {
   AccessActorType,
   PermissionEffect,
   Prisma,
-  PrivilegedActionSeverity
+  PrivilegedActionSeverity,
+  SecurityEventSeverity,
+  SecurityEventSourceDomain
 } from "@prisma/client";
 import bcrypt from "bcrypt";
 import { randomBytes } from "node:crypto";
@@ -15,6 +17,7 @@ import {
   AccessRequirement,
   AccessScope
 } from "./access-governance.types";
+import { SecurityEventService } from "../security-events/security-event.service";
 
 const ADMIN_ROLE_SET = new Set(["super_admin", "admin", "analyst", "viewer"]);
 
@@ -71,12 +74,58 @@ function normalizeString(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function isStrictEnvironmentName(value: string | undefined | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized === "production" || normalized === "staging";
+}
+
 @Injectable()
 export class AccessGovernanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly securityEventService: SecurityEventService
+  ) {}
+
+  private async emitGovernanceAudit(input: {
+    actorType: AccessActorType;
+    actorId?: string | null;
+    action: string;
+    resourceType: string;
+    resourceId?: string | null;
+    reason?: string | null;
+    decisionResult?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }) {
+    await this.securityEventService.emitAuditEvent({
+      actorType: input.actorType,
+      actorId: input.actorId ?? null,
+      action: input.action,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId ?? null,
+      reason: input.reason ?? null,
+      decisionResult: input.decisionResult ?? null,
+      severity: SecurityEventSeverity.MEDIUM,
+      metadata: input.metadata ?? null
+    });
+
+    await this.securityEventService.emitSecurityEvent({
+      sourceDomain: SecurityEventSourceDomain.ACCESS,
+      eventType: input.action.replace(/\./g, "_"),
+      severity: SecurityEventSeverity.MEDIUM,
+      actorType: input.actorType,
+      actorId: input.actorId ?? null,
+      targetResourceType: input.resourceType,
+      targetResourceId: input.resourceId ?? null,
+      reason: input.reason ?? null,
+      decisionResult: input.decisionResult ?? null,
+      metadata: input.metadata ?? null
+    });
+  }
 
   isEnabled() {
-    return parseBoolean(process.env.ACCESS_GOVERNANCE_ENABLED, false);
+    const runtimeEnvironment = (process.env.APP_ENV ?? process.env.NODE_ENV ?? "development").trim().toLowerCase();
+    const strictByDefault = isStrictEnvironmentName(runtimeEnvironment);
+    return parseBoolean(process.env.ACCESS_GOVERNANCE_ENABLED, strictByDefault);
   }
 
   isScopedPermissionEnforced() {
@@ -611,19 +660,53 @@ export class AccessGovernanceService {
   async assertAccessOrThrow(actor: AccessActor, requirement: AccessRequirement) {
     const decision = await this.evaluateAccess(actor, requirement);
     if (!decision.allowed) {
+      const deniedEventType =
+        requirement.permission.startsWith("security.") || requirement.permission.includes("privileged_action")
+          ? "privileged_action_denied"
+          : "access_denied";
+      await this.securityEventService.emitSecurityEvent({
+        sourceDomain: SecurityEventSourceDomain.ACCESS,
+        eventType: deniedEventType,
+        severity: SecurityEventSeverity.HIGH,
+        actorType: actor.actorType,
+        actorId: actor.userId ?? null,
+        serviceIdentityId: actor.serviceIdentityId ?? null,
+        targetResourceType: requirement.resourceType,
+        reason: decision.reason,
+        decisionResult: "DENY",
+        metadata: {
+          permission: requirement.permission,
+          action: requirement.action,
+          scope: requirement.scope ?? null
+        },
+        context: {
+          ipAddress: actor.ipAddress ?? null,
+          environment: actor.environment
+        }
+      });
       throw new ForbiddenException("Access denied");
     }
     return decision;
   }
 
   async createPolicy(input: { key: string; name: string; description?: string | null }) {
-    return this.prisma.accessPolicy.create({
+    const created = await this.prisma.accessPolicy.create({
       data: {
         key: input.key.trim().toLowerCase(),
         name: input.name.trim(),
         description: input.description ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: AccessActorType.SYSTEM,
+      action: "policy.create",
+      resourceType: "access_policy",
+      resourceId: created.id,
+      reason: "policy_created",
+      decisionResult: "ALLOW",
+      metadata: { key: created.key }
+    });
+    return created;
   }
 
   async listPolicies() {
@@ -651,7 +734,7 @@ export class AccessGovernanceService {
     createdByUserId?: string | null;
     makeCurrent?: boolean;
   }) {
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const latest = await tx.accessPolicyVersion.findFirst({
         where: { policyId: input.policyId },
         orderBy: { version: "desc" }
@@ -677,6 +760,21 @@ export class AccessGovernanceService {
       }
       return created;
     });
+    await this.emitGovernanceAudit({
+      actorType: input.createdByUserId ? AccessActorType.ADMIN : AccessActorType.SYSTEM,
+      actorId: input.createdByUserId ?? null,
+      action: "policy.version.create",
+      resourceType: "access_policy_version",
+      resourceId: created.id,
+      reason: "policy_version_created",
+      decisionResult: "ALLOW",
+      metadata: {
+        policyId: input.policyId,
+        label: input.label,
+        makeCurrent: input.makeCurrent ?? true
+      }
+    });
+    return created;
   }
 
   async createEnvironmentOverride(input: {
@@ -685,7 +783,7 @@ export class AccessGovernanceService {
     overrideJson: Prisma.InputJsonValue;
     createdByUserId?: string | null;
   }) {
-    return this.prisma.environmentPolicyOverride.create({
+    const created = await this.prisma.environmentPolicyOverride.create({
       data: {
         policyVersionId: input.policyVersionId,
         environment: input.environment.trim().toLowerCase(),
@@ -693,6 +791,20 @@ export class AccessGovernanceService {
         createdByUserId: input.createdByUserId ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: input.createdByUserId ? AccessActorType.ADMIN : AccessActorType.SYSTEM,
+      actorId: input.createdByUserId ?? null,
+      action: "policy.environment_override",
+      resourceType: "environment_policy_override",
+      resourceId: created.id,
+      reason: "policy_override_created",
+      decisionResult: "ALLOW",
+      metadata: {
+        policyVersionId: input.policyVersionId,
+        environment: created.environment
+      }
+    });
+    return created;
   }
 
   async createPermissionGrant(input: {
@@ -711,7 +823,7 @@ export class AccessGovernanceService {
     reason?: string | null;
     grantedByUserId?: string | null;
   }) {
-    return this.prisma.permissionGrant.create({
+    const created = await this.prisma.permissionGrant.create({
       data: {
         actorType: input.actorType,
         actorId: input.actorId ?? null,
@@ -734,10 +846,28 @@ export class AccessGovernanceService {
         grantedByUserId: input.grantedByUserId ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: input.grantedByUserId ? AccessActorType.ADMIN : AccessActorType.SYSTEM,
+      actorId: input.grantedByUserId ?? null,
+      action: "permission.grant",
+      resourceType: "permission_grant",
+      resourceId: created.id,
+      reason: input.reason ?? "permission_granted",
+      decisionResult: created.effect,
+      metadata: {
+        actorType: created.actorType,
+        actorId: created.actorId,
+        role: created.role,
+        permission: created.permission,
+        resourceType: created.resourceType,
+        action: created.action
+      }
+    });
+    return created;
   }
 
   async revokePermissionGrant(grantId: string, revokedByUserId: string, reason?: string | null) {
-    return this.prisma.permissionGrant.update({
+    const revoked = await this.prisma.permissionGrant.update({
       where: { id: grantId },
       data: {
         revokedAt: new Date(),
@@ -745,6 +875,21 @@ export class AccessGovernanceService {
         reason: reason ?? undefined
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: AccessActorType.ADMIN,
+      actorId: revokedByUserId,
+      action: "permission.revoke",
+      resourceType: "permission_grant",
+      resourceId: grantId,
+      reason: reason ?? "permission_revoked",
+      decisionResult: "DENY",
+      metadata: {
+        permission: revoked.permission,
+        targetActorId: revoked.actorId,
+        targetRole: revoked.role
+      }
+    });
+    return revoked;
   }
 
   async listPermissionGrants(options?: { includeRevoked?: boolean }) {
@@ -761,7 +906,7 @@ export class AccessGovernanceService {
     reason?: string | null;
     grantedByUserId?: string | null;
   }) {
-    return this.prisma.roleAssignment.create({
+    const created = await this.prisma.roleAssignment.create({
       data: {
         userId: input.userId,
         role: input.role.trim().toLowerCase(),
@@ -775,10 +920,24 @@ export class AccessGovernanceService {
         grantedByUserId: input.grantedByUserId ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: input.grantedByUserId ? AccessActorType.ADMIN : AccessActorType.SYSTEM,
+      actorId: input.grantedByUserId ?? null,
+      action: "role.assignment.create",
+      resourceType: "role_assignment",
+      resourceId: created.id,
+      reason: input.reason ?? "role_assigned",
+      decisionResult: "ALLOW",
+      metadata: {
+        userId: created.userId,
+        role: created.role
+      }
+    });
+    return created;
   }
 
   async revokeRoleAssignment(assignmentId: string, revokedByUserId: string, reason?: string | null) {
-    return this.prisma.roleAssignment.update({
+    const revoked = await this.prisma.roleAssignment.update({
       where: { id: assignmentId },
       data: {
         revokedAt: new Date(),
@@ -786,6 +945,20 @@ export class AccessGovernanceService {
         reason: reason ?? undefined
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: AccessActorType.ADMIN,
+      actorId: revokedByUserId,
+      action: "role.assignment.revoke",
+      resourceType: "role_assignment",
+      resourceId: assignmentId,
+      reason: reason ?? "role_revoked",
+      decisionResult: "DENY",
+      metadata: {
+        userId: revoked.userId,
+        role: revoked.role
+      }
+    });
+    return revoked;
   }
 
   async listRoleAssignments(options?: { includeRevoked?: boolean; userId?: string }) {
@@ -815,6 +988,18 @@ export class AccessGovernanceService {
         secretHash
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: AccessActorType.SYSTEM,
+      action: "service_identity.create",
+      resourceType: "service_identity",
+      resourceId: created.id,
+      reason: "service_identity_created",
+      decisionResult: "ALLOW",
+      metadata: {
+        key: created.key,
+        environment: created.environment
+      }
+    });
     return {
       ...created,
       generatedSecret
@@ -840,7 +1025,7 @@ export class AccessGovernanceService {
     effect?: PermissionEffect;
     scope?: AccessScope;
   }) {
-    return this.prisma.serviceIdentityScope.create({
+    const created = await this.prisma.serviceIdentityScope.create({
       data: {
         serviceIdentityId: input.serviceIdentityId,
         permission: input.permission.trim(),
@@ -855,6 +1040,21 @@ export class AccessGovernanceService {
         scopeEnvironment: input.scope?.environment ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: AccessActorType.SYSTEM,
+      action: "service_identity.scope.create",
+      resourceType: "service_identity_scope",
+      resourceId: created.id,
+      reason: "service_identity_scope_created",
+      decisionResult: created.effect,
+      metadata: {
+        serviceIdentityId: created.serviceIdentityId,
+        permission: created.permission,
+        resourceType: created.resourceType,
+        action: created.action
+      }
+    });
+    return created;
   }
 
   async createIpAllowlist(input: {
@@ -866,7 +1066,7 @@ export class AccessGovernanceService {
     reason?: string | null;
     createdByUserId?: string | null;
   }) {
-    return this.prisma.ipAllowlist.create({
+    const created = await this.prisma.ipAllowlist.create({
       data: {
         actorType: input.actorType,
         userId: input.userId ?? null,
@@ -877,6 +1077,23 @@ export class AccessGovernanceService {
         createdByUserId: input.createdByUserId ?? null
       }
     });
+    await this.emitGovernanceAudit({
+      actorType: input.createdByUserId ? AccessActorType.ADMIN : AccessActorType.SYSTEM,
+      actorId: input.createdByUserId ?? null,
+      action: "security.ip_allowlist.create",
+      resourceType: "ip_allowlist",
+      resourceId: created.id,
+      reason: input.reason ?? "ip_allowlist_created",
+      decisionResult: "ALLOW",
+      metadata: {
+        actorType: created.actorType,
+        userId: created.userId,
+        serviceIdentityId: created.serviceIdentityId,
+        cidr: created.cidr,
+        environment: created.environment
+      }
+    });
+    return created;
   }
 
   async listIpAllowlists() {

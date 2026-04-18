@@ -10,6 +10,21 @@ import { buildExternalUrl, isSecureExternalRequest } from "./src/server/request-
 const LOGIN_PATH = "/admin/login";
 const DASHBOARD_PATH = "/admin/dashboard";
 
+function parseClientIp(request: NextRequest) {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (!forwarded) {
+    return "unknown";
+  }
+  return forwarded.split(",")[0]?.trim() ?? "unknown";
+}
+
+function parseAllowedIps() {
+  return (process.env.ADMIN_ALLOWED_IPS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function setSessionCookies(response: NextResponse, accessToken: string, refreshToken: string, secure: boolean) {
   response.cookies.set(ADMIN_ACCESS_COOKIE_NAME, accessToken, {
     httpOnly: true,
@@ -40,6 +55,14 @@ function buildSafeAdminTarget(request: NextRequest) {
 export async function middleware(request: NextRequest) {
   if (!request.nextUrl.pathname.startsWith("/admin")) {
     return NextResponse.next();
+  }
+
+  const allowedIps = parseAllowedIps();
+  if (allowedIps.length > 0) {
+    const clientIp = parseClientIp(request);
+    if (!allowedIps.includes(clientIp)) {
+      return new NextResponse("Forbidden", { status: 403 });
+    }
   }
 
   const isLoginPage = request.nextUrl.pathname === LOGIN_PATH;

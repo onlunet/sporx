@@ -28,14 +28,14 @@ export default async function FootballMatchesPage() {
               <Swords className="h-5 w-5 sm:h-6 sm:w-6 text-void" />
             </div>
             <div>
-              <h1 className="gradient-text font-display text-2xl sm:text-3xl font-bold">Futbol Maclari</h1>
-              <p className="text-xs sm:text-sm text-slate-400">Futbol karsilasmalari, skorlar ve mac detaylari</p>
+              <h1 className="gradient-text font-display text-2xl sm:text-3xl font-bold">Futbol Maçları</h1>
+              <p className="text-xs sm:text-sm text-slate-400">Futbol karşılaşmaları, skorlar ve maç detayları</p>
             </div>
           </div>
 
           {loadError ? (
             <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-              Futbol mac listesi su an sinirli gelebilir. Veri akisi toparlandiginda otomatik guncellenecek.
+              Futbol maç listesi şu an sınırlı gelebilir. Veri akışı toparlandığında otomatik güncellenecek.
             </div>
           ) : null}
 
@@ -47,14 +47,14 @@ export default async function FootballMatchesPage() {
         <div className="mb-4 sm:mb-6 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-base sm:text-lg font-semibold text-white">
             <Calendar className="h-5 w-5 text-neon-cyan" />
-            Karsilasmalar
+            Karşılaşmalar
           </h2>
-          <span className="text-xs sm:text-sm text-slate-500">{matches.length} mac gosteriliyor</span>
+          <span className="text-xs sm:text-sm text-slate-500">{matches.length} maç gösteriliyor</span>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-3">
           {matches.map((match) => (
-            <MatchCard key={match.id} match={match} />
+            <MatchCard key={match.id} match={match} href={`/futbol/maclar/${match.id}`} />
           ))}
         </div>
       </div>

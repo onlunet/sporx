@@ -14,31 +14,31 @@ interface RecentActivityProps {
 function formatTimeAgo(isoDate: string) {
   const time = new Date(isoDate).getTime();
   if (!Number.isFinite(time)) {
-    return "az once";
+    return "az önce";
   }
 
   const diffMs = Date.now() - time;
   const diffMinutes = Math.max(0, Math.round(diffMs / 60_000));
 
   if (diffMinutes < 1) {
-    return "simdi";
+    return "şimdi";
   }
   if (diffMinutes < 60) {
-    return `${diffMinutes} dk once`;
+    return `${diffMinutes} dk önce`;
   }
 
   const diffHours = Math.round(diffMinutes / 60);
   if (diffHours < 24) {
-    return `${diffHours} saat once`;
+    return `${diffHours} saat önce`;
   }
 
   const diffDays = Math.round(diffHours / 24);
-  return `${diffDays} gun once`;
+  return `${diffDays} gün önce`;
 }
 
 export function RecentActivity({ items }: RecentActivityProps) {
   if (items.length === 0) {
-    return <p className="text-sm text-slate-400">Guncel aktivite verisi bulunamadi.</p>;
+    return <p className="text-sm text-slate-400">Güncel aktivite verisi bulunamadı.</p>;
   }
 
   return (

@@ -48,4 +48,11 @@ describe("CacheService", () => {
     await expect(cache.acquireLock("jobs", "owner-1", 1000)).resolves.toBe(true);
     await expect(cache.releaseLock("jobs", "owner-1")).resolves.toBe(true);
   });
+
+  it("renews distributed lock when owner matches", async () => {
+    const cache = new CacheService();
+    redisMock.eval.mockResolvedValue(1);
+
+    await expect(cache.renewLock("jobs", "owner-1", 1000)).resolves.toBe(true);
+  });
 });

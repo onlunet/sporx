@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { PublicSidebar } from "../src/components/public-sidebar";
@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "SPORX - AI Spor Analiz Platformu",
-  description: "Futbol ve basketbol icin AI destekli tahminler, canli skorlar ve derinlemesine analizler."
+  description: "Futbol ve basketbol için AI destekli tahminler, canlı skorlar ve derinlemesine analizler."
 };
 
 export default function RootLayout({

@@ -5,9 +5,16 @@ describe("RolesGuard", () => {
   it("allows when no role metadata and governance disabled", async () => {
     const reflector = { getAllAndOverride: jest.fn().mockReturnValue(undefined) } as unknown as Reflector;
     const accessGovernanceService = {
-      isEnabled: jest.fn().mockReturnValue(false)
+      isEnabled: jest.fn().mockReturnValue(false),
+      resolveEnvironment: jest.fn().mockReturnValue("test")
     } as any;
-    const guard = new RolesGuard(reflector, accessGovernanceService);
+    const incidentReadinessService = {
+      isEmergencyControlActive: jest.fn().mockResolvedValue(false)
+    } as any;
+    const securityEventService = {
+      emitSecurityEvent: jest.fn().mockResolvedValue(null)
+    } as any;
+    const guard = new RolesGuard(reflector, accessGovernanceService, incidentReadinessService, securityEventService);
     const context: any = {
       getHandler: () => ({}),
       getClass: () => ({}),
@@ -22,9 +29,16 @@ describe("RolesGuard", () => {
       getAllAndOverride: jest.fn().mockReturnValueOnce(["admin"]).mockReturnValueOnce(undefined)
     } as unknown as Reflector;
     const accessGovernanceService = {
-      isEnabled: jest.fn().mockReturnValue(false)
+      isEnabled: jest.fn().mockReturnValue(false),
+      resolveEnvironment: jest.fn().mockReturnValue("test")
     } as any;
-    const guard = new RolesGuard(reflector, accessGovernanceService);
+    const incidentReadinessService = {
+      isEmergencyControlActive: jest.fn().mockResolvedValue(false)
+    } as any;
+    const securityEventService = {
+      emitSecurityEvent: jest.fn().mockResolvedValue(null)
+    } as any;
+    const guard = new RolesGuard(reflector, accessGovernanceService, incidentReadinessService, securityEventService);
     const context: any = {
       getHandler: () => ({}),
       getClass: () => ({}),
@@ -39,9 +53,16 @@ describe("RolesGuard", () => {
       getAllAndOverride: jest.fn().mockReturnValueOnce(["admin"]).mockReturnValueOnce(undefined)
     } as unknown as Reflector;
     const accessGovernanceService = {
-      isEnabled: jest.fn().mockReturnValue(false)
+      isEnabled: jest.fn().mockReturnValue(false),
+      resolveEnvironment: jest.fn().mockReturnValue("test")
     } as any;
-    const guard = new RolesGuard(reflector, accessGovernanceService);
+    const incidentReadinessService = {
+      isEmergencyControlActive: jest.fn().mockResolvedValue(false)
+    } as any;
+    const securityEventService = {
+      emitSecurityEvent: jest.fn().mockResolvedValue(null)
+    } as any;
+    const guard = new RolesGuard(reflector, accessGovernanceService, incidentReadinessService, securityEventService);
     const context: any = {
       getHandler: () => ({}),
       getClass: () => ({}),
@@ -49,5 +70,62 @@ describe("RolesGuard", () => {
     };
 
     await expect(guard.canActivate(context)).rejects.toThrow("Insufficient role scope");
+  });
+
+  it("blocks admin write routes during emergency control", async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValueOnce(["admin"]).mockReturnValueOnce(undefined)
+    } as unknown as Reflector;
+    const accessGovernanceService = {
+      isEnabled: jest.fn().mockReturnValue(false),
+      resolveEnvironment: jest.fn().mockReturnValue("test")
+    } as any;
+    const incidentReadinessService = {
+      isEmergencyControlActive: jest
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+    } as any;
+    const securityEventService = {
+      emitSecurityEvent: jest.fn().mockResolvedValue(null),
+      resolveRequestContext: jest.fn().mockReturnValue({})
+    } as any;
+    const guard = new RolesGuard(reflector, accessGovernanceService, incidentReadinessService, securityEventService);
+    const context: any = {
+      getHandler: () => ({}),
+      getClass: () => ({}),
+      switchToHttp: () => ({
+        getRequest: () => ({ user: { role: "admin" }, method: "POST", path: "/api/v1/admin/system/settings" })
+      })
+    };
+
+    await expect(guard.canActivate(context)).rejects.toThrow("Access denied");
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalled();
+  });
+
+  it("denies privileged admin write when governance is disabled in strict environment", async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValueOnce(["admin"]).mockReturnValueOnce(undefined)
+    } as unknown as Reflector;
+    const accessGovernanceService = {
+      isEnabled: jest.fn().mockReturnValue(false),
+      resolveEnvironment: jest.fn().mockReturnValue("production")
+    } as any;
+    const incidentReadinessService = {
+      isEmergencyControlActive: jest.fn().mockResolvedValue(false)
+    } as any;
+    const securityEventService = {
+      emitSecurityEvent: jest.fn().mockResolvedValue(null)
+    } as any;
+    const guard = new RolesGuard(reflector, accessGovernanceService, incidentReadinessService, securityEventService);
+    const context: any = {
+      getHandler: () => ({}),
+      getClass: () => ({}),
+      switchToHttp: () => ({
+        getRequest: () => ({ user: { role: "admin" }, method: "PATCH", path: "/api/v1/admin/models/active" })
+      })
+    };
+
+    await expect(guard.canActivate(context)).rejects.toThrow("Access denied");
   });
 });

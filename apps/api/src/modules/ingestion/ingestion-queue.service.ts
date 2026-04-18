@@ -1,53 +1,25 @@
 import { InjectQueue } from "@nestjs/bullmq";
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { FlowProducer, Queue, Worker } from "bullmq";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { ProviderIngestionService } from "../providers/provider-ingestion.service";
-
-const PIPELINE_STAGES = new Set([
-  "ingestRaw",
-  "canonicalMerge",
-  "featureSnapshot",
-  "oddsSnapshot",
-  "lineupSnapshot",
-  "eventEnrichment",
-  "marketConsensus",
-  "predictionRun",
-  "metaModelRefine",
-  "calibrateScore",
-  "candidateBuild",
-  "selectionScore",
-  "abstainFilter",
-  "conflictResolution",
-  "publishDecision",
-  "publicPublish",
-  "stakeCandidateBuild",
-  "stakeSizing",
-  "exposureCheck",
-  "correlationCheck",
-  "ticketConstruction",
-  "portfolioDecision",
-  "paperExecution",
-  "settlement",
-  "bankrollAccounting",
-  "simulationAnalytics",
-  "roiGovernance",
-  "invalidateCache"
-]);
+import { InternalRuntimeSecurityService } from "../security-hardening/internal-runtime-security.service";
 
 @Injectable()
-export class IngestionQueueService {
+export class IngestionQueueService implements OnModuleDestroy {
   private readonly logger = new Logger(IngestionQueueService.name);
-  private workerStarted = false;
+  private worker: Worker | null = null;
+  private workerStartPromise: Promise<void> | null = null;
   private flowProducer: FlowProducer | null = null;
 
   constructor(
     @InjectQueue("ingestion") private readonly ingestionQueue: Queue,
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
-    private readonly providerIngestionService: ProviderIngestionService
+    private readonly providerIngestionService: ProviderIngestionService,
+    private readonly internalRuntimeSecurityService: InternalRuntimeSecurityService
   ) {}
 
   private getFlowProducer() {
@@ -124,7 +96,14 @@ export class IngestionQueueService {
   }
 
   async enqueue(jobName: string, payload: Record<string, unknown>) {
-    const dedup = this.resolveDedupOptions(payload);
+    const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+      queueName: "ingestion",
+      jobName,
+      payload,
+      mode: "enqueue",
+      serviceIdentityId: typeof payload.serviceIdentityId === "string" ? payload.serviceIdentityId : undefined
+    });
+    const dedup = this.resolveDedupOptions(validated.payload);
     this.logger.log(
       JSON.stringify({
         event: "queue_enqueue_request",
@@ -168,7 +147,14 @@ export class IngestionQueueService {
   }
 
   async enqueuePipeline(jobType: string, payload: Record<string, unknown>) {
-    const runId = typeof payload.runId === "string" ? payload.runId : "";
+    const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+      queueName: "ingestion",
+      jobName: jobType,
+      payload,
+      mode: "enqueue",
+      serviceIdentityId: typeof payload.serviceIdentityId === "string" ? payload.serviceIdentityId : undefined
+    });
+    const runId = typeof validated.payload.runId === "string" ? validated.payload.runId : "";
     this.logger.log(
       JSON.stringify({
         event: "queue_pipeline_enqueued",
@@ -186,60 +172,20 @@ export class IngestionQueueService {
       }
     };
     const flow = this.getFlowProducer();
-    const stages = [
-      "ingestRaw",
-      "canonicalMerge",
-      "featureSnapshot",
-      "oddsSnapshot",
-      "lineupSnapshot",
-      "eventEnrichment",
-      "marketConsensus",
-      "predictionRun",
-      "metaModelRefine",
-      "calibrateScore",
-      "candidateBuild",
-      "selectionScore",
-      "abstainFilter",
-      "conflictResolution",
-      "publishDecision",
-      "publicPublish",
-      "stakeCandidateBuild",
-      "stakeSizing",
-      "exposureCheck",
-      "correlationCheck",
-      "ticketConstruction",
-      "portfolioDecision",
-      "paperExecution",
-      "settlement",
-      "bankrollAccounting",
-      "simulationAnalytics",
-      "roiGovernance",
-      "invalidateCache"
-    ] as const;
-
-    const createStageNode = (
-      stage: (typeof stages)[number],
-      children?: Array<Record<string, unknown>>
-    ): Record<string, unknown> => ({
-      name: stage,
+    const node = {
+      name: jobType,
       queueName: "ingestion",
       data: {
-        ...payload,
+        ...validated.payload,
         sourceJobType: jobType
       },
       opts: {
         ...sharedOpts,
-        jobId: runId ? `run:${runId}:${stage}` : undefined
-      },
-      ...(children && children.length > 0 ? { children } : {})
-    });
+        jobId: runId ? `run:${runId}:${jobType}` : undefined
+      }
+    };
 
-    let rootNode: Record<string, unknown> = createStageNode(stages[0]);
-    for (let index = 1; index < stages.length; index += 1) {
-      rootNode = createStageNode(stages[index], [rootNode]);
-    }
-
-    return flow.add(rootNode as any);
+    return flow.add(node as any);
   }
 
   private async processRun(runId: string, jobType: string) {
@@ -319,11 +265,41 @@ export class IngestionQueueService {
     });
   }
 
+  async onModuleDestroy() {
+    if (this.worker) {
+      const worker = this.worker;
+      this.worker = null;
+      await worker.close().catch(() => undefined);
+    }
+
+    if (this.flowProducer) {
+      const flowProducer = this.flowProducer;
+      this.flowProducer = null;
+      await flowProducer.close().catch(() => undefined);
+    }
+  }
+
   async startWorker() {
-    if (this.workerStarted) {
+    if (this.worker) {
       return;
     }
-    this.workerStarted = true;
+    if (this.workerStartPromise) {
+      await this.workerStartPromise;
+      return;
+    }
+
+    this.workerStartPromise = this.startWorkerInternal();
+    try {
+      await this.workerStartPromise;
+    } finally {
+      this.workerStartPromise = null;
+    }
+  }
+
+  private async startWorkerInternal() {
+    if (this.worker) {
+      return;
+    }
 
     const url = process.env.REDIS_URL ?? "redis://localhost:6379";
     const role = (process.env.SERVICE_ROLE ?? "api").toLowerCase();
@@ -336,13 +312,16 @@ export class IngestionQueueService {
     const worker = new Worker(
       "ingestion",
       async (job) => {
-        const runId = String(job.data.runId ?? "");
-        if (!runId) {
-          return;
-        }
-
         const stage = String(job.name);
-        const sourceJobType = String(job.data.sourceJobType ?? job.data.jobType ?? "");
+        const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+          queueName: "ingestion",
+          jobName: stage,
+          payload: (job.data ?? {}) as Record<string, unknown>,
+          mode: "process",
+          serviceIdentityId: typeof job.data?.serviceIdentityId === "string" ? job.data.serviceIdentityId : undefined
+        });
+        const runId = String(validated.payload.runId ?? "");
+        const sourceJobType = String(validated.payload.sourceJobType ?? validated.payload.jobType ?? "");
         this.logger.log(
           JSON.stringify({
             event: "queue_stage_started",
@@ -350,23 +329,26 @@ export class IngestionQueueService {
             runId,
             stage,
             source_job_type: sourceJobType || null,
-            match_id: typeof job.data.matchId === "string" ? job.data.matchId : null,
-            horizon: typeof job.data.horizon === "string" ? job.data.horizon : null,
-            dedupId: typeof job.data.dedupKey === "string" ? job.data.dedupKey : null
+            match_id: typeof validated.payload.matchId === "string" ? validated.payload.matchId : null,
+            horizon: typeof validated.payload.horizon === "string" ? validated.payload.horizon : null,
+            dedupId: typeof validated.payload.dedupKey === "string" ? validated.payload.dedupKey : null
           })
         );
-        if (PIPELINE_STAGES.has(stage)) {
-          if (stage !== "invalidateCache") {
-            return;
-          }
-          await this.processRun(runId, sourceJobType.length > 0 ? sourceJobType : stage);
-          return;
-        }
-
-        await this.processRun(runId, stage);
+        await this.processRun(runId, sourceJobType.length > 0 ? sourceJobType : stage);
       },
       { connection: { url }, concurrency }
     );
+
+    worker.on("error", (error) => {
+      this.logger.error("Ingestion worker connection error", error instanceof Error ? error.stack : undefined);
+    });
+
+    worker.on("closed", () => {
+      if (this.worker === worker) {
+        this.worker = null;
+      }
+      this.logger.warn("Ingestion worker closed");
+    });
 
     worker.on("completed", (job) => {
       this.logger.log(
@@ -388,6 +370,17 @@ export class IngestionQueueService {
     worker.on("failed", async (job, error) => {
       this.logger.error(`Ingestion job failed: ${job?.id}`, error?.stack);
       const runId = String(job?.data?.runId ?? "");
+      if (job?.name) {
+        await this.internalRuntimeSecurityService
+          .quarantinePoisonJob({
+            queueName: "ingestion",
+            jobName: String(job.name),
+            reason: error?.message ?? "queue_job_failed",
+            payload: (job.data ?? null) as Record<string, unknown> | null,
+            serviceIdentityId: typeof job.data?.serviceIdentityId === "string" ? job.data.serviceIdentityId : null
+          })
+          .catch(() => undefined);
+      }
       await this.prisma.publishFailureLog.create({
         data: {
           runId: runId.length > 0 ? runId : null,
@@ -422,6 +415,14 @@ export class IngestionQueueService {
       }
     });
 
+    try {
+      await worker.waitUntilReady();
+    } catch (error) {
+      await worker.close().catch(() => undefined);
+      throw error;
+    }
+
+    this.worker = worker;
     this.logger.log(`Ingestion worker started (concurrency=${concurrency}, role=${role})`);
   }
 }

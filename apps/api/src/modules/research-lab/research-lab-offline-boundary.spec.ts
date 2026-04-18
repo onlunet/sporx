@@ -26,7 +26,16 @@ describe("Research lab offline boundary", () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any
+      {} as any,
+      {
+        resolveServiceIdentity: jest.fn(() => "research-lab-worker"),
+        validateQueuePayload: jest.fn(async ({ payload, queueName, jobName, serviceIdentityId }: any) => ({
+          queueName,
+          jobName,
+          serviceIdentityId: serviceIdentityId ?? "research-lab-worker",
+          payload
+        }))
+      } as any
     );
 
     await (service as any).processStage("freezeDataset", {

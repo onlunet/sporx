@@ -3,54 +3,54 @@ import { BookOpen, BrainCircuit, ShieldAlert, Target, Trophy, Activity } from "l
 
 const quickStart = [
   {
-    title: "1) Mac sec",
-    description: "Maclar ekranindan bugun ve yakin tarihteki fiksturu ac."
+    title: "1) Maç Seç",
+    description: "Maçlar ekranından bugün ve yakın tarihteki fikstürü aç."
   },
   {
-    title: "2) Tahmin tipini sec",
-    description: "MS, IY, KG Var/Yok, Alt/Ust ve Skor dagilimi sekmelerini karsilastir."
+    title: "2) Tahmin Tipini Seç",
+    description: "MS, İY, KG Var/Yok, Alt/Üst ve skor dağılımı sekmelerini karşılaştır."
   },
   {
-    title: "3) Guven ve riski oku",
-    description: "Guven skoru ile risk bayraklarini birlikte degerlendir."
+    title: "3) Güven ve Riski Oku",
+    description: "Güven skoru ile risk bayraklarını birlikte değerlendir."
   },
   {
-    title: "4) Sonucu analiz et",
-    description: "Sonuclanan tahminler ekranindan motor basarisini takip et."
+    title: "4) Sonucu Analiz Et",
+    description: "Sonuçlanan tahminler ekranından model başarısını takip et."
   }
 ];
 
 const predictionTypes = [
   {
-    title: "Mac Sonucu (MS)",
-    text: "Ev - Beraberlik - Deplasman olasiliklarini gosterir. En yuksek oran tek basina yeterli degildir."
+    title: "Maç Sonucu (MS)",
+    text: "Ev - Beraberlik - Deplasman olasılıklarını gösterir. En yüksek oran tek başına yeterli değildir."
   },
   {
-    title: "Ilk Yari / IY-MS",
-    text: "Ilk yari ritmini ve mac sonu sonucunu birlikte degerlendirir. Erken gol oynakligini dikkate al."
+    title: "İlk Yarı / İY-MS",
+    text: "İlk yarı ritmini ve maç sonu sonucunu birlikte değerlendirir. Erken gol oynaklığını dikkate al."
   },
   {
     title: "KG Var / Yok",
-    text: "Iki takimin da gol bulma ihtimalini verir. Form ve savunma profili ile birlikte okunmalidir."
+    text: "İki takımın da gol bulma ihtimalini verir. Form ve savunma profili ile birlikte okunmalıdır."
   },
   {
-    title: "Alt / Ust",
-    text: "1.5 / 2.5 / 3.5 cizgilerinde toplam gol tahminini verir. Cizgi degistikce olasilik da degisir."
+    title: "Alt / Üst",
+    text: "1.5 / 2.5 / 3.5 çizgilerinde toplam gol tahminini verir. Çizgi değiştikçe olasılık da değişir."
   },
   {
-    title: "Dogru Skor",
-    text: "Tek bir skor yerine skor dagilimi ile okunmalidir. Ust siradaki 3 skor genelde daha anlamlidir."
+    title: "Doğru Skor",
+    text: "Tek bir skor yerine skor dağılımı ile okunmalıdır. Üst sıradaki 3 skor genelde daha anlamlıdır."
   },
   {
-    title: "Gol Araligi",
-    text: "Dusuk, orta, yuksek gol senaryosunu ozetler. Mac temposunu hizli okumak icin uygundur."
+    title: "Gol Aralığı",
+    text: "Düşük, orta, yüksek gol senaryosunu özetler. Maç temposunu hızlı okumak için uygundur."
   }
 ];
 
 const riskNotes = [
-  "Guven skoru yuksek olsa bile risk bayragi varsa tahmin temkinli ele alinmalidir.",
-  "Kadro belirsizligi, hakem belirsizligi ve hava etkisi guven skorunu dusurebilir.",
-  "Tek bir markete bakmak yerine ayni macin birden fazla tahmin tipini birlikte kontrol et."
+  "Güven skoru yüksek olsa bile risk bayrağı varsa tahmin temkinli ele alınmalıdır.",
+  "Kadro belirsizliği, hakem belirsizliği ve hava etkisi güven skorunu düşürebilir.",
+  "Tek bir markete bakmak yerine aynı maçın birden fazla tahmin tipini birlikte kontrol et."
 ];
 
 export default function GuidePage() {
@@ -63,25 +63,25 @@ export default function GuidePage() {
         <div className="relative">
           <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-neon-cyan/30 bg-neon-cyan/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-neon-cyan">
             <BookOpen className="h-3.5 w-3.5" />
-            Kullanici Rehberi
+            Kullanıcı Rehberi
           </div>
-          <h1 className="font-display text-3xl font-bold text-white md:text-4xl">SporX Platformu Nasil Okunur?</h1>
+          <h1 className="font-display text-3xl font-bold text-white md:text-4xl">SporX Platformu Nasıl Okunur?</h1>
           <p className="mt-3 max-w-3xl text-slate-300">
-            Bu sayfa tahmin ekranlarini dogru yorumlaman icin hazirlandi. Amac, olasilik, guven skoru ve risk
-            bayraklarini birlikte okuyup daha tutarli analiz yapabilmek.
+            Bu sayfa tahmin ekranlarını doğru yorumlaman için hazırlandı. Amaç, olasılık, güven skoru ve risk
+            bayraklarını birlikte okuyup daha tutarlı analiz yapabilmek.
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link
-              href="/football/predictions"
+              href="/futbol/tahminler"
               className="rounded-lg border border-neon-cyan/40 bg-neon-cyan/10 px-4 py-2 text-sm font-medium text-neon-cyan transition hover:bg-neon-cyan/20"
             >
               Tahminlere Git
             </Link>
             <Link
-              href="/football/predictions/completed"
+              href="/futbol/sonuclar"
               className="rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
             >
-              Sonuclanan Tahminler
+              Sonuçlanan Tahminler
             </Link>
           </div>
         </div>
@@ -115,7 +115,7 @@ export default function GuidePage() {
         <article className="rounded-2xl border border-white/10 bg-surface/50 p-5 lg:col-span-2">
           <div className="mb-3 flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-neon-amber" />
-            <h2 className="text-lg font-semibold text-white">Guven ve Risk Nasil Yorumlanir?</h2>
+            <h2 className="text-lg font-semibold text-white">Güven ve Risk Nasıl Yorumlanır?</h2>
           </div>
           <ul className="space-y-3 text-sm text-slate-300">
             {riskNotes.map((note) => (
@@ -131,15 +131,15 @@ export default function GuidePage() {
           <div className="space-y-2 text-sm text-slate-300">
             <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 p-2">
               <Target className="h-4 w-4 text-neon-cyan" />
-              <span>Guven 70+ : daha tutarli sinyal</span>
+              <span>Güven 70+ : daha tutarlı sinyal</span>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 p-2">
               <Activity className="h-4 w-4 text-neon-amber" />
-              <span>Guven 56-69 : dengeli/temkinli</span>
+              <span>Güven 56-69 : dengeli/temkinli</span>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 p-2">
               <ShieldAlert className="h-4 w-4 text-neon-red" />
-              <span>Guven 55 alti : yuksek belirsizlik</span>
+              <span>Güven 55 altı : yüksek belirsizlik</span>
             </div>
           </div>
         </article>
@@ -148,34 +148,34 @@ export default function GuidePage() {
       <section className="rounded-2xl border border-white/10 bg-surface/50 p-6">
         <div className="mb-4 flex items-center gap-2">
           <Trophy className="h-5 w-5 text-neon-green" />
-          <h2 className="text-xl font-semibold text-white">Sik Sorulanlar</h2>
+          <h2 className="text-xl font-semibold text-white">Sık Sorulanlar</h2>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <article className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <h3 className="text-sm font-semibold text-white">Neden bazen tahmin cikmiyor?</h3>
+            <h3 className="text-sm font-semibold text-white">Neden bazen tahmin çıkmıyor?</h3>
             <p className="mt-2 text-sm text-slate-300">
-              Veri kalitesi yetersizse veya mac yeni acildiysa model tahmini beklemeye alabilir.
+              Veri kalitesi yetersizse veya maç yeni açıldıysa model tahmini beklemeye alabilir.
             </p>
           </article>
           <article className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <h3 className="text-sm font-semibold text-white">Neden yuksek guvenli tahmin de yanilabiliyor?</h3>
+            <h3 className="text-sm font-semibold text-white">Neden yüksek güvenli tahmin de yanılabiliyor?</h3>
             <p className="mt-2 text-sm text-slate-300">
-              Spor dogasi geregi surpriz sonucu tamamen sifirlamak mumkun degildir. Guven skoru kesinlik degildir.
+              Spor doğası gereği sürpriz sonucu tamamen sıfırlamak mümkün değildir. Güven skoru kesinlik değildir.
             </p>
           </article>
           <article className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <h3 className="text-sm font-semibold text-white">Canli ve oynanmamis mac farki nedir?</h3>
+            <h3 className="text-sm font-semibold text-white">Canlı ve oynanmamış maç farkı nedir?</h3>
             <p className="mt-2 text-sm text-slate-300">
-              Oynanmamis maclar pre-match analizdir, canli ekran ise anlik skor ve degisen olasiliklari izler.
+              Oynanmamış maçlar pre-match analizdir, canlı ekran ise anlık skor ve değişen olasılıkları izler.
             </p>
           </article>
           <article className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <h3 className="text-sm font-semibold text-white">Motor basarisini nereden izlerim?</h3>
+            <h3 className="text-sm font-semibold text-white">Model başarısını nereden izlerim?</h3>
             <p className="mt-2 text-sm text-slate-300">
-              <Link href="/football/predictions/completed" className="text-neon-cyan hover:underline">
-                Sonuclanan Tahminler
+              <Link href="/futbol/sonuclar" className="text-neon-cyan hover:underline">
+                Sonuçlanan Tahminler
               </Link>{" "}
-              ekraninda toplam dogru/yanlis ve tahmin tipi bazli basariyi gorebilirsin.
+              ekranında toplam doğru/yanlış ve tahmin tipi bazlı başarıyı görebilirsin.
             </p>
           </article>
         </div>

@@ -353,16 +353,76 @@ export class AdminPredictionsController {
   }
 
   @Get("low-confidence")
-  lowConfidence(@Query("take") take?: string, @Query("threshold") threshold?: string) {
+  async lowConfidence(@Query("take") take?: string, @Query("threshold") threshold?: string) {
+    const maxRows = this.parseTake(take, 200, 1000);
+    const poolTake = Math.min(maxRows * 5, 5000);
     const thresholdNum = this.asNumber(threshold);
     const confidenceThreshold = thresholdNum === null ? 0.55 : this.clamp(thresholdNum, 0.2, 0.95);
-    return this.prisma.prediction.findMany({
-      where: {
-        OR: [{ isLowConfidence: true }, { confidenceScore: { lt: confidenceThreshold } }]
-      },
-      orderBy: [{ confidenceScore: "asc" }, { createdAt: "desc" }],
-      take: this.parseTake(take, 200, 1000)
+
+    const rows = await this.prisma.publishedPrediction.findMany({
+      orderBy: { publishedAt: "desc" },
+      take: poolTake,
+      include: {
+        predictionRun: {
+          select: {
+            id: true,
+            matchId: true,
+            market: true,
+            line: true,
+            horizon: true,
+            confidence: true,
+            riskFlagsJson: true,
+            explanationJson: true,
+            createdAt: true
+          }
+        }
+      }
     });
+
+    const normalized = rows
+      .map((row) => {
+        const riskFlags = Array.isArray(row.predictionRun.riskFlagsJson) ? row.predictionRun.riskFlagsJson : [];
+        const hasLowConfidenceRisk = riskFlags.some((risk) => {
+          const entry = this.asRecord(risk);
+          const code = typeof entry?.code === "string" ? entry.code.toUpperCase() : "";
+          return code.includes("LOW_CONF");
+        });
+        const hasBlockingRisk = riskFlags.some((risk) => {
+          const entry = this.asRecord(risk);
+          const severity = typeof entry?.severity === "string" ? entry.severity.toUpperCase() : "";
+          return severity === "HIGH" || severity === "CRITICAL";
+        });
+
+        const explanation = this.asRecord(row.predictionRun.explanationJson);
+        const summary =
+          typeof explanation?.summary === "string"
+            ? explanation.summary
+            : `${row.predictionRun.market} ${row.predictionRun.horizon}`;
+        const avoidReason =
+          typeof explanation?.avoidReason === "string"
+            ? explanation.avoidReason
+            : typeof explanation?.reason === "string"
+              ? explanation.reason
+              : null;
+
+        return {
+          id: row.predictionRun.id,
+          matchId: row.predictionRun.matchId,
+          confidenceScore: this.round(this.clamp(row.predictionRun.confidence, 0, 1), 6),
+          summary,
+          riskFlags,
+          avoidReason,
+          isRecommended: row.predictionRun.confidence >= confidenceThreshold && !hasBlockingRisk,
+          createdAt: row.predictionRun.createdAt,
+          hasLowConfidenceRisk
+        };
+      })
+      .filter((row) => row.hasLowConfidenceRisk || row.confidenceScore < confidenceThreshold)
+      .sort((left, right) => left.confidenceScore - right.confidenceScore || right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, maxRows)
+      .map(({ hasLowConfidenceRisk: _unused, ...row }) => row);
+
+    return normalized;
   }
 
   @Get("by-type")

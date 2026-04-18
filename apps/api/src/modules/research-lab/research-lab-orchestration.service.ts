@@ -13,6 +13,7 @@ import { RobustnessCheckService } from "./robustness-check.service";
 import { SegmentScorecardService } from "./segment-scorecard.service";
 import { TrialPruningService } from "./trial-pruning.service";
 import { TuningEngineService } from "./tuning-engine.service";
+import { InternalRuntimeSecurityService } from "../security-hardening/internal-runtime-security.service";
 
 const RESEARCH_QUEUE = "research-lab";
 const RESEARCH_STAGES = [
@@ -53,6 +54,8 @@ type ResearchFlowInput = {
 type StagePayload = {
   stage: ResearchStage;
   runId: string;
+  authority: "internal";
+  serviceIdentityId: string;
   runKey: string;
   dedupKey: string;
   projectId: string;
@@ -93,7 +96,8 @@ export class ResearchLabOrchestrationService implements OnModuleInit, OnModuleDe
     private readonly robustnessCheckService: RobustnessCheckService,
     private readonly segmentScorecardService: SegmentScorecardService,
     private readonly candidateRegistry: PolicyCandidateRegistryService,
-    private readonly promotionGateService: PolicyPromotionGateService
+    private readonly promotionGateService: PolicyPromotionGateService,
+    private readonly internalRuntimeSecurityService: InternalRuntimeSecurityService
   ) {}
 
   queueName() {
@@ -161,6 +165,48 @@ export class ResearchLabOrchestrationService implements OnModuleInit, OnModuleDe
     });
   }
 
+  private resolveServiceIdentityId(value: unknown) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    return this.internalRuntimeSecurityService.resolveServiceIdentity("research-lab");
+  }
+
+  private toRuntimePayload(stage: ResearchStage, payload: Partial<StagePayload>) {
+    const dedupKey = typeof payload.dedupKey === "string" && payload.dedupKey.trim().length > 0 ? payload.dedupKey : "research:runtime";
+    const runId = typeof payload.runId === "string" && payload.runId.trim().length > 0 ? payload.runId : dedupKey;
+    return {
+      ...payload,
+      stage,
+      dedupKey,
+      runId,
+      authority: typeof payload.authority === "string" ? payload.authority : "internal",
+      serviceIdentityId: this.resolveServiceIdentityId(payload.serviceIdentityId)
+    } as Record<string, unknown>;
+  }
+
+  private async validateStagePayload(
+    stage: ResearchStage,
+    payload: Partial<StagePayload>,
+    mode: "enqueue" | "process"
+  ) {
+    const runtimePayload = this.toRuntimePayload(stage, payload);
+    const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+      queueName: RESEARCH_QUEUE,
+      jobName: stage,
+      payload: runtimePayload,
+      mode,
+      serviceIdentityId:
+        typeof runtimePayload.serviceIdentityId === "string" ? runtimePayload.serviceIdentityId : undefined
+    });
+    return validated.payload as unknown as StagePayload;
+  }
+
+  private async processQueuedStage(stage: ResearchStage, payload: Partial<StagePayload>) {
+    const validated = await this.validateStagePayload(stage, payload, "process");
+    await this.processStage(stage, validated);
+  }
+
   private async runSerializable<T>(handler: () => Promise<T>, attempts = 5): Promise<T> {
     let tryCount = 0;
     while (tryCount < attempts) {
@@ -223,6 +269,8 @@ export class ResearchLabOrchestrationService implements OnModuleInit, OnModuleDe
     const payload: StagePayload = {
       stage: "freezeDataset",
       runId: run.id,
+      authority: "internal",
+      serviceIdentityId: this.internalRuntimeSecurityService.resolveServiceIdentity("research-lab"),
       runKey: run.runKey,
       dedupKey,
       projectId: input.projectId,
@@ -255,23 +303,26 @@ export class ResearchLabOrchestrationService implements OnModuleInit, OnModuleDe
       }
     };
 
-    const createNode = (stage: ResearchStage, children?: Array<Record<string, unknown>>) => ({
-      name: stage,
-      queueName: RESEARCH_QUEUE,
-      data: {
-        ...payload,
-        stage
-      },
-      opts: {
-        ...sharedOpts,
-        jobId: `${payload.dedupKey}:${stage}`
-      },
-      ...(children && children.length > 0 ? { children } : {})
-    });
+    const createNode = async (stage: ResearchStage, children?: Array<Record<string, unknown>>) => {
+      const validated = await this.validateStagePayload(stage, payload, "enqueue");
+      return {
+        name: stage,
+        queueName: RESEARCH_QUEUE,
+        data: {
+          ...validated,
+          stage
+        },
+        opts: {
+          ...sharedOpts,
+          jobId: `${payload.dedupKey}:${stage}`
+        },
+        ...(children && children.length > 0 ? { children } : {})
+      };
+    };
 
-    let root = createNode(RESEARCH_STAGES[0]);
+    let root = await createNode(RESEARCH_STAGES[0]);
     for (let index = 1; index < RESEARCH_STAGES.length; index += 1) {
-      root = createNode(RESEARCH_STAGES[index], [root]);
+      root = await createNode(RESEARCH_STAGES[index], [root]);
     }
 
     await this.flow().add(root as any);
@@ -935,8 +986,7 @@ export class ResearchLabOrchestrationService implements OnModuleInit, OnModuleDe
         if (!RESEARCH_STAGES.includes(stage)) {
           return;
         }
-        const payload = job.data as StagePayload;
-        await this.processStage(stage, payload);
+        await this.processQueuedStage(stage, (job.data ?? {}) as Partial<StagePayload>);
       },
       {
         connection: { url },

@@ -18,33 +18,33 @@ type SportScope = "football" | "basketball";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const footballAxisMeta: Record<string, { label: string; description: string }> = {
-  offense: { label: "Hucum Gucu", description: "Takimin pozisyon uretme ve gol tehdidi seviyesi." },
-  defense: { label: "Savunma Dayanikliligi", description: "Rakibin ataklarini kirma ve gol yememe istikrari." },
-  tempo: { label: "Oyun Temposu", description: "Mac ritmini belirleme ve oyunu istedigi hizda oynama gucu." },
-  setPiece: { label: "Duran Top Etkisi", description: "Korner ve serbest vuruslari degerlendirme kalitesi." },
-  transition: { label: "Gecis Oyunu", description: "Top kazanimi sonrasi hizli hucum verimliligi." },
-  cohesion: { label: "Takim Uyumu", description: "Oyuncularin birlikte oynama aliskanligi." },
-  overall: { label: "Genel Denge", description: "Tum basliklarin birlesiminden olusan toplam performans." }
+  offense: { label: "Hücum Gücü", description: "Takımın pozisyon üretme ve gol tehdidi seviyesi." },
+  defense: { label: "Savunma Dayanıklılığı", description: "Rakibin ataklarını kırma ve gol yememe istikrarı." },
+  tempo: { label: "Oyun Temposu", description: "Maç ritmini belirleme ve oyunu istediği hızda oynama gücü." },
+  setPiece: { label: "Duran Top Etkisi", description: "Korner ve serbest vuruşları değerlendirme kalitesi." },
+  transition: { label: "Geçiş Oyunu", description: "Top kazanımı sonrası hızlı hücum verimliliği." },
+  cohesion: { label: "Takım Uyumu", description: "Oyuncuların birlikte oynama alışkanlığı." },
+  overall: { label: "Genel Denge", description: "Tüm başlıkların birleşiminden oluşan toplam performans." }
 };
 
 const basketballAxisMeta: Record<string, { label: string; description: string }> = {
-  shotQualityCreation: { label: "Sut Kalitesi Uretimi", description: "Verimli sut secimi ve bos sut bulma becerisi." },
-  halfCourtOffense: { label: "Set Hucumu", description: "Yarim sahada set yerlesiminden sayi bulma kalitesi." },
-  transitionOffense: { label: "Gecis Hucumu", description: "Hizli hucumlarda sayiya donusum verimliligi." },
-  rimPressure: { label: "Pota Baskisi", description: "Boyali alan tehdidi ve cizgiye gitme potansiyeli." },
-  perimeterShotProfile: { label: "Dis Sutor Profili", description: "Dis sut secimi ve isabet dengesi." },
-  turnoverControl: { label: "Top Kaybi Kontrolu", description: "Topu koruma ve rakibe kolay pozisyon vermeme." },
-  offensiveRebounding: { label: "Hucum Ribaundu", description: "Kacan sutlari ikinci sansa cevirme." },
-  defensiveRebounding: { label: "Savunma Ribaundu", description: "Rakibin ikinci sanslarini kesme." },
-  rimDefense: { label: "Pota Savunmasi", description: "Boyali alanda bitiris yuzdesini dusurme." },
-  perimeterDefense: { label: "Dis Savunma", description: "Perimetre baskisi ve sut contest kalitesi." },
-  foulDiscipline: { label: "Faul Disiplini", description: "Gereksiz faullerden kacinarak ritim koruma." },
-  benchImpact: { label: "Bench Etkisi", description: "Yedek birimin tempo ve skor katkisi." },
-  starPowerReliability: { label: "Yildiz Surekliligi", description: "Ana skor opsiyonlarinin devamli katkisi." },
-  paceControl: { label: "Tempo Kontrolu", description: "Macin hizini kendi lehine yonetme." },
-  clutchStability: { label: "Kritik An Dayanikliligi", description: "Son bolumlerde karar kalitesi ve hata seviyesi." },
-  scheduleFreshness: { label: "Takvim Tazeligi", description: "Dinlenme gunu, seyahat ve yorgunluk etkisi." },
-  overall: { label: "Genel Denge", description: "Tum metriklerin toplam guc etkisi." }
+  shotQualityCreation: { label: "Şut Kalitesi Üretimi", description: "Verimli şut seçimi ve boş şut bulma becerisi." },
+  halfCourtOffense: { label: "Set Hücumu", description: "Yarım sahada set yerleşiminden sayı bulma kalitesi." },
+  transitionOffense: { label: "Geçiş Hücumu", description: "Hızlı hücumlarda sayıya dönüşüm verimliliği." },
+  rimPressure: { label: "Pota Baskısı", description: "Boyalı alan tehdidi ve çizgiye gitme potansiyeli." },
+  perimeterShotProfile: { label: "Dış Şut Profili", description: "Dış şut seçimi ve isabet dengesi." },
+  turnoverControl: { label: "Top Kaybı Kontrolü", description: "Topu koruma ve rakibe kolay pozisyon vermeme." },
+  offensiveRebounding: { label: "Hücum Ribaundu", description: "Kaçan şutları ikinci şansa çevirme." },
+  defensiveRebounding: { label: "Savunma Ribaundu", description: "Rakibin ikinci şanslarını kesme." },
+  rimDefense: { label: "Pota Savunması", description: "Boyalı alanda bitiriş yüzdesini düşürme." },
+  perimeterDefense: { label: "Dış Savunma", description: "Perimetre baskısı ve şut contest kalitesi." },
+  foulDiscipline: { label: "Faul Disiplini", description: "Gereksiz faullerden kaçınarak ritim koruma." },
+  benchImpact: { label: "Bench Etkisi", description: "Yedek birimin tempo ve skor katkısı." },
+  starPowerReliability: { label: "Yıldız Sürekliliği", description: "Ana skor opsiyonlarının devamlı katkısı." },
+  paceControl: { label: "Tempo Kontrolü", description: "Maçın hızını kendi lehine yönetme." },
+  clutchStability: { label: "Kritik An Dayanıklılığı", description: "Son bölümlerde karar kalitesi ve hata seviyesi." },
+  scheduleFreshness: { label: "Takvim Tazeliği", description: "Dinlenme günü, seyahat ve yorgunluk etkisi." },
+  overall: { label: "Genel Denge", description: "Tüm metriklerin toplam güç etkisi." }
 };
 
 const teamMatchesSchema = envelopeSchema(
@@ -163,11 +163,11 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
 
   const probabilities = compareResponse ? deriveMatchOutcomeProbabilities(compareResponse.data) : null;
   const axisMeta = sport === "basketball" ? basketballAxisMeta : footballAxisMeta;
-  const pageTitle = sport === "basketball" ? "Basketbol Takim Karsilastirma" : "Futbol Takim Karsilastirma";
+  const pageTitle = sport === "basketball" ? "Basketbol Takım Karşılaştırma" : "Futbol Takım Karşılaştırma";
   const pageSubtitle =
     sport === "basketball"
-      ? "Basketbol metrikleri ile iki takimi ayni eksende analiz edin."
-      : "Futbol metrikleri ile iki takimin guc dengesini karsilastirin.";
+      ? "Basketbol metrikleri ile iki takımı aynı eksende analiz edin."
+      : "Futbol metrikleri ile iki takımın güç dengesini karşılaştırın.";
 
   return (
     <div className="space-y-8">
@@ -188,7 +188,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
 
           <div className="mb-5 inline-flex rounded-xl border border-white/10 bg-white/5 p-1">
             <a
-              href="/compare/teams?sport=football"
+              href="/futbol/karsilastir"
               className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
                 sport === "football" ? "bg-neon-cyan/20 text-neon-cyan" : "text-slate-300 hover:bg-white/10"
               }`}
@@ -196,7 +196,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
               <Trophy className="h-4 w-4" /> Futbol
             </a>
             <a
-              href="/compare/teams?sport=basketball"
+              href="/basketbol/karsilastir"
               className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
                 sport === "basketball" ? "bg-neon-purple/20 text-neon-purple" : "text-slate-300 hover:bg-white/10"
               }`}
@@ -208,15 +208,15 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
           {teamOptions.length === 0 ? (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
               {sport === "basketball"
-                ? "Basketbol takim listesi alinamadi. Lutfen tekrar deneyin."
-                : "Futbol takim listesi alinamadi. Lutfen tekrar deneyin."}
+                ? "Basketbol takım listesi alınamadı. Lütfen tekrar deneyin."
+                : "Futbol takım listesi alınamadı. Lütfen tekrar deneyin."}
             </div>
           ) : (
             <form method="get" className="space-y-4">
               <input type="hidden" name="sport" value={sport} />
               <div className="grid gap-4 md:grid-cols-2">
                 <TeamSelector
-                  label="Ev Sahibi Takim"
+                  label="Ev Sahibi Takım"
                   name="homeTeamId"
                   teams={teamOptions}
                   defaultValue={defaultHome}
@@ -224,7 +224,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
                   color="cyan"
                 />
                 <TeamSelector
-                  label="Deplasman Takimi"
+                  label="Deplasman Takımı"
                   name="awayTeamId"
                   teams={teamOptions}
                   defaultValue={defaultAway}
@@ -238,7 +238,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple px-6 py-3 font-semibold text-void transition-opacity hover:opacity-90 md:w-auto"
               >
                 <Sparkles className="h-4 w-4" />
-                Karsilastir
+                Karşılaştır
               </button>
             </form>
           )}
@@ -251,7 +251,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
             <section className="glass-card rounded-2xl p-6">
               <div className="mb-6 flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-neon-cyan" />
-                <h2 className="text-lg font-semibold text-white">Karsilasma Olasiliklari</h2>
+                <h2 className="text-lg font-semibold text-white">Karşılaşma Olasılıkları</h2>
               </div>
               <ProbabilityDisplay
                 probabilities={probabilities}
@@ -264,7 +264,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
                   <span className="text-sm font-medium text-slate-200">AI Analizi</span>
                 </div>
                 <p className="text-sm text-slate-400">
-                  Model guven seviyesi: <span className="font-semibold text-white">%{Math.round(compareResponse.data.confidenceScore * 100)}</span>
+                  Model güven seviyesi: <span className="font-semibold text-white">%{Math.round(compareResponse.data.confidenceScore * 100)}</span>
                 </p>
                 <p className="mt-2 text-sm text-slate-300">{compareResponse.data.summary}</p>
               </div>
@@ -273,7 +273,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
             <section className="glass-card rounded-2xl p-6">
               <div className="mb-6 flex items-center gap-2">
                 <Activity className="h-5 w-5 text-neon-purple" />
-                <h2 className="text-lg font-semibold text-white">Detayli Karsilastirma</h2>
+                <h2 className="text-lg font-semibold text-white">Detaylı Karşılaştırma</h2>
               </div>
               <div className="space-y-5">
                 {compareResponse.data.axes.map((axis) => {
@@ -294,7 +294,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
 
           <div className="space-y-6">
             <section className="glass-card rounded-2xl p-6">
-              <h2 className="mb-4 text-lg font-semibold text-white">Takimlar</h2>
+              <h2 className="mb-4 text-lg font-semibold text-white">Takımlar</h2>
               <div className="space-y-4">
                 <TeamCard team={selectedHomeTeam} color="cyan" isHome />
                 <div className="text-center">
@@ -305,7 +305,7 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
             </section>
 
             <section className="glass-card rounded-2xl p-6">
-              <h2 className="mb-4 text-lg font-semibold text-white">Gecmis Karsilasmalar</h2>
+              <h2 className="mb-4 text-lg font-semibold text-white">Geçmiş Karşılaşmalar</h2>
               <H2HMatches matches={h2hMatches} homeTeamId={defaultHome || ""} />
             </section>
           </div>
@@ -315,8 +315,8 @@ export default async function CompareTeamsPage({ searchParams }: CompareTeamsPag
           <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-neon-cyan/20 to-neon-purple/20">
             <GitCompare className="h-10 w-10 text-slate-400" />
           </div>
-          <h2 className="mb-2 text-xl font-semibold text-white">Takimlari Secin</h2>
-          <p className="text-slate-400">Karsilastirma yapmak icin iki farkli takim secin.</p>
+          <h2 className="mb-2 text-xl font-semibold text-white">Takımları Seçin</h2>
+          <p className="text-slate-400">Karşılaştırma yapmak için iki farklı takım seçin.</p>
         </div>
       )}
     </div>

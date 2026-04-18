@@ -67,7 +67,30 @@ function splitHalfToQuarters(total: number) {
 
 export default async function BasketballMatchDetailPage({ params }: BasketballMatchDetailPageProps) {
   const resolved = await params;
-  const matchResponse = await fetchWithSchema(`/api/v1/matches/${resolved.id}`, envelopeSchema(matchDetailSchema));
+  const isValidId = z.string().uuid().safeParse(resolved.id).success;
+  if (!isValidId) {
+    return (
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+        Geçersiz maç kimliği.
+      </div>
+    );
+  }
+
+  let match: z.infer<typeof matchDetailSchema> | null = null;
+  try {
+    const matchResponse = await fetchWithSchema(`/api/v1/matches/${resolved.id}`, envelopeSchema(matchDetailSchema));
+    match = matchResponse.data;
+  } catch {
+    match = null;
+  }
+
+  if (!match) {
+    return (
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+        Maç detayı şu an yüklenemiyor. Lütfen daha sonra tekrar deneyin.
+      </div>
+    );
+  }
 
   let predictionData: z.infer<typeof predictionSchema> = null;
   try {
@@ -80,7 +103,6 @@ export default async function BasketballMatchDetailPage({ params }: BasketballMa
     predictionData = null;
   }
 
-  const match = matchResponse.data;
   const canBuildQuarterFromHalf =
     match.homeScore !== null &&
     match.awayScore !== null &&
@@ -142,10 +164,10 @@ export default async function BasketballMatchDetailPage({ params }: BasketballMa
 
       <div className="rounded-md border border-slate-700 p-3 text-sm">
         <p>
-          Mac Skoru: {match.homeScore ?? "-"} - {match.awayScore ?? "-"}
+          Maç Skoru: {match.homeScore ?? "-"} - {match.awayScore ?? "-"}
         </p>
         <p>
-          Ilk 2 Periyot: {match.halfTimeHomeScore ?? "-"} - {match.halfTimeAwayScore ?? "-"}
+          İlk 2 Periyot: {match.halfTimeHomeScore ?? "-"} - {match.halfTimeAwayScore ?? "-"}
         </p>
         <p>
           Son 2 Periyot:{" "}
@@ -160,7 +182,7 @@ export default async function BasketballMatchDetailPage({ params }: BasketballMa
           </p>
         ) : quarterEstimate ? (
           <p>
-            4 Periyot (tahmini dagilim): Q1 {quarterEstimate.q1} | Q2 {quarterEstimate.q2} | Q3 {quarterEstimate.q3} | Q4{" "}
+            4 Periyot (tahmini dağılım): Q1 {quarterEstimate.q1} | Q2 {quarterEstimate.q2} | Q3 {quarterEstimate.q3} | Q4{" "}
             {quarterEstimate.q4}
           </p>
         ) : null}

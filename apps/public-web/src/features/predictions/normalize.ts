@@ -134,7 +134,7 @@ function normalizeRiskFlags(raw: unknown): RiskFlag[] {
           return null;
         }
         const code = asString(row.code) ?? "UNKNOWN_RISK";
-        const message = asString(row.message) ?? "Temkinli degerlendirme onerilir.";
+        const message = asString(row.message) ?? "Temkinli değerlendirme önerilir.";
         const severityRaw = asString(row.severity)?.toLowerCase();
         const severity =
           severityRaw === "low" || severityRaw === "medium" || severityRaw === "high" || severityRaw === "critical"
@@ -150,7 +150,7 @@ function normalizeRiskFlags(raw: unknown): RiskFlag[] {
     return [];
   }
   const code = asString(single.code) ?? "UNKNOWN_RISK";
-  const message = asString(single.message) ?? "Temkinli degerlendirme onerilir.";
+  const message = asString(single.message) ?? "Temkinli değerlendirme önerilir.";
   const severityRaw = asString(single.severity)?.toLowerCase();
   const severity =
     severityRaw === "low" || severityRaw === "medium" || severityRaw === "high" || severityRaw === "critical"
@@ -693,28 +693,28 @@ export function predictionTypeLabel(type: PredictionType) {
 
 export function riskCodeToTurkish(code: string) {
   const map: Record<string, string> = {
-    WEATHER_VARIANCE: "Hava kosullari mac akisinda sapma yaratabilir",
+    WEATHER_VARIANCE: "Hava koşulları maç akışında sapma yaratabilir",
     LOW_LINEUP_CERTAINTY: "Muhtemel ilk 11 belirsiz",
-    REFEREE_STRICTNESS: "Hakem profili kart/foul akisina etki edebilir",
-    REFEREE_DATA_ESTIMATED: "Hakem verisi resmi degil, tahmini kullaniyor",
-    MARKET_DISAGREEMENT: "Model ile piyasa ayni yonde degil",
+    REFEREE_STRICTNESS: "Hakem profili kart/faul akışına etki edebilir",
+    REFEREE_DATA_ESTIMATED: "Hakem verisi resmi değil, tahmini kullanılıyor",
+    MARKET_DISAGREEMENT: "Model ile piyasa aynı yönde değil",
     SHARP_MOVEMENT: "Oran hareketi sert",
-    STALE_ODDS: "Oran verisi guncel degil",
-    LOW_ODDS_COVERAGE: "Oran kapsami sinirli",
-    HIGH_BOOKMAKER_SPREAD: "Bookmaker farki yuksek",
-    POSSIBLE_LEAKAGE_BLOCKED: "Gec veri sizintisi engellendi",
+    STALE_ODDS: "Oran verisi güncel değil",
+    LOW_ODDS_COVERAGE: "Oran kapsamı sınırlı",
+    HIGH_BOOKMAKER_SPREAD: "Bookmaker farkı yüksek",
+    POSSIBLE_LEAKAGE_BLOCKED: "Geç veri sızıntısı engellendi",
     UNSTABLE_MARKET_SIGNAL: "Piyasa sinyali dengesiz",
-    MAJOR_LINEUP_UNCERTAINTY: "Kadro netligi dusuk",
+    MAJOR_LINEUP_UNCERTAINTY: "Kadro netliği düşük",
     BACK_TO_BACK_FATIGUE: "Yorgunluk sinyali var",
-    OVERTIME_HANGOVER: "Uzatma sonrasi performans dalgalanabilir",
-    MODEL_DISAGREEMENT: "Alt modeller birbiriyle celisiyor",
-    HIGH_VOLATILITY_3PT_PROFILE: "Uc sayilik verisi yuksek oynaklik gosteriyor",
-    LEAGUE_DATA_QUALITY_LOW: "Lig veri kalitesi dusuk",
-    SMALL_SAMPLE: "Orneklem sayisi yetersiz",
-    EXTREME_MARKET_MOVEMENT: "Piyasada asiri yon degisimi var",
-    LOW_SCORE_BIAS: "Dusuk skor yanliligi etkin",
-    UNSTABLE_LAMBDA: "Gol/sayi beklenti modeli kararsiz",
-    HIGH_VARIANCE_MATCH: "Mac oynakligi yuksek"
+    OVERTIME_HANGOVER: "Uzatma sonrası performans dalgalanabilir",
+    MODEL_DISAGREEMENT: "Alt modeller birbiriyle çelişiyor",
+    HIGH_VOLATILITY_3PT_PROFILE: "Üç sayılık verisi yüksek oynaklık gösteriyor",
+    LEAGUE_DATA_QUALITY_LOW: "Lig veri kalitesi düşük",
+    SMALL_SAMPLE: "Örneklem sayısı yetersiz",
+    EXTREME_MARKET_MOVEMENT: "Piyasada aşırı yön değişimi var",
+    LOW_SCORE_BIAS: "Düşük skor yanlılığı etkin",
+    UNSTABLE_LAMBDA: "Gol/sayı beklenti modeli kararsız",
+    HIGH_VARIANCE_MATCH: "Maç oynaklığı yüksek"
   };
   return map[code] ?? code.replaceAll("_", " ").toLowerCase();
 }

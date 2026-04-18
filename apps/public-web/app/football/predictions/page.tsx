@@ -6,7 +6,7 @@ export default function FootballPredictionsPage() {
       scope="upcoming"
       sport="football"
       title="Futbol Tahminleri"
-      description="Futbol maclari icin modelin urettigi tahminleri ve guven skorlarini ayri olarak takip edin."
+      description="Futbol maçları için modelin ürettiği tahminleri ve güven skorlarını ayrı olarak takip edin."
     />
   );
 }

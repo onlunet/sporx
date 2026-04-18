@@ -11,6 +11,7 @@ import { PromotionDecisionService } from "./promotion-decision.service";
 import { RetrainingTriggerService } from "./retraining-trigger.service";
 import { RollbackDecisionService } from "./rollback-decision.service";
 import { TrainingDatasetBuilderService } from "./training-dataset-builder.service";
+import { InternalRuntimeSecurityService } from "../security-hardening/internal-runtime-security.service";
 
 type LifecycleScope = {
   sport: string;
@@ -35,6 +36,23 @@ const LIFECYCLE_JOBS = [
   "archiveRetiredModels"
 ] as const;
 
+type LifecycleQueuePayload = {
+  runId: string;
+  authority: "internal";
+  serviceIdentityId: string;
+  dedupKey: string;
+  sport: string;
+  market: string;
+  line: number | null;
+  lineKey: string;
+  horizon: string;
+  leagueId: string | null;
+  scopeLeagueKey: string;
+  windowStart: string;
+  windowEnd: string;
+  actor: string;
+};
+
 @Injectable()
 export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ModelLifecycleOrchestrationService.name);
@@ -53,7 +71,8 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
     private readonly promotionDecisionService: PromotionDecisionService,
     private readonly rollbackDecisionService: RollbackDecisionService,
     private readonly driftMonitoringService: DriftMonitoringService,
-    private readonly retrainingTriggerService: RetrainingTriggerService
+    private readonly retrainingTriggerService: RetrainingTriggerService,
+    private readonly internalRuntimeSecurityService: InternalRuntimeSecurityService
   ) {}
 
   private resolveWorkerMode() {
@@ -116,6 +135,50 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
     };
   }
 
+  private resolveServiceIdentityId(value: unknown) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    return this.internalRuntimeSecurityService.resolveServiceIdentity("model-lifecycle");
+  }
+
+  private toRuntimePayload(jobName: string, payload: Partial<LifecycleQueuePayload>) {
+    const dedupKey = typeof payload.dedupKey === "string" && payload.dedupKey.trim().length > 0 ? payload.dedupKey : `lifecycle:${jobName}:runtime`;
+    const runId = typeof payload.runId === "string" && payload.runId.trim().length > 0 ? payload.runId : dedupKey;
+    return {
+      ...payload,
+      dedupKey,
+      runId,
+      authority: typeof payload.authority === "string" ? payload.authority : "internal",
+      serviceIdentityId: this.resolveServiceIdentityId(payload.serviceIdentityId)
+    } as Record<string, unknown>;
+  }
+
+  private async validateLifecyclePayload(
+    jobName: (typeof LIFECYCLE_JOBS)[number],
+    payload: Partial<LifecycleQueuePayload>,
+    mode: "enqueue" | "process"
+  ) {
+    const runtimePayload = this.toRuntimePayload(jobName, payload);
+    const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+      queueName: LIFECYCLE_QUEUE,
+      jobName,
+      payload: runtimePayload,
+      mode,
+      serviceIdentityId:
+        typeof runtimePayload.serviceIdentityId === "string" ? runtimePayload.serviceIdentityId : undefined
+    });
+    return validated.payload as unknown as LifecycleQueuePayload;
+  }
+
+  private async processQueuedJob(jobName: string, data: Partial<LifecycleQueuePayload>) {
+    if (!LIFECYCLE_JOBS.includes(jobName as (typeof LIFECYCLE_JOBS)[number])) {
+      return;
+    }
+    const validated = await this.validateLifecyclePayload(jobName as (typeof LIFECYCLE_JOBS)[number], data, "process");
+    await this.processJob(jobName, validated as unknown as Record<string, unknown>);
+  }
+
   async ensureSchedulers() {
     if (this.schedulerInstalled) {
       return;
@@ -128,6 +191,7 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
     }
 
     try {
+      const serviceIdentityId = this.internalRuntimeSecurityService.resolveServiceIdentity("model-lifecycle");
       await this.lifecycleQueue.upsertJobScheduler(
         "lifecycle-hourly-shadow",
         {
@@ -137,7 +201,10 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
           name: "shadowEvaluateCandidate",
           data: {
             source: "scheduler",
-            lookbackHours: 72
+            lookbackHours: 72,
+            runId: "shadowEvaluateCandidate:scheduler",
+            authority: "internal",
+            serviceIdentityId
           },
           opts: {
             removeOnComplete: 1000,
@@ -155,7 +222,10 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
           name: "collectLabels",
           data: {
             source: "scheduler",
-            lookbackDays: 30
+            lookbackDays: 30,
+            runId: "collectLabels:scheduler",
+            authority: "internal",
+            serviceIdentityId
           },
           opts: {
             removeOnComplete: 1000,
@@ -175,11 +245,14 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
     const windowStart = input?.windowStart ?? new Date(windowEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
     const dedupKey = this.dedupKey(scope, windowStart, windowEnd);
 
-    const payload = {
+    const payload: LifecycleQueuePayload = {
+      runId: dedupKey,
+      authority: "internal",
+      serviceIdentityId: this.internalRuntimeSecurityService.resolveServiceIdentity("model-lifecycle"),
+      dedupKey,
       ...this.withDefaults(scope),
       windowStart: windowStart.toISOString(),
       windowEnd: windowEnd.toISOString(),
-      dedupKey,
       actor: input?.actor ?? "system"
     };
 
@@ -193,20 +266,23 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
       }
     };
 
-    const createNode = (name: (typeof LIFECYCLE_JOBS)[number], children?: Array<Record<string, unknown>>) => ({
-      name,
-      queueName: LIFECYCLE_QUEUE,
-      data: payload,
-      opts: {
-        ...sharedOpts,
-        jobId: `${dedupKey}:${name}`
-      },
-      ...(children && children.length > 0 ? { children } : {})
-    });
+    const createNode = async (name: (typeof LIFECYCLE_JOBS)[number], children?: Array<Record<string, unknown>>) => {
+      const validated = await this.validateLifecyclePayload(name, payload, "enqueue");
+      return {
+        name,
+        queueName: LIFECYCLE_QUEUE,
+        data: validated,
+        opts: {
+          ...sharedOpts,
+          jobId: `${dedupKey}:${name}`
+        },
+        ...(children && children.length > 0 ? { children } : {})
+      };
+    };
 
-    let root = createNode(LIFECYCLE_JOBS[0]);
+    let root = await createNode(LIFECYCLE_JOBS[0]);
     for (let index = 1; index < LIFECYCLE_JOBS.length; index += 1) {
-      root = createNode(LIFECYCLE_JOBS[index], [root]);
+      root = await createNode(LIFECYCLE_JOBS[index], [root]);
     }
     return this.flow().add(root as any);
   }
@@ -712,8 +788,7 @@ export class ModelLifecycleOrchestrationService implements OnModuleInit, OnModul
     this.worker = new Worker(
       LIFECYCLE_QUEUE,
       async (job) => {
-        const data = (job.data ?? {}) as Record<string, unknown>;
-        await this.processJob(job.name, data);
+        await this.processQueuedJob(job.name, (job.data ?? {}) as Partial<LifecycleQueuePayload>);
       },
       {
         connection: { url },

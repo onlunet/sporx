@@ -72,6 +72,21 @@ Script kontrol eder:
 - kritik env anahtarları
 - API/Public/Admin temel HTTP erişimi
 
+## Security hardening phases
+- Phase 3 (audit/security events/incidents): `apps/api/src/modules/security-events/README.md`
+- Phase 4 (secrets + API/runtime hardening): `apps/api/src/modules/security-hardening/README.md`
+- Phase 5 (privacy/compliance/retention/governance): `apps/api/src/modules/privacy-governance/README.md`
+
+## Phase 5 governance flags
+- `PRIVACY_GOVERNANCE_ENABLED`: master gate for privacy/compliance governance controls.
+- `RETENTION_CLEANUP_ENABLED`: allows retention cleanup execution (dry-run reporting remains available).
+- `PRIVACY_EXPORT_ENABLED`: gate for privacy export job workflows.
+- `PRIVACY_DELETION_ENABLED`: gate for privacy deletion/anonymization workflows.
+- `LEGAL_HOLD_HOOKS_ENABLED`: enables legal-hold domain blocking hooks.
+- `COMPLIANCE_POLICY_ENFORCED`: enforces policy decision outcomes before destructive operations.
+- `COMPLIANCE_POLICY_VERSION`: active policy version stamp used in decisions and records.
+- `LEGAL_HOLD_DOMAINS`: comma-separated domain list blocked from destructive execution when legal-hold hooks are enabled.
+
 ## HTTPS API ayarı (public-web)
 Mixed-content hatasını önlemek için production ortamında:
 - `INTERNAL_API_URL=https://<api-domain>`

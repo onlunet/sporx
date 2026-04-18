@@ -127,7 +127,7 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
       byMatchId.set(prediction.matchId, {
         id: prediction.matchId,
         kickoffAt: prediction.matchDateTimeUTC ?? new Date().toISOString(),
-        leagueName: `Canli ${sportLabel}`,
+        leagueName: `Canlı ${sportLabel}`,
         homeTeam: prediction.homeTeam ?? "Ev Sahibi",
         awayTeam: prediction.awayTeam ?? "Deplasman",
         status: "live",
@@ -164,9 +164,9 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
               </div>
               <div>
                 <h1 className="font-display text-2xl sm:text-3xl font-bold">
-                  <span className="text-white">Canli</span> <span className="text-neon-red">{sportLabel} Merkezi</span>
+                  <span className="text-white">Canlı</span> <span className="text-neon-red">{sportLabel} Merkezi</span>
                 </h1>
-                <p className="text-sm text-slate-400">Gercek zamanli skorlar ve tahminler</p>
+                <p className="text-sm text-slate-400">Gerçek zamanlı skorlar ve tahminler</p>
               </div>
             </div>
 
@@ -178,8 +178,8 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
 
           <LiveStats
             matches={rows}
-            matchLabel={`Canli ${sportLabel} Maci`}
-            scoreLabel={sport === "basketball" ? "Toplam Sayi" : "Toplam Gol"}
+            matchLabel={`Canlı ${sportLabel} Maçı`}
+            scoreLabel={sport === "basketball" ? "Toplam Sayı" : "Toplam Gol"}
           />
         </div>
       </div>
@@ -200,8 +200,8 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-neon-red/20">
             <Zap className="h-8 w-8 text-neon-red" />
           </div>
-          <h2 className="mb-2 text-xl font-semibold text-white">Baglanti Hatasi</h2>
-          <p className="text-slate-400">Canli veri alinamadi. Otomatik olarak tekrar denenecek.</p>
+          <h2 className="mb-2 text-xl font-semibold text-white">Bağlantı Hatası</h2>
+          <p className="text-slate-400">Canlı veri alınamadı. Otomatik olarak tekrar denenecek.</p>
         </div>
       ) : null}
 
@@ -210,15 +210,19 @@ export function LiveMatchesBoard({ sport }: LiveMatchesBoardProps = {}) {
           <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800">
             <Radio className="h-10 w-10 text-slate-600" />
           </div>
-          <h2 className="mb-2 text-xl font-semibold text-white">Su Anda Canli Mac Yok</h2>
-          <p className="text-slate-400">Canli karsilasmalar basladiginda burada gorunecek.</p>
+          <h2 className="mb-2 text-xl font-semibold text-white">Şu Anda Canlı Maç Yok</h2>
+          <p className="text-slate-400">Canlı karşılaşmalar başladığında burada görünecek.</p>
         </div>
       ) : null}
 
       {!isLoading && !isError ? (
         <div className="grid gap-5 md:grid-cols-2">
           {rows.map((match) => (
-            <LiveMatchCard key={match.id} match={match} />
+            <LiveMatchCard
+              key={match.id}
+              match={match}
+              href={sport === "basketball" ? `/basketbol/maclar/${match.id}` : `/futbol/maclar/${match.id}`}
+            />
           ))}
         </div>
       ) : null}

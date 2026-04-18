@@ -53,7 +53,30 @@ interface MatchDetailPageProps {
 
 export default async function MatchDetailPage({ params }: MatchDetailPageProps) {
   const resolved = await params;
-  const matchResponse = await fetchWithSchema(`/api/v1/matches/${resolved.id}`, envelopeSchema(matchDetailSchema));
+  const isValidId = z.string().uuid().safeParse(resolved.id).success;
+  if (!isValidId) {
+    return (
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+        Geçersiz maç kimliği.
+      </div>
+    );
+  }
+
+  let match: z.infer<typeof matchDetailSchema> | null = null;
+  try {
+    const matchResponse = await fetchWithSchema(`/api/v1/matches/${resolved.id}`, envelopeSchema(matchDetailSchema));
+    match = matchResponse.data;
+  } catch {
+    match = null;
+  }
+
+  if (!match) {
+    return (
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+        Maç detayı şu an yüklenemiyor. Lütfen daha sonra tekrar deneyin.
+      </div>
+    );
+  }
 
   let predictionData: z.infer<typeof predictionSchema> = null;
   try {
@@ -66,7 +89,6 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
     predictionData = null;
   }
 
-  const match = matchResponse.data;
   const initialPrediction = normalizePredictionItem(
     predictionData
       ? predictionData

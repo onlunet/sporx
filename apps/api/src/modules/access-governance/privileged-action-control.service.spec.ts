@@ -4,6 +4,7 @@ import { PrivilegedActionControlService } from "./privileged-action-control.serv
 describe("PrivilegedActionControlService", () => {
   let prisma: any;
   let accessGovernanceService: any;
+  let securityEventService: any;
   let service: PrivilegedActionControlService;
 
   beforeEach(() => {
@@ -20,9 +21,6 @@ describe("PrivilegedActionControlService", () => {
       privilegedActionApproval: {
         create: jest.fn()
       },
-      auditLog: {
-        create: jest.fn().mockResolvedValue({})
-      },
       $transaction: jest.fn()
     };
 
@@ -33,7 +31,12 @@ describe("PrivilegedActionControlService", () => {
       })
     };
 
-    service = new PrivilegedActionControlService(prisma, accessGovernanceService);
+    securityEventService = {
+      emitAuditEvent: jest.fn().mockResolvedValue({ id: "audit-1" }),
+      emitSecurityEvent: jest.fn().mockResolvedValue({ id: "security-1" })
+    };
+
+    service = new PrivilegedActionControlService(prisma, accessGovernanceService, securityEventService);
   });
 
   afterEach(() => {
@@ -73,11 +76,14 @@ describe("PrivilegedActionControlService", () => {
         })
       })
     );
-    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+    expect(securityEventService.emitAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          action: "privileged_action.request"
-        })
+        action: "privileged_action.request"
+      })
+    );
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "privileged_action_requested"
       })
     );
   });
@@ -146,6 +152,11 @@ describe("PrivilegedActionControlService", () => {
       })
     );
     expect(result.grant).toMatchObject({ id: "grant-1" });
-    expect(prisma.auditLog.create).toHaveBeenCalledTimes(3);
+    expect(securityEventService.emitAuditEvent).toHaveBeenCalled();
+    expect(securityEventService.emitSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "break_glass_granted"
+      })
+    );
   });
 });

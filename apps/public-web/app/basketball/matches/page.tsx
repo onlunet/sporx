@@ -28,14 +28,14 @@ export default async function BasketballMatchesPage() {
               <Dumbbell className="h-6 w-6 text-void" />
             </div>
             <div>
-              <h1 className="gradient-text font-display text-3xl font-bold">Basketbol Maclari</h1>
-              <p className="text-sm text-slate-400">Basketbol karsilasmalari, skorlar ve mac detaylari</p>
+              <h1 className="gradient-text font-display text-3xl font-bold">Basketbol Maçları</h1>
+              <p className="text-sm text-slate-400">Basketbol karşılaşmaları, skorlar ve maç detayları</p>
             </div>
           </div>
 
           {loadError ? (
             <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-              Basketbol mac listesi su an sinirli gelebilir. Veri akisi toparlandiginda otomatik guncellenecek.
+              Basketbol maç listesi şu an sınırlı gelebilir. Veri akışı toparlandığında otomatik güncellenecek.
             </div>
           ) : null}
 
@@ -47,14 +47,14 @@ export default async function BasketballMatchesPage() {
         <div className="mb-6 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
             <Calendar className="h-5 w-5 text-neon-cyan" />
-            Karsilasmalar
+            Karşılaşmalar
           </h2>
-          <span className="text-sm text-slate-500">{matches.length} mac gosteriliyor</span>
+          <span className="text-sm text-slate-500">{matches.length} maç gösteriliyor</span>
         </div>
 
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
           {matches.map((match) => (
-            <MatchCard key={match.id} match={match} />
+            <MatchCard key={match.id} match={match} href={`/basketbol/maclar/${match.id}`} />
           ))}
         </div>
       </div>

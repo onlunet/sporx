@@ -776,10 +776,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const source = await this.resolvePublicSource(
-      `${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`
-    );
-    const cacheKey = `predictions:list:v10:${source}:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v11:published:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -789,65 +786,81 @@ export class PredictionsService {
     let normalizedRows: NormalizedPredictionRow[] = [];
 
     try {
-      if (source === "legacy") {
-        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take);
-        normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
-      } else {
-        const targetTake = Math.max(take, 60);
-        const relevantMatches =
-          effectiveStatuses.length === 1
-            ? await queryWithTimeout(
-                this.prisma.match.findMany({
-                  where: {
-                    status: { in: effectiveStatuses },
-                    ...(sportCode ? { sport: { code: sportCode } } : {})
-                  },
-                  select: { id: true, matchDateTimeUTC: true },
-                  orderBy: { matchDateTimeUTC: "desc" },
-                  take: targetTake
-                }),
-                12000
+      const targetTake = Math.max(take, 60);
+      const relevantMatches =
+        effectiveStatuses.length === 1
+          ? await queryWithTimeout(
+              this.prisma.match.findMany({
+                where: {
+                  status: { in: effectiveStatuses },
+                  ...(sportCode ? { sport: { code: sportCode } } : {})
+                },
+                select: { id: true, matchDateTimeUTC: true },
+                orderBy: { matchDateTimeUTC: "desc" },
+                take: targetTake
+              }),
+              12000
+            )
+          : (
+              await Promise.all(
+                effectiveStatuses.map(async (status) => {
+                  try {
+                    return await queryWithTimeout(
+                      this.prisma.match.findMany({
+                        where: {
+                          status,
+                          ...(sportCode ? { sport: { code: sportCode } } : {})
+                        },
+                        select: { id: true, matchDateTimeUTC: true },
+                        orderBy: { matchDateTimeUTC: "desc" },
+                        take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
+                      }),
+                      9000
+                    );
+                  } catch {
+                    return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
+                  }
+                })
               )
-            : (
-                await Promise.all(
-                  effectiveStatuses.map(async (status) => {
-                    try {
-                      return await queryWithTimeout(
-                        this.prisma.match.findMany({
-                          where: {
-                            status,
-                            ...(sportCode ? { sport: { code: sportCode } } : {})
-                          },
-                          select: { id: true, matchDateTimeUTC: true },
-                          orderBy: { matchDateTimeUTC: "desc" },
-                          take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
-                        }),
-                        9000
-                      );
-                    } catch {
-                      return [] as Array<{ id: string; matchDateTimeUTC: Date }>;
-                    }
-                  })
-                )
-              )
-                .flat()
-                .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
-                .slice(0, targetTake);
+            )
+              .flat()
+              .sort((left, right) => right.matchDateTimeUTC.getTime() - left.matchDateTimeUTC.getTime())
+              .slice(0, targetTake);
 
-        if (relevantMatches.length === 0) {
-          await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);
-          return [];
-        }
+      if (relevantMatches.length === 0) {
+        await this.cache.set(cacheKey, [], 20, ["predictions", "market-analysis"]);
+        return [];
+      }
 
-        const matchIds = relevantMatches.map((item) => item.id);
-        let rows = await queryWithTimeout(
+      const matchIds = relevantMatches.map((item) => item.id);
+      let rows = await queryWithTimeout(
+        this.prisma.publishedPrediction.findMany({
+          where: {
+            OR: [
+              { publishDecision: { is: null } },
+              { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+            ],
+            matchId: { in: matchIds },
+            match: {
+              status: { in: effectiveStatuses },
+              ...(sportCode ? { sport: { code: sportCode } } : {})
+            }
+          },
+          orderBy: { publishedAt: "desc" },
+          include: PUBLISHED_PREDICTION_INCLUDE,
+          take: Math.max(take * 2, 100)
+        }),
+        12000
+      );
+
+      if (rows.length === 0) {
+        rows = await queryWithTimeout(
           this.prisma.publishedPrediction.findMany({
             where: {
               OR: [
                 { publishDecision: { is: null } },
                 { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
               ],
-              matchId: { in: matchIds },
               match: {
                 status: { in: effectiveStatuses },
                 ...(sportCode ? { sport: { code: sportCode } } : {})
@@ -855,34 +868,13 @@ export class PredictionsService {
             },
             orderBy: { publishedAt: "desc" },
             include: PUBLISHED_PREDICTION_INCLUDE,
-            take: Math.max(take * 2, 100)
+            take: Math.max(take * 3, 120)
           }),
           12000
-        );
-
-        if (rows.length === 0) {
-          rows = await queryWithTimeout(
-            this.prisma.publishedPrediction.findMany({
-              where: {
-                OR: [
-                  { publishDecision: { is: null } },
-                  { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-                ],
-                match: {
-                  status: { in: effectiveStatuses },
-                  ...(sportCode ? { sport: { code: sportCode } } : {})
-                }
-              },
-              orderBy: { publishedAt: "desc" },
-              include: PUBLISHED_PREDICTION_INCLUDE,
-              take: Math.max(take * 3, 120)
-            }),
-            12000
-          ).catch(() => []);
-        }
-
-        normalizedRows = rows.map((row) => normalizePublishedRow(row));
+        ).catch(() => []);
       }
+
+      normalizedRows = rows.map((row) => normalizePublishedRow(row));
     } catch {
       const stale = await this.cache.get<unknown[]>(stableCacheKey);
       if (stale) {
@@ -930,32 +922,21 @@ export class PredictionsService {
     const predictionType = parsePredictionType(params?.predictionType);
     const line = parseLine(params?.line);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
-    const source = await this.resolvePublicSource(`match:${matchId}:${predictionType ?? "all"}:${line ?? "all"}`);
 
-    const normalizedRows: NormalizedPredictionRow[] =
-      source === "legacy"
-        ? (
-            await this.prisma.prediction.findMany({
-              where: { matchId },
-              include: LEGACY_PREDICTION_INCLUDE,
-              orderBy: [{ updatedAt: "desc" }],
-              take: 20
-            })
-          ).map((row) => normalizeLegacyRow(row as LegacyPredictionRecord))
-        : (
-            await this.prisma.publishedPrediction.findMany({
-              where: {
-                matchId,
-                OR: [
-                  { publishDecision: { is: null } },
-                  { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
-                ]
-              },
-              include: PUBLISHED_PREDICTION_INCLUDE,
-              orderBy: [{ publishedAt: "desc" }],
-              take: 20
-            })
-          ).map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
+    const normalizedRows: NormalizedPredictionRow[] = (
+      await this.prisma.publishedPrediction.findMany({
+        where: {
+          matchId,
+          OR: [
+            { publishDecision: { is: null } },
+            { publishDecision: { is: { status: { in: FINAL_PUBLISH_DECISION_STATUSES } } } }
+          ]
+        },
+        include: PUBLISHED_PREDICTION_INCLUDE,
+        orderBy: [{ publishedAt: "desc" }],
+        take: 20
+      })
+    ).map((row) => normalizePublishedRow(row as PublishedPredictionRecord));
 
     if (normalizedRows.length === 0) {
       return [];
@@ -987,19 +968,6 @@ export class PredictionsService {
   }
 
   async highConfidence() {
-    const source = await this.resolvePublicSource("high-confidence");
-    if (source === "legacy") {
-      const rows = await this.prisma.prediction.findMany({
-        where: {
-          confidenceScore: { gte: 0.7 }
-        },
-        include: LEGACY_PREDICTION_INCLUDE,
-        orderBy: { updatedAt: "desc" },
-        take: 50
-      });
-      return rows.map((row) => normalizeLegacyRow(row as LegacyPredictionRecord));
-    }
-
     const rows = await this.prisma.publishedPrediction.findMany({
       where: {
         OR: [

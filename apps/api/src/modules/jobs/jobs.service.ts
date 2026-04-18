@@ -31,6 +31,10 @@ const JOB_TYPES: JobType[] = [
   "enrichMatchDetails"
 ];
 
+type SchedulerLockState = {
+  lost: boolean;
+};
+
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
@@ -91,82 +95,99 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const lockState: SchedulerLockState = { lost: false };
+    const stopLockHeartbeat = this.startSchedulerLockHeartbeat(lockState);
+
     try {
       await this.recoverStaleRunsIfDue(reason === "startup");
+      this.assertSchedulerLockHeld(lockState);
 
       const { syncEveryMinutes, intervals } = await this.resolveScheduleIntervals();
+      this.assertSchedulerLockHeld(lockState);
       const latestRunsByType = await this.loadLatestRunsByType();
+      this.assertSchedulerLockHeld(lockState);
       const forceOnStartup = reason === "startup";
 
-      await this.ensureRecentRun("syncFixtures", syncEveryMinutes, forceOnStartup, latestRunsByType.get("syncFixtures"));
-      await this.ensureRecentRun(
-        "syncStandings",
-        intervals.standingsMinutes,
-        forceOnStartup,
-        latestRunsByType.get("syncStandings")
-      );
-      await this.ensureRecentRun(
-        "generatePredictions",
-        syncEveryMinutes,
-        forceOnStartup,
-        latestRunsByType.get("generatePredictions")
-      );
-      await this.ensureRecentRun(
-        "providerHealthCheck",
-        intervals.providerHealthMinutes,
-        forceOnStartup,
-        latestRunsByType.get("providerHealthCheck")
-      );
-      await this.ensureRecentRun(
-        "syncOddsPreMatch",
-        intervals.oddsPreMatchMinutes,
-        forceOnStartup,
-        latestRunsByType.get("syncOddsPreMatch")
-      );
-      await this.ensureRecentRun(
-        "syncOddsLive",
-        intervals.oddsLiveMinutes,
-        forceOnStartup,
-        latestRunsByType.get("syncOddsLive")
-      );
-      await this.ensureRecentRun(
-        "syncOddsClosing",
-        intervals.oddsClosingMinutes,
-        forceOnStartup,
-        latestRunsByType.get("syncOddsClosing")
-      );
-      await this.ensureRecentRun(
-        "generateMarketAnalysis",
-        intervals.marketAnalysisMinutes,
-        forceOnStartup,
-        latestRunsByType.get("generateMarketAnalysis")
-      );
-      await this.ensureRecentRun(
-        "resolveProviderAliases",
-        intervals.aliasSyncMinutes,
-        forceOnStartup,
-        latestRunsByType.get("resolveProviderAliases")
-      );
-      await this.ensureRecentRun(
-        "enrichTeamProfiles",
-        intervals.teamProfileMinutes,
-        forceOnStartup,
-        latestRunsByType.get("enrichTeamProfiles")
-      );
-      await this.ensureRecentRun(
-        "enrichMatchDetails",
-        intervals.detailMinutes,
-        forceOnStartup,
-        latestRunsByType.get("enrichMatchDetails")
-      );
+      const schedulePlan: Array<readonly [JobType, number]> = [
+        ["syncFixtures", syncEveryMinutes],
+        ["syncStandings", intervals.standingsMinutes],
+        ["generatePredictions", syncEveryMinutes],
+        ["providerHealthCheck", intervals.providerHealthMinutes],
+        ["syncOddsPreMatch", intervals.oddsPreMatchMinutes],
+        ["syncOddsLive", intervals.oddsLiveMinutes],
+        ["syncOddsClosing", intervals.oddsClosingMinutes],
+        ["generateMarketAnalysis", intervals.marketAnalysisMinutes],
+        ["resolveProviderAliases", intervals.aliasSyncMinutes],
+        ["enrichTeamProfiles", intervals.teamProfileMinutes],
+        ["enrichMatchDetails", intervals.detailMinutes]
+      ];
+
+      for (const [jobType, maxAgeMinutes] of schedulePlan) {
+        this.assertSchedulerLockHeld(lockState);
+        await this.ensureRecentRun(jobType, maxAgeMinutes, forceOnStartup, latestRunsByType.get(jobType));
+      }
     } catch (error) {
-      this.logger.error(
-        "Scheduler tick failed; will retry next cycle",
-        error instanceof Error ? error.stack : undefined
-      );
+      if (error instanceof Error && error.message === "scheduler_lock_lost") {
+        this.logger.warn("Scheduler lock lost during tick; skipping remaining cycle");
+      } else {
+        this.logger.error(
+          "Scheduler tick failed; will retry next cycle",
+          error instanceof Error ? error.stack : undefined
+        );
+      }
     } finally {
+      await stopLockHeartbeat();
       await this.cacheService.releaseLock(this.schedulerLockKey, this.schedulerLockOwner);
       this.isTicking = false;
+    }
+  }
+
+  private startSchedulerLockHeartbeat(lockState: SchedulerLockState) {
+    const renewEveryMs = Math.max(1_000, Math.floor(this.schedulerLockTtlMs / 3));
+    let stopped = false;
+    let inFlight: Promise<void> | null = null;
+
+    const timer = setInterval(() => {
+      if (stopped || lockState.lost) {
+        return;
+      }
+      inFlight = this.renewSchedulerLock(lockState);
+    }, renewEveryMs);
+
+    return async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (inFlight) {
+        await inFlight.catch(() => undefined);
+      }
+    };
+  }
+
+  private async renewSchedulerLock(lockState: SchedulerLockState) {
+    if (lockState.lost) {
+      return;
+    }
+    try {
+      const renewed = await this.cacheService.renewLock(
+        this.schedulerLockKey,
+        this.schedulerLockOwner,
+        this.schedulerLockTtlMs
+      );
+      if (!renewed) {
+        lockState.lost = true;
+      }
+    } catch {
+      lockState.lost = true;
+    }
+
+    if (lockState.lost) {
+      this.logger.warn("Scheduler lock renewal failed; skipping remaining work in current cycle");
+    }
+  }
+
+  private assertSchedulerLockHeld(lockState: SchedulerLockState) {
+    if (lockState.lost) {
+      throw new Error("scheduler_lock_lost");
     }
   }
 

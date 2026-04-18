@@ -73,6 +73,9 @@ describe("PredictionsService", () => {
     const prisma = {
       publishedPrediction: {
         findMany: jest.fn().mockResolvedValue([createPublishedRow("run-1"), createPublishedRow("run-2")])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
       }
     } as any;
     const cache = {} as CacheService;
@@ -94,6 +97,8 @@ describe("PredictionsService", () => {
       (item) => item.matchId === "match-1" && item.predictionType === "fullTimeResult" && item.marketKey === "match_outcome"
     );
     expect(fullTimeRows).toHaveLength(1);
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(rollout.resolveSource).not.toHaveBeenCalled();
   });
 
   it("list endpoint reads only published source when rollout selects published", async () => {
@@ -129,6 +134,7 @@ describe("PredictionsService", () => {
 
     expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
     expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(rollout.resolveSource).not.toHaveBeenCalled();
     expect(items.length).toBeGreaterThan(0);
   });
 
@@ -178,5 +184,36 @@ describe("PredictionsService", () => {
         }
       ])
     );
+    expect(rollout.resolveSource).not.toHaveBeenCalled();
+  });
+
+  it("high confidence endpoint reads published predictions only", async () => {
+    const prisma = {
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([createPublishedRow("run-high")])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+    const cache = {} as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("legacy")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.highConfidence();
+
+    expect(items).toHaveLength(1);
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(rollout.resolveSource).not.toHaveBeenCalled();
   });
 });

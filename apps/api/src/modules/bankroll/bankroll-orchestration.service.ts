@@ -23,6 +23,7 @@ import { SettlementService } from "./settlement.service";
 import { BankrollAccountingService } from "./bankroll-accounting.service";
 import { SimulationService } from "./simulation.service";
 import { RoiGovernanceService } from "./roi-governance.service";
+import { InternalRuntimeSecurityService } from "../security-hardening/internal-runtime-security.service";
 
 const BANKROLL_QUEUE = "bankroll";
 const BANKROLL_PIPELINE_STAGES = [
@@ -69,6 +70,9 @@ export type PublishedSelectionInput = {
 
 type BankrollJobPayload = {
   stage: BankrollStage;
+  runId: string;
+  authority: "internal";
+  serviceIdentityId: string;
   dedupBaseKey: string;
   publishedSelection: PublishedSelectionInput;
   accountId: string;
@@ -98,7 +102,8 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
     private readonly settlementService: SettlementService,
     private readonly accountingService: BankrollAccountingService,
     private readonly simulationService: SimulationService,
-    private readonly governanceService: RoiGovernanceService
+    private readonly governanceService: RoiGovernanceService,
+    private readonly internalRuntimeSecurityService: InternalRuntimeSecurityService
   ) {}
 
   private resolveWorkerMode() {
@@ -177,6 +182,49 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
       normalizeSelectionToken(selection.selection),
       selection.publishedPredictionId
     ].join(":");
+  }
+
+  private resolveServiceIdentityId(value: unknown) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    return this.internalRuntimeSecurityService.resolveServiceIdentity("bankroll");
+  }
+
+  private toRuntimePayload(stage: BankrollStage, payload: Partial<BankrollJobPayload>) {
+    const dedupBaseKey =
+      typeof payload.dedupBaseKey === "string" && payload.dedupBaseKey.trim().length > 0
+        ? payload.dedupBaseKey.trim()
+        : `${stage}:runtime`;
+    const runId =
+      typeof payload.runId === "string" && payload.runId.trim().length > 0 ? payload.runId.trim() : dedupBaseKey;
+    const authority = typeof payload.authority === "string" ? payload.authority : "internal";
+    const serviceIdentityId = this.resolveServiceIdentityId(payload.serviceIdentityId);
+    return {
+      ...payload,
+      stage,
+      dedupBaseKey,
+      runId,
+      authority,
+      serviceIdentityId
+    } as Record<string, unknown>;
+  }
+
+  private async validateStagePayload(
+    stage: BankrollStage,
+    payload: Partial<BankrollJobPayload>,
+    mode: "enqueue" | "process"
+  ) {
+    const runtimePayload = this.toRuntimePayload(stage, payload);
+    const validated = await this.internalRuntimeSecurityService.validateQueuePayload({
+      queueName: BANKROLL_QUEUE,
+      jobName: stage,
+      payload: runtimePayload,
+      mode,
+      serviceIdentityId:
+        typeof runtimePayload.serviceIdentityId === "string" ? runtimePayload.serviceIdentityId : undefined
+    });
+    return validated.payload as unknown as BankrollJobPayload;
   }
 
   private async stageStakeCandidateBuild(payload: BankrollJobPayload) {
@@ -881,23 +929,26 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
       }
     };
 
-    const createNode = (stage: BankrollStage, children?: Array<Record<string, unknown>>) => ({
-      name: stage,
-      queueName: BANKROLL_QUEUE,
-      data: {
-        ...payload,
-        stage
-      },
-      opts: {
-        ...sharedOpts,
-        jobId: `${payload.dedupBaseKey}:${stage}`
-      },
-      ...(children && children.length > 0 ? { children } : {})
-    });
+    const createNode = async (stage: BankrollStage, children?: Array<Record<string, unknown>>) => {
+      const validated = await this.validateStagePayload(stage, payload, "enqueue");
+      return {
+        name: stage,
+        queueName: BANKROLL_QUEUE,
+        data: {
+          ...validated,
+          stage
+        },
+        opts: {
+          ...sharedOpts,
+          jobId: `${payload.dedupBaseKey}:${stage}`
+        },
+        ...(children && children.length > 0 ? { children } : {})
+      };
+    };
 
-    let root = createNode(BANKROLL_PIPELINE_STAGES[0]);
+    let root = await createNode(BANKROLL_PIPELINE_STAGES[0]);
     for (let index = 1; index < BANKROLL_PIPELINE_STAGES.length; index += 1) {
-      root = createNode(BANKROLL_PIPELINE_STAGES[index], [root]);
+      root = await createNode(BANKROLL_PIPELINE_STAGES[index], [root]);
     }
 
     return this.flow().add(root as any);
@@ -905,7 +956,8 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
 
   private async runInline(payload: BankrollJobPayload) {
     for (const stage of BANKROLL_PIPELINE_STAGES) {
-      await this.processStage(stage, payload);
+      const validated = await this.validateStagePayload(stage, payload, "process");
+      await this.processStage(stage, validated);
     }
   }
 
@@ -931,10 +983,14 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
     const account = await this.configService.resolvePrimaryAccount();
     const policyVersion = await this.configService.resolveActivePolicyVersion();
     const profileKey = settings.stakingProfileDefault || account.profileDefault;
+    const dedupBaseKey = this.buildBaseDedup(selection);
 
     const payload: BankrollJobPayload = {
       stage: "stakeCandidateBuild",
-      dedupBaseKey: this.buildBaseDedup(selection),
+      runId: dedupBaseKey,
+      authority: "internal",
+      serviceIdentityId: this.internalRuntimeSecurityService.resolveServiceIdentity("bankroll"),
+      dedupBaseKey,
       publishedSelection: {
         ...selection,
         line: selection.line === null || !Number.isFinite(selection.line) ? null : round(selection.line, 2),
@@ -975,13 +1031,18 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
     }
 
     try {
+      const serviceIdentityId = this.internalRuntimeSecurityService.resolveServiceIdentity("bankroll");
+
       await this.bankrollQueue.upsertJobScheduler(
         "bankroll-hourly-settlement",
         { every: 60 * 60 * 1000 },
         {
           name: "settlement",
           data: {
-            source: "scheduler"
+            source: "scheduler",
+            runId: "settlement:scheduler",
+            authority: "internal",
+            serviceIdentityId
           },
           opts: {
             removeOnComplete: 1000,
@@ -996,7 +1057,10 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
         {
           name: "roiGovernance",
           data: {
-            source: "scheduler"
+            source: "scheduler",
+            runId: "roiGovernance:scheduler",
+            authority: "internal",
+            serviceIdentityId
           },
           opts: {
             removeOnComplete: 1000,
@@ -1011,7 +1075,10 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
         {
           name: "simulationAnalytics",
           data: {
-            source: "scheduler"
+            source: "scheduler",
+            runId: "simulationAnalytics:scheduler",
+            authority: "internal",
+            serviceIdentityId
           },
           opts: {
             removeOnComplete: 1000,
@@ -1037,6 +1104,11 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
       async (job) => {
         const stage = job.name as BankrollStage;
         const data = job.data as Partial<BankrollJobPayload>;
+        if (!BANKROLL_PIPELINE_STAGES.includes(stage)) {
+          return;
+        }
+
+        const validated = await this.validateStagePayload(stage, data, "process");
 
         if (["settlement", "simulationAnalytics", "roiGovernance"].includes(stage) && data?.publishedSelection === undefined) {
           const settings = await this.configService.getSettings();
@@ -1047,6 +1119,9 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
           const policyVersion = await this.configService.resolveActivePolicyVersion();
           const schedulerPayload: BankrollJobPayload = {
             stage,
+            runId: typeof validated.runId === "string" ? validated.runId : `${stage}:scheduler`,
+            authority: "internal",
+            serviceIdentityId: this.resolveServiceIdentityId(validated.serviceIdentityId),
             dedupBaseKey: `${stage}:scheduler:${new Date().toISOString().slice(0, 13)}`,
             publishedSelection: {
               sportCode: "football",
@@ -1077,21 +1152,31 @@ export class BankrollOrchestrationService implements OnModuleInit, OnModuleDestr
             policyVersionId: policyVersion.id,
             profileKey: settings.stakingProfileDefault || account.profileDefault
           };
-          await this.processStage(stage, schedulerPayload);
+          await this.processStage(stage, await this.validateStagePayload(stage, schedulerPayload, "process"));
           return;
         }
 
-        if (!data || !data.publishedSelection || !data.accountId || !data.policyVersionId || !data.profileKey || !data.dedupBaseKey) {
-          return;
+        if (
+          !validated ||
+          !validated.publishedSelection ||
+          !validated.accountId ||
+          !validated.policyVersionId ||
+          !validated.profileKey ||
+          !validated.dedupBaseKey
+        ) {
+          throw new Error("Malformed bankroll queue payload");
         }
 
         const payload: BankrollJobPayload = {
           stage,
-          dedupBaseKey: String(data.dedupBaseKey),
-          publishedSelection: data.publishedSelection,
-          accountId: String(data.accountId),
-          policyVersionId: String(data.policyVersionId),
-          profileKey: data.profileKey as BankrollProfileKey
+          runId: String(validated.runId),
+          authority: "internal",
+          serviceIdentityId: this.resolveServiceIdentityId(validated.serviceIdentityId),
+          dedupBaseKey: String(validated.dedupBaseKey),
+          publishedSelection: validated.publishedSelection,
+          accountId: String(validated.accountId),
+          policyVersionId: String(validated.policyVersionId),
+          profileKey: validated.profileKey as BankrollProfileKey
         };
 
         await this.processStage(stage, payload);

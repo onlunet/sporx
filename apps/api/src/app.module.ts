@@ -33,6 +33,9 @@ import { OddsModule } from "./modules/odds/odds.module";
 import { BankrollModule } from "./modules/bankroll/bankroll.module";
 import { ResearchLabModule } from "./modules/research-lab/research-lab.module";
 import { AccessGovernanceModule } from "./modules/access-governance/access-governance.module";
+import { SecurityEventsModule } from "./modules/security-events/security-events.module";
+import { SecurityHardeningModule } from "./modules/security-hardening/security-hardening.module";
+import { PrivacyGovernanceModule } from "./modules/privacy-governance/privacy-governance.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { CacheModule } from "./cache/cache.module";
 
@@ -77,7 +80,10 @@ import { CacheModule } from "./cache/cache.module";
     OddsModule,
     BankrollModule,
     ResearchLabModule,
-    AccessGovernanceModule
+    AccessGovernanceModule,
+    SecurityEventsModule,
+    SecurityHardeningModule,
+    PrivacyGovernanceModule
   ]
 })
 export class AppModule {}

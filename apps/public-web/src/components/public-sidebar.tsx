@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -26,49 +26,82 @@ type SidebarLink = {
   href: string;
   label: string;
   icon: LucideIcon;
+  aliases?: string[];
 };
 
-const primaryLinks: SidebarLink[] = [{ href: "/dashboard", label: "Panel", icon: LayoutDashboard }];
+const primaryLinks: SidebarLink[] = [
+  { href: "/panel", label: "Panel", icon: LayoutDashboard, aliases: ["/dashboard"] }
+];
 
 const sportGroups: Array<{
-  key: "football" | "basketball";
+  key: "futbol" | "basketbol";
   title: string;
   icon: LucideIcon;
   links: SidebarLink[];
 }> = [
   {
-    key: "football",
-    title: "Futbol",
+    key: "futbol",
+    title: "FUTBOL",
     icon: Trophy,
     links: [
-      { href: "/football/matches", label: "Maclar", icon: Swords },
-      { href: "/football/predictions", label: "Tahminler", icon: BrainCircuit },
-      { href: "/football/predictions/completed", label: "Sonuclar", icon: BarChart3 },
-      { href: "/football/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
-      { href: "/football/compare/teams", label: "Karsilastir", icon: GitCompare },
-      { href: "/football/live", label: "Canli", icon: Radio }
+      { href: "/futbol/maclar", label: "Maçlar", icon: Swords, aliases: ["/football/matches"] },
+      { href: "/futbol/tahminler", label: "Tahminler", icon: BrainCircuit, aliases: ["/football/predictions"] },
+      {
+        href: "/futbol/sonuclar",
+        label: "Sonuçlar",
+        icon: BarChart3,
+        aliases: ["/football/predictions/completed"]
+      },
+      {
+        href: "/futbol/lig-performansi",
+        label: "Lig Performansı",
+        icon: BarChart3,
+        aliases: ["/football/predictions/leagues"]
+      },
+      { href: "/futbol/karsilastir", label: "Karşılaştır", icon: GitCompare, aliases: ["/football/compare/teams"] },
+      { href: "/futbol/canli", label: "Canlı", icon: Radio, aliases: ["/football/live"] }
     ]
   },
   {
-    key: "basketball",
-    title: "Basketbol",
+    key: "basketbol",
+    title: "BASKETBOL",
     icon: Dumbbell,
     links: [
-      { href: "/basketball/matches", label: "Maclar", icon: Swords },
-      { href: "/basketball/predictions", label: "Tahminler", icon: BrainCircuit },
-      { href: "/basketball/predictions/completed", label: "Sonuclar", icon: BarChart3 },
-      { href: "/basketball/predictions/leagues", label: "Lig Performansi", icon: BarChart3 },
-      { href: "/basketball/compare/teams", label: "Karsilastir", icon: GitCompare },
-      { href: "/basketball/live", label: "Canli", icon: Radio }
+      { href: "/basketbol/maclar", label: "Maçlar", icon: Swords, aliases: ["/basketball/matches"] },
+      {
+        href: "/basketbol/tahminler",
+        label: "Tahminler",
+        icon: BrainCircuit,
+        aliases: ["/basketball/predictions"]
+      },
+      {
+        href: "/basketbol/sonuclar",
+        label: "Sonuçlar",
+        icon: BarChart3,
+        aliases: ["/basketball/predictions/completed"]
+      },
+      {
+        href: "/basketbol/lig-performansi",
+        label: "Lig Performansı",
+        icon: BarChart3,
+        aliases: ["/basketball/predictions/leagues"]
+      },
+      {
+        href: "/basketbol/karsilastir",
+        label: "Karşılaştır",
+        icon: GitCompare,
+        aliases: ["/basketball/compare/teams"]
+      },
+      { href: "/basketbol/canli", label: "Canlı", icon: Radio, aliases: ["/basketball/live"] }
     ]
   }
 ];
 
 const utilityLinks: SidebarLink[] = [
-  { href: "/leagues", label: "Ligler", icon: Trophy },
-  { href: "/teams", label: "Takimlar", icon: Shield },
-  { href: "/guide", label: "Rehber", icon: BookOpen },
-  { href: "/account", label: "Hesap", icon: User }
+  { href: "/ligler", label: "Ligler", icon: Trophy, aliases: ["/leagues"] },
+  { href: "/takimlar", label: "Takımlar", icon: Shield, aliases: ["/teams"] },
+  { href: "/rehber", label: "Rehber", icon: BookOpen, aliases: ["/guide"] },
+  { href: "/hesap", label: "Hesap", icon: User, aliases: ["/account"] }
 ];
 
 const containerVariants = {
@@ -134,9 +167,22 @@ function SidebarItem({ link, active, onClick }: { link: SidebarLink; active: boo
 
 function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
   const pathname = usePathname();
-  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
-  const isSportGroupActive = (groupKey: "football" | "basketball") =>
-    pathname === `/${groupKey}` || pathname.startsWith(`/${groupKey}/`);
+  const isActive = (link: SidebarLink) =>
+    pathname === link.href ||
+    pathname.startsWith(`${link.href}/`) ||
+    (link.aliases ?? []).some((alias) => pathname === alias || pathname.startsWith(`${alias}/`));
+
+  const isSportGroupActive = (groupKey: "futbol" | "basketbol") =>
+    (groupKey === "futbol" &&
+      (pathname === "/futbol" ||
+        pathname.startsWith("/futbol/") ||
+        pathname === "/football" ||
+        pathname.startsWith("/football/"))) ||
+    (groupKey === "basketbol" &&
+      (pathname === "/basketbol" ||
+        pathname.startsWith("/basketbol/") ||
+        pathname === "/basketball" ||
+        pathname.startsWith("/basketball/")));
 
   return (
     <>
@@ -162,7 +208,7 @@ function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
         <motion.div variants={containerVariants} initial="hidden" animate="visible" className="space-y-4">
           <div className="space-y-1">
             {primaryLinks.map((link) => (
-              <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
+              <SidebarItem key={link.href} link={link} active={isActive(link)} onClick={onLinkClick} />
             ))}
           </div>
 
@@ -185,7 +231,7 @@ function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
 
                 <div className="space-y-1">
                   {group.links.map((link) => (
-                    <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
+                    <SidebarItem key={link.href} link={link} active={isActive(link)} onClick={onLinkClick} />
                   ))}
                 </div>
               </motion.section>
@@ -193,10 +239,10 @@ function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
           })}
 
           <div className="pt-1">
-            <div className="px-2 pb-2 font-display text-[10px] uppercase tracking-[0.2em] text-slate-500">Genel</div>
+            <div className="px-2 pb-2 font-display text-[10px] uppercase tracking-[0.2em] text-slate-500">GENEL</div>
             <div className="space-y-1">
               {utilityLinks.map((link) => (
-                <SidebarItem key={link.href} link={link} active={isActive(link.href)} onClick={onLinkClick} />
+                <SidebarItem key={link.href} link={link} active={isActive(link)} onClick={onLinkClick} />
               ))}
             </div>
           </div>
@@ -207,9 +253,9 @@ function SidebarContent({ onLinkClick }: { onLinkClick?: () => void }) {
         <div className="glass-card rounded-xl p-4">
           <div className="mb-2 flex items-center gap-2">
             <div className="h-2 w-2 animate-pulse rounded-full bg-neon-green" />
-            <span className="font-display text-xs tracking-wider text-slate-500">SISTEM AKTIF</span>
+            <span className="font-display text-xs tracking-wider text-slate-500">SİSTEM AKTİF</span>
           </div>
-          <p className="text-xs text-slate-500">AI modeli gercek zamanli analiz yapiyor</p>
+          <p className="text-xs text-slate-500">AI modeli gerçek zamanlı analiz yapıyor.</p>
         </div>
       </div>
     </>
@@ -221,12 +267,10 @@ export function PublicSidebar() {
 
   return (
     <>
-      {/* Desktop Sidebar */}
       <aside className="sticky top-0 hidden lg:flex h-screen w-72 flex-col border-r border-white/5 bg-depth/80 backdrop-blur-xl">
         <SidebarContent />
       </aside>
 
-      {/* Mobile Header */}
       <div className="fixed top-0 left-0 right-0 z-40 lg:hidden">
         <div className="flex items-center justify-between border-b border-white/5 bg-depth/95 backdrop-blur-xl px-4 py-3">
           <Link href="/" className="flex items-center gap-2">
@@ -248,11 +292,9 @@ export function PublicSidebar() {
         </div>
       </div>
 
-      {/* Mobile Drawer */}
       <AnimatePresence>
         {mobileMenuOpen && (
           <>
-            {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -260,8 +302,7 @@ export function PublicSidebar() {
               onClick={() => setMobileMenuOpen(false)}
               className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm lg:hidden"
             />
-            
-            {/* Drawer */}
+
             <motion.aside
               initial={{ x: "-100%" }}
               animate={{ x: 0 }}
@@ -287,7 +328,7 @@ export function PublicSidebar() {
                   <X className="h-5 w-5" />
                 </button>
               </div>
-              
+
               <div className="flex-1 overflow-y-auto">
                 <SidebarContent onLinkClick={() => setMobileMenuOpen(false)} />
               </div>

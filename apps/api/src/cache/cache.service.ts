@@ -36,6 +36,12 @@ if redis.call("GET", KEYS[1]) == ARGV[1] then
 end
 return 0
 `;
+  private static readonly RENEW_LOCK_LUA = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+`;
 
   constructor() {
     this.redis.on("ready", () => {
@@ -237,6 +243,25 @@ return 0
       return false;
     }
     this.memoryLocks.delete(namespaced);
+    return true;
+  }
+
+  async renewLock(key: string, owner: string, ttlMs: number) {
+    const namespaced = `lock:${key}`;
+    if (this.redisAvailable) {
+      try {
+        const response = await this.redis.eval(CacheService.RENEW_LOCK_LUA, 1, namespaced, owner, String(ttlMs));
+        return response === 1;
+      } catch {
+        this.redisAvailable = false;
+      }
+    }
+
+    const existing = this.memoryLocks.get(namespaced);
+    if (!existing || existing.owner !== owner || existing.expiresAtMs <= this.now()) {
+      return false;
+    }
+    existing.expiresAtMs = this.now() + ttlMs;
     return true;
   }
 
