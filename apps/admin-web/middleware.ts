@@ -99,7 +99,13 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isLoginPage) {
-    const response = NextResponse.next();
+    const headers = new Headers(request.headers);
+    headers.set("x-admin-login-page", "1");
+    const response = NextResponse.next({
+      request: {
+        headers
+      }
+    });
     clearSessionCookies(response);
     return response;
   }

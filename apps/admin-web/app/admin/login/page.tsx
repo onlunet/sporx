@@ -1,11 +1,12 @@
-interface AdminLoginPageProps {
+﻿interface AdminLoginPageProps {
   searchParams: Promise<{ next?: string; error?: string; loggedOut?: string }>;
 }
 
 const errorText: Record<string, string> = {
-  missing_fields: "E-posta ve şifre zorunludur.",
-  invalid_credentials: "E-posta veya şifre hatalı.",
-  unauthorized_role: "Bu hesap yönetim paneline erişemez."
+  missing_fields: "E-posta ve sifre zorunludur.",
+  invalid_credentials: "E-posta veya sifre hatali.",
+  unauthorized_role: "Bu hesap yonetim paneline erisemez.",
+  session_validation_failed: "Oturum yapilandirmasi hatali. Admin ve API JWT_ACCESS_SECRET ayni olmali."
 };
 
 function sanitizeNextPath(value?: string) {
@@ -18,7 +19,7 @@ function sanitizeNextPath(value?: string) {
 export default async function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
   const params = await searchParams;
   const nextPath = sanitizeNextPath(params.next);
-  const error = params.error ? errorText[params.error] ?? "Giriş işlemi başarısız oldu." : null;
+  const error = params.error ? errorText[params.error] ?? "GiriÅŸ iÅŸlemi baÅŸarÄ±sÄ±z oldu." : null;
 
   return (
     <div className="w-full max-w-md">
@@ -31,8 +32,8 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-admin-text-primary">Yönetici Girişi</h1>
-          <p className="mt-2 text-sm text-admin-text-secondary">SPORX Admin Paneline hoş geldiniz</p>
+          <h1 className="text-2xl font-bold text-admin-text-primary">YÃ¶netici GiriÅŸi</h1>
+          <p className="mt-2 text-sm text-admin-text-secondary">SPORX Admin Paneline hoÅŸ geldiniz</p>
         </div>
 
         {/* Alerts */}
@@ -41,7 +42,7 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
             <svg className="w-5 h-5 text-admin-success flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
-            <span className="text-sm text-admin-success">Oturum başarıyla kapatıldı.</span>
+            <span className="text-sm text-admin-success">Oturum baÅŸarÄ±yla kapatÄ±ldÄ±.</span>
           </div>
         )}
         
@@ -81,7 +82,7 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
 
           <div className="space-y-2">
             <label className="block text-sm font-medium text-admin-text-primary">
-              Şifre
+              Åifre
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -93,7 +94,7 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
                 type="password"
                 name="password"
                 autoComplete="current-password"
-                placeholder="••••••••"
+                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                 required
                 className="w-full pl-10 pr-4 py-3 bg-admin-bg-tertiary border border-admin-border-subtle rounded-lg text-admin-text-primary placeholder-admin-text-muted focus:outline-none focus:border-admin-brand-primary focus:ring-1 focus:ring-admin-brand-primary transition-all"
               />
@@ -104,18 +105,19 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
             type="submit"
             className="w-full py-3 px-4 bg-gradient-to-r from-admin-brand-primary to-admin-brand-secondary text-white font-semibold rounded-lg hover:opacity-90 transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-admin-brand-primary/25"
           >
-            Giriş Yap
+            GiriÅŸ Yap
           </button>
         </form>
 
         {/* Footer */}
         <div className="mt-8 pt-6 border-t border-admin-border-subtle text-center">
           <p className="text-xs text-admin-text-muted">
-            Sadece yetkili kullanıcılar erişebilir. <br/>
-            Yetkisiz giriş denemeleri kaydedilmektedir.
+            Sadece yetkili kullanÄ±cÄ±lar eriÅŸebilir. <br/>
+            Yetkisiz giriÅŸ denemeleri kaydedilmektedir.
           </p>
         </div>
       </div>
     </div>
   );
 }
+

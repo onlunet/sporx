@@ -4,6 +4,7 @@ import {
   ADMIN_ALLOWED_ROLES,
   ADMIN_REFRESH_COOKIE_NAME,
   INTERNAL_API_URL,
+  validateAdminAccessToken,
 } from "../../../../src/auth/admin-session";
 import { buildExternalUrl, isSecureExternalRequest } from "../../../../src/server/request-url";
 
@@ -52,6 +53,11 @@ export async function POST(request: NextRequest) {
 
   if (!accessToken || !refreshToken || !role || !ADMIN_ALLOWED_ROLES.has(role)) {
     return buildLoginRedirect(request, nextPath, "unauthorized_role");
+  }
+
+  const validatedAccess = await validateAdminAccessToken(accessToken);
+  if (!validatedAccess.ok) {
+    return buildLoginRedirect(request, nextPath, "session_validation_failed");
   }
 
   const destination = buildExternalUrl(request, nextPath);
