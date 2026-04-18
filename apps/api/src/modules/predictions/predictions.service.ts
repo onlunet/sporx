@@ -392,6 +392,37 @@ type PredictionRunFallbackRecord = {
   match: LegacyPredictionRecord["match"];
 };
 
+const SYNTHETIC_SUMMARY_MARKER = "Yayinlanmis tahmin kaydi bulunamadigi";
+
+function hasSyntheticSummary(value: unknown): boolean {
+  return typeof value === "string" && value.includes(SYNTHETIC_SUMMARY_MARKER);
+}
+
+function areLegacyRowsSyntheticOnly(rows: LegacyPredictionRecord[]): boolean {
+  return rows.length > 0 && rows.every((row) => hasSyntheticSummary(row.summary));
+}
+
+function isSyntheticExpandedPayload(items: unknown[]): boolean {
+  if (items.length === 0) {
+    return false;
+  }
+  let summaryCount = 0;
+  let syntheticCount = 0;
+  for (const item of items.slice(0, 80)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const summary = (item as Record<string, unknown>).summary;
+    if (typeof summary === "string" && summary.length > 0) {
+      summaryCount += 1;
+      if (hasSyntheticSummary(summary)) {
+        syntheticCount += 1;
+      }
+    }
+  }
+  return summaryCount > 0 && syntheticCount === summaryCount;
+}
+
 const PUBLISHED_PREDICTION_INCLUDE = {
   predictionRun: {
     select: {
@@ -1080,7 +1111,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v14:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v15:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -1187,12 +1218,17 @@ export class PredictionsService {
       normalizedRows = rows.map((row) => normalizePublishedRow(row));
       if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
         const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take);
-        if (legacyRows.length > 0) {
+        if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
           this.logger.warn(
             `Public predictions fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
           );
           normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
         } else {
+          if (legacyRows.length > 0) {
+            this.logger.warn(
+              `Legacy fallback skipped because rows are synthetic-only; trying prediction-run fallback (status=${statusKey}, sport=${sportKey}).`
+            );
+          }
           const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
           if (runRows.length > 0) {
             this.logger.warn(
@@ -1212,20 +1248,25 @@ export class PredictionsService {
       }
     } catch {
       const stale = await this.cache.get<unknown[]>(stableCacheKey);
-      if (stale) {
+      if (stale && !isSyntheticExpandedPayload(stale)) {
         await this.cache.set(cacheKey, stale, 12, ["predictions", "market-analysis"]);
         return stale;
+      }
+      if (stale && isSyntheticExpandedPayload(stale)) {
+        this.logger.warn(
+          `Synthetic stale cache ignored for predictions list (status=${statusKey}, sport=${sportKey}, take=${take}).`
+        );
       }
       if (!this.allowLegacyPublicFallback) {
         return [];
       }
-      const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
-      if (legacyRows.length > 0) {
-        normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
+      if (runRows.length > 0) {
+        normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
       } else {
-        const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
-        if (runRows.length > 0) {
-          normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
+        if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
+          normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
         } else {
           const syntheticMatches = await queryWithTimeout(
             this.prisma.match.findMany({
@@ -1307,9 +1348,14 @@ export class PredictionsService {
 
     if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
       const legacyRows = await this.fetchLegacyRowsByMatch(matchId);
-      if (legacyRows.length > 0) {
+      if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
         normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
       } else {
+        if (legacyRows.length > 0) {
+          this.logger.warn(
+            `Legacy by-match fallback skipped because rows are synthetic-only; trying prediction-run fallback (matchId=${matchId}).`
+          );
+        }
         const runRows = await this.fetchPredictionRunRowsByMatch(matchId);
         if (runRows.length > 0) {
           normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
