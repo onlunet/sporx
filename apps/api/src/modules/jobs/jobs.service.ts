@@ -44,7 +44,8 @@ type SchedulerLockState = {
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
-  private readonly isWorker = (process.env.SERVICE_ROLE ?? "api") === "worker";
+  // Run scheduler by default when SERVICE_ROLE is missing; explicit SERVICE_ROLE=api can still disable it.
+  private readonly isWorker = (process.env.SERVICE_ROLE ?? "worker") === "worker";
   private readonly tickMs = this.readSchedulerTickMs();
   private readonly staleThresholdMs = this.readStaleThresholdMs();
   private readonly staleRecoveryIntervalMs = this.readStaleRecoveryIntervalMs();

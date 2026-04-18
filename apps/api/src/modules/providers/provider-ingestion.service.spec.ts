@@ -16,6 +16,12 @@ function createService() {
         seen.add(String(data.entityType));
         return data;
       })
+    },
+    prediction: {
+      upsert: jest.fn().mockResolvedValue({ id: "prediction-1" })
+    },
+    predictionExplanation: {
+      upsert: jest.fn().mockResolvedValue({ id: "explanation-1" })
     }
   };
 
@@ -123,5 +129,37 @@ describe("ProviderIngestionService phase triggers", () => {
       matchIds: ["match-3"],
       reason: "phase_trigger_fulltime"
     });
+  });
+
+  it("persists legacy prediction compatibility payload for real public fallback", async () => {
+    const { service, prisma } = createService();
+
+    await (service as any).upsertLegacyPredictionCompatibility({
+      matchId: "match-legacy",
+      modelVersionId: "model-legacy",
+      probabilities: { home: 0.55, draw: 0.24, away: 0.21 },
+      calibratedProbabilities: { home: 0.54, draw: 0.25, away: 0.21 },
+      rawProbabilities: { home: 0.56, draw: 0.23, away: 0.21 },
+      expectedScore: { home: 1.6, away: 1.1 },
+      rawConfidenceScore: 0.58,
+      calibratedConfidenceScore: 0.57,
+      confidenceScore: 0.56,
+      summary: "legacy uyumluluk tahmini",
+      riskFlags: [],
+      isRecommended: false,
+      isLowConfidence: false,
+      avoidReason: null
+    });
+
+    expect((prisma as any).prediction.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { matchId: "match-legacy" }
+      })
+    );
+    expect((prisma as any).predictionExplanation.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { predictionId: "prediction-1" }
+      })
+    );
   });
 });

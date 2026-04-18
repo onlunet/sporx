@@ -694,6 +694,7 @@ async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Prom
 export class PredictionsService {
   private readonly logger = new Logger(PredictionsService.name);
   private readonly allowLegacyPublicFallback = process.env.PUBLIC_PREDICTIONS_LEGACY_FALLBACK !== "0";
+  private readonly allowSyntheticPublicFallback = process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK === "1";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1115,7 +1116,25 @@ export class PredictionsService {
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
-      return cached;
+      if (!this.allowSyntheticPublicFallback && isSyntheticExpandedPayload(cached)) {
+        this.logger.warn(
+          `Synthetic cache ignored for predictions list (status=${statusKey}, sport=${sportKey}, take=${take}).`
+        );
+      } else {
+        return cached;
+      }
+    }
+
+    const stableCached = await this.cache.get<unknown[]>(stableCacheKey);
+    if (stableCached) {
+      if (!this.allowSyntheticPublicFallback && isSyntheticExpandedPayload(stableCached)) {
+        this.logger.warn(
+          `Synthetic stable cache ignored for predictions list (status=${statusKey}, sport=${sportKey}, take=${take}).`
+        );
+      } else {
+        await this.cache.set(cacheKey, stableCached, 20, ["predictions", "market-analysis"]);
+        return stableCached;
+      }
     }
 
     let normalizedRows: NormalizedPredictionRow[] = [];
@@ -1238,7 +1257,7 @@ export class PredictionsService {
           }
         }
       }
-      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
+      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback && this.allowSyntheticPublicFallback) {
         normalizedRows = this.buildSyntheticRowsFromMatches(relevantMatches, sportCode);
         if (normalizedRows.length > 0) {
           this.logger.warn(
@@ -1267,7 +1286,7 @@ export class PredictionsService {
         const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
         if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
           normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
-        } else {
+        } else if (this.allowSyntheticPublicFallback) {
           const syntheticMatches = await queryWithTimeout(
             this.prisma.match.findMany({
               where: {
