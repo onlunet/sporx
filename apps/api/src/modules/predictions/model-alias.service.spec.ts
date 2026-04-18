@@ -85,4 +85,29 @@ describe("ModelAliasService", () => {
     expect(result.modelVersionId).toBe("active-model");
     expect(result.resolvedViaAlias).toBe(false);
   });
+
+  it("falls back to active model when model_aliases table is missing", async () => {
+    prisma.modelAlias.findMany.mockRejectedValueOnce(
+      Object.assign(new Error("The table `public.model_aliases` does not exist in the current database."), {
+        code: "P2021"
+      })
+    );
+    prisma.modelVersion.findFirst.mockResolvedValueOnce({
+      id: "active-model"
+    });
+
+    const service = new ModelAliasService(prisma, cache);
+    const result = await service.resolveServingAlias({
+      sport: "football",
+      market: "match_outcome",
+      line: null,
+      lineKey: "na",
+      horizon: "post_match",
+      leagueId: null
+    });
+
+    expect(result.modelVersionId).toBe("active-model");
+    expect(result.resolvedViaAlias).toBe(false);
+    expect(cache.set).toHaveBeenCalled();
+  });
 });

@@ -22,6 +22,15 @@ export class ModelAliasService {
     return leagueId && leagueId.trim().length > 0 ? leagueId.trim() : "global";
   }
 
+  private isModelAliasSchemaMissing(error: unknown) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "P2021" || code === "P2022") {
+      return true;
+    }
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
+    return message.includes("model_aliases") && (message.includes("does not exist") || message.includes("unknown"));
+  }
+
   private toBoolean(value: Prisma.JsonValue | unknown, fallback: boolean): boolean {
     if (typeof value === "boolean") {
       return value;
@@ -182,18 +191,35 @@ export class ModelAliasService {
       return cached;
     }
 
-    const candidates = await this.prisma.modelAlias.findMany({
-      where: {
-        sportCode: normalizedScope.sport,
-        market: normalizedScope.market,
-        lineKey: normalizedScope.lineKey,
-        horizon: normalizedScope.horizon,
-        aliasType,
-        isActive: true,
-        scopeLeagueKey: { in: [leagueScopeKey, "global"] }
-      },
-      orderBy: [{ scopeLeagueKey: "desc" }, { updatedAt: "desc" }]
-    });
+    let candidates: Array<{
+      aliasType: ServingAliasType;
+      modelVersionId: string;
+      calibrationVersionId: string | null;
+      featureSetVersion: string | null;
+      policyVersion: string | null;
+      scopeLeagueKey: string;
+    }> = [];
+    try {
+      candidates = await this.prisma.modelAlias.findMany({
+        where: {
+          sportCode: normalizedScope.sport,
+          market: normalizedScope.market,
+          lineKey: normalizedScope.lineKey,
+          horizon: normalizedScope.horizon,
+          aliasType,
+          isActive: true,
+          scopeLeagueKey: { in: [leagueScopeKey, "global"] }
+        },
+        orderBy: [{ scopeLeagueKey: "desc" }, { updatedAt: "desc" }]
+      });
+    } catch (error) {
+      if (!this.isModelAliasSchemaMissing(error)) {
+        throw error;
+      }
+      const fallback = await this.fallbackActiveModel();
+      await this.cache.set(cacheKey, fallback, 30, ["model-lifecycle"]);
+      return fallback;
+    }
 
     const selected =
       candidates.find((item) => item.scopeLeagueKey === leagueScopeKey) ??

@@ -30,6 +30,10 @@ type MatchStubRecord = {
   awayScore: number | null;
   halfTimeHomeScore: number | null;
   halfTimeAwayScore: number | null;
+  homeTeam: { name: string };
+  awayTeam: { name: string };
+  league: { id: string; name: string; code: string | null } | null;
+  sport: { code: string } | null;
 };
 
 const MATCH_STATUS_SET = new Set<MatchStatus>([
@@ -902,7 +906,7 @@ export class PredictionsService {
         avoidReason: null,
         updatedAt: new Date(),
         match: {
-          sport: { code: safeSportCode },
+          sport: { code: match.sport?.code ?? safeSportCode },
           status: match.status,
           matchDateTimeUTC: match.matchDateTimeUTC,
           homeScore: match.homeScore,
@@ -917,9 +921,9 @@ export class PredictionsService {
           q3AwayScore: null,
           q4HomeScore: null,
           q4AwayScore: null,
-          homeTeam: { name: `Ev Takim ${index + 1}` },
-          awayTeam: { name: `Deplasman Takim ${index + 1}` },
-          league: null
+          homeTeam: { name: safeTeamName(match.homeTeam?.name, `Ev Takim ${index + 1}`) },
+          awayTeam: { name: safeTeamName(match.awayTeam?.name, `Deplasman Takim ${index + 1}`) },
+          league: match.league ?? null
         }
       } satisfies NormalizedPredictionRow;
     });
@@ -1102,7 +1106,11 @@ export class PredictionsService {
                   homeScore: true,
                   awayScore: true,
                   halfTimeHomeScore: true,
-                  halfTimeAwayScore: true
+                  halfTimeAwayScore: true,
+                  homeTeam: { select: { name: true } },
+                  awayTeam: { select: { name: true } },
+                  league: { select: { id: true, name: true, code: true } },
+                  sport: { select: { code: true } }
                 },
                 orderBy: { matchDateTimeUTC: "desc" },
                 take: targetTake
@@ -1126,7 +1134,11 @@ export class PredictionsService {
                           homeScore: true,
                           awayScore: true,
                           halfTimeHomeScore: true,
-                          halfTimeAwayScore: true
+                          halfTimeAwayScore: true,
+                          homeTeam: { select: { name: true } },
+                          awayTeam: { select: { name: true } },
+                          league: { select: { id: true, name: true, code: true } },
+                          sport: { select: { code: true } }
                         },
                         orderBy: { matchDateTimeUTC: "desc" },
                         take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
@@ -1228,7 +1240,11 @@ export class PredictionsService {
                 homeScore: true,
                 awayScore: true,
                 halfTimeHomeScore: true,
-                halfTimeAwayScore: true
+                halfTimeAwayScore: true,
+                homeTeam: { select: { name: true } },
+                awayTeam: { select: { name: true } },
+                league: { select: { id: true, name: true, code: true } },
+                sport: { select: { code: true } }
               },
               orderBy: { matchDateTimeUTC: "desc" },
               take: Math.max(take, 60)
