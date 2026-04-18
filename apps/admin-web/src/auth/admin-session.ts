@@ -1,9 +1,9 @@
 import { jwtVerify } from "jose";
+import { fetchInternalApi } from "../server/internal-api";
 
 export const ADMIN_ACCESS_COOKIE_NAME = "admin_access_token";
 export const ADMIN_REFRESH_COOKIE_NAME = "admin_refresh_token";
 export const ADMIN_ALLOWED_ROLES = new Set(["super_admin", "admin", "analyst", "viewer"]);
-export const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 type RefreshEnvelope = {
   success?: boolean;
@@ -45,14 +45,18 @@ export async function refreshAdminTokens(refreshToken?: string) {
 
   let response: Response;
   try {
-    response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
+    response = await fetchInternalApi(
+      "/api/v1/auth/refresh",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
+        cache: "no-store"
       },
-      body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
-      cache: "no-store"
-    });
+      { allowPublicProxyFallback: true }
+    );
   } catch {
     return null;
   }

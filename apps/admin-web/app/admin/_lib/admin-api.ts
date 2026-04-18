@@ -1,6 +1,5 @@
 ﻿import { cookies } from "next/headers";
-
-const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { fetchInternalApi } from "../../../src/server/internal-api";
 
 type Envelope<T> = {
   success: boolean;
@@ -71,7 +70,7 @@ export async function adminApiGet<T>(path: string): Promise<AdminApiResult<T>> {
 
   let response: Response;
   try {
-    response = await fetch(`${INTERNAL_API_URL}${path}`, {
+    response = await fetchInternalApi(path, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`
@@ -145,7 +144,7 @@ export async function adminApiPost<T>(path: string, body: Record<string, unknown
 
   let response: Response;
   try {
-    response = await fetch(`${INTERNAL_API_URL}${path}`, {
+    response = await fetchInternalApi(path, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,

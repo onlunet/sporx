@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { INTERNAL_API_URL } from "../../../../../src/auth/admin-session";
+import { fetchInternalApi } from "../../../../../src/server/internal-api";
 import { buildExternalUrl } from "../../../../../src/server/request-url";
 import { applySessionRefreshCookies, clearSessionCookies, resolveAdminSession } from "../../_lib/session";
 
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const updateProviderResponse = await fetch(`${INTERNAL_API_URL}/api/v1/admin/providers/${providerKey}`, {
+  const updateProviderResponse = await fetchInternalApi(`/api/v1/admin/providers/${providerKey}`, {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     basketballLeagueId
   };
 
-  const updateConfigResponse = await fetch(`${INTERNAL_API_URL}/api/v1/admin/providers/${providerKey}/configs`, {
+  const updateConfigResponse = await fetchInternalApi(`/api/v1/admin/providers/${providerKey}/configs`, {
     method: "PATCH",
     headers: {
       "content-type": "application/json",

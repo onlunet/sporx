@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ADMIN_ACCESS_COOKIE_NAME, ADMIN_REFRESH_COOKIE_NAME, INTERNAL_API_URL } from "../../../../src/auth/admin-session";
+import { ADMIN_ACCESS_COOKIE_NAME, ADMIN_REFRESH_COOKIE_NAME } from "../../../../src/auth/admin-session";
+import { fetchInternalApi } from "../../../../src/server/internal-api";
 import { buildExternalUrl } from "../../../../src/server/request-url";
 
 export async function POST(request: NextRequest) {
@@ -7,12 +8,16 @@ export async function POST(request: NextRequest) {
 
   if (refreshToken) {
     try {
-      await fetch(`${INTERNAL_API_URL}/api/v1/auth/logout`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
-        cache: "no-store"
-      });
+      await fetchInternalApi(
+        "/api/v1/auth/logout",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+          cache: "no-store"
+        },
+        { allowPublicProxyFallback: true }
+      );
     } catch {
       // Logout should still complete in frontend even when backend is temporarily unreachable.
     }

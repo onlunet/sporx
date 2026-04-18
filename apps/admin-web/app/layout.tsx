@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "SPORX Admin",
-  description: "SPORX Yonetim Paneli"
+  description: "SPORX Yönetim Paneli"
 };
 
 export default async function RootLayout({

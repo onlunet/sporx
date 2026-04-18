@@ -3,9 +3,9 @@ import {
   ADMIN_ACCESS_COOKIE_NAME,
   ADMIN_ALLOWED_ROLES,
   ADMIN_REFRESH_COOKIE_NAME,
-  INTERNAL_API_URL,
   validateAdminAccessToken,
 } from "../../../../src/auth/admin-session";
+import { fetchInternalApi } from "../../../../src/server/internal-api";
 import { buildExternalUrl, isSecureExternalRequest } from "../../../../src/server/request-url";
 
 function sanitizeNextPath(value: string | null): string {
@@ -34,12 +34,16 @@ export async function POST(request: NextRequest) {
 
   let response: Response;
   try {
-    response = await fetch(`${INTERNAL_API_URL}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password, actorType: "ADMIN" }),
-      cache: "no-store"
-    });
+    response = await fetchInternalApi(
+      "/api/v1/auth/login",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password, actorType: "ADMIN" }),
+        cache: "no-store"
+      },
+      { allowPublicProxyFallback: true }
+    );
   } catch {
     return buildLoginRedirect(request, nextPath, "auth_service_unreachable");
   }

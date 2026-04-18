@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { INTERNAL_API_URL } from "../../../../../src/auth/admin-session";
+import { fetchInternalApi } from "../../../../../src/server/internal-api";
 import { buildExternalUrl } from "../../../../../src/server/request-url";
 import { applySessionRefreshCookies, clearSessionCookies, resolveAdminSession } from "../../_lib/session";
 
@@ -135,7 +135,7 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const apiResponse = await fetch(`${INTERNAL_API_URL}/api/v1/admin/system/settings`, {
+  const apiResponse = await fetchInternalApi("/api/v1/admin/system/settings", {
     method: "PATCH",
     headers: {
       "content-type": "application/json",
