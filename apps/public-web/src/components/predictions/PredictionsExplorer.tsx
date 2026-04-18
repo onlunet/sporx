@@ -7,6 +7,7 @@ import {
   MatchPredictionItem,
   PredictionType,
   predictionTypeLabel,
+  predictionSelectionLabel,
   usePredictionsByType,
   bestScorelineSummary,
   isCompletedMatchStatus,
@@ -108,9 +109,10 @@ function probabilitySummary(item: MatchPredictionItem, sport?: SportScope) {
     ];
   }
   if (typeof p.yes === "number" || typeof p.no === "number") {
+    const isBtts = item.predictionType === "bothTeamsToScore";
     return [
-      { label: "Evet", value: Math.round((p.yes ?? 0) * 100), color: "bg-neon-green" },
-      { label: "Hayir", value: Math.round((p.no ?? 0) * 100), color: "bg-neon-red" }
+      { label: isBtts ? "KG Var" : "Evet", value: Math.round((p.yes ?? 0) * 100), color: "bg-neon-green" },
+      { label: isBtts ? "KG Yok" : "Hayır", value: Math.round((p.no ?? 0) * 100), color: "bg-neon-red" }
     ];
   }
   if (typeof p.over === "number" || typeof p.under === "number") {
@@ -272,6 +274,7 @@ function marketDirectionLabel(direction?: string) {
 function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; index: number; sport?: SportScope }) {
   const topScore = bestScorelineSummary(item);
   const probs = probabilitySummary(item, sport);
+  const ticketLabel = predictionSelectionLabel(item) ?? predictionBadgeLabel(item.predictionType, sport);
   const confidence = item.confidenceScore ?? 0;
   const confidenceGradient = getConfidenceColor(confidence);
   const matchState = resolveMatchState(item);
@@ -310,14 +313,12 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
           <div className="flex items-start justify-between gap-4 mb-4">
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider bg-neon-amber/10 text-neon-amber border border-neon-amber/20">
+                  {ticketLabel}
+                </span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider uppercase bg-white/5 text-slate-400 border border-white/10">
                   {predictionBadgeLabel(item.predictionType, sport)}
                 </span>
-                {item.line !== undefined && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider bg-neon-amber/10 text-neon-amber border border-neon-amber/20">
-                    Çizgi {item.line.toFixed(1)}
-                  </span>
-                )}
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-display tracking-wider border ${matchState.className}`}>
                   {matchState.label}
                 </span>
@@ -338,6 +339,7 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
                   </span>
                 </div>
               )}
+              <p className="mt-1 text-xs text-neon-amber/90">Tahmin: {ticketLabel}</p>
               {scoreText && matchState.isPlayed ? (
                 <p className="mt-1 text-xs text-emerald-300">{sport === "basketball" ? "Maç Skoru" : "Maç Sonucu"}: {scoreText}</p>
               ) : null}
@@ -871,3 +873,4 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
     </div>
   );
 }
+

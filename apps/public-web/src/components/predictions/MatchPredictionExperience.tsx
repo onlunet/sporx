@@ -10,7 +10,8 @@ import {
   nextAvailableTab,
   useMatchCommentary,
   useMatchPredictions,
-  fallbackOverUnderLines
+  fallbackOverUnderLines,
+  predictionSelectionLabel
 } from "../../features/predictions";
 import { PredictionSummaryBar } from "./PredictionSummaryBar";
 import { PredictionTypeTabs } from "./PredictionTypeTabs";
@@ -82,6 +83,7 @@ export function MatchPredictionExperience({ matchId, initialPrediction, sport = 
     grouped.totalGoalsOverUnder?.[0] ??
     grouped.bothTeamsToScore?.[0] ??
     predictions[0];
+  const generalSelectionLabel = predictionSelectionLabel(generalPrediction);
 
   const overUnderItems = fallbackOverUnderLines(grouped.totalGoalsOverUnder ?? []);
   const availableLines = Array.from(
@@ -142,6 +144,7 @@ export function MatchPredictionExperience({ matchId, initialPrediction, sport = 
               </h4>
               <PredictionConfidenceBadge prediction={generalPrediction} />
             </div>
+            {generalSelectionLabel ? <p className="text-xs text-neon-amber">Tahmin: {generalSelectionLabel}</p> : null}
 
             <div className={`grid grid-cols-1 gap-3 ${showOvertime || sport === "football" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
               <ProbabilityRow label={sport === "basketball" ? "Ev Kazanır" : "Ev Sahibi"} value={generalPrediction?.probabilities?.home} />
