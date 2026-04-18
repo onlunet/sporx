@@ -75,6 +75,54 @@ function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return fallback;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return fallback;
+}
+
+function asString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return fallback;
+}
+
+function asNullableString(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return null;
+}
+
 export default async function ShadowPipelinePage() {
   const [comparisonResult, leakageResult, failureResult, duplicateResult, rolloutResult] = await Promise.all([
     adminApiGet<ShadowComparisonResponse>("/api/v1/admin/predictions/shadow/comparison"),
@@ -84,11 +132,101 @@ export default async function ShadowPipelinePage() {
     adminApiGet<RolloutResponse>("/api/v1/admin/predictions/rollout")
   ]);
 
-  const comparison = comparisonResult.ok && comparisonResult.data ? comparisonResult.data : null;
-  const leakage = leakageResult.ok && leakageResult.data ? leakageResult.data : null;
-  const failures = failureResult.ok && failureResult.data ? failureResult.data : null;
-  const duplicates = duplicateResult.ok && duplicateResult.data ? duplicateResult.data : null;
-  const rollout = rolloutResult.ok && rolloutResult.data ? rolloutResult.data : null;
+  const comparisonObj = comparisonResult.ok ? asRecord(comparisonResult.data) : null;
+  const comparisonSummaryObj = asRecord(comparisonObj?.summary);
+  const comparison =
+    comparisonObj && comparisonSummaryObj
+      ? ({
+          summary: {
+            sampleSize: asNumber(comparisonSummaryObj.sampleSize),
+            coverageRate: asNumber(comparisonSummaryObj.coverageRate),
+            oddsCoverageRate: asNumber(comparisonSummaryObj.oddsCoverageRate),
+            duplicateRate: asNumber(comparisonSummaryObj.duplicateRate),
+            leakageRate: asNumber(comparisonSummaryObj.leakageRate),
+            avgLatencyMsNew: asNullableNumber(comparisonSummaryObj.avgLatencyMsNew),
+            avgOldLogLoss: asNullableNumber(comparisonSummaryObj.avgOldLogLoss),
+            avgNewLogLoss: asNullableNumber(comparisonSummaryObj.avgNewLogLoss),
+            avgOldBrier: asNullableNumber(comparisonSummaryObj.avgOldBrier),
+            avgNewBrier: asNullableNumber(comparisonSummaryObj.avgNewBrier)
+          },
+          rows: asArray<Record<string, unknown>>(comparisonObj.rows as Array<Record<string, unknown>> | null | undefined)
+        } satisfies ShadowComparisonResponse)
+      : null;
+
+  const leakageObj = leakageResult.ok ? asRecord(leakageResult.data) : null;
+  const leakageSummaryObj = asRecord(leakageObj?.summary);
+  const leakage =
+    leakageObj && leakageSummaryObj
+      ? ({
+          summary: {
+            checks: asNumber(leakageSummaryObj.checks),
+            violations: asNumber(leakageSummaryObj.violations),
+            violationRate: asNumber(leakageSummaryObj.violationRate),
+            sourceLeakRows: asNumber(leakageSummaryObj.sourceLeakRows),
+            oddsLeakRows: asNumber(leakageSummaryObj.oddsLeakRows)
+          },
+          rows: asArray<Record<string, unknown>>(leakageObj.rows as Array<Record<string, unknown>> | null | undefined)
+        } satisfies LeakageResponse)
+      : null;
+
+  const failuresObj = failureResult.ok ? asRecord(failureResult.data) : null;
+  const failureSummaryObj = asRecord(failuresObj?.summary);
+  const failures =
+    failuresObj && failureSummaryObj
+      ? ({
+          summary: { totalFailures: asNumber(failureSummaryObj.totalFailures) },
+          reasons: asArray<Record<string, unknown>>(failuresObj.reasons as Array<Record<string, unknown>> | null | undefined).map((row) => ({
+            errorCode: asString(row.errorCode, "UNKNOWN"),
+            count: asNumber(row.count)
+          })),
+          rows: asArray<Record<string, unknown>>(failuresObj.rows as Array<Record<string, unknown>> | null | undefined)
+        } satisfies FailureResponse)
+      : null;
+
+  const duplicatesObj = duplicateResult.ok ? asRecord(duplicateResult.data) : null;
+  const duplicateSummaryObj = asRecord(duplicatesObj?.summary);
+  const duplicates =
+    duplicatesObj && duplicateSummaryObj
+      ? ({
+          summary: {
+            dedupKeys: asNumber(duplicateSummaryObj.dedupKeys),
+            totalSuppressed: asNumber(duplicateSummaryObj.totalSuppressed)
+          },
+          rows: asArray<Record<string, unknown>>(duplicatesObj.rows as Array<Record<string, unknown>> | null | undefined).map((row) => ({
+            dedupKey: asString(row.dedupKey),
+            suppressedCount: asNumber(row.suppressedCount),
+            horizon: asNullableString(row.horizon),
+            market: asNullableString(row.market),
+            lastSuppressedAt: asString(row.lastSuppressedAt)
+          }))
+        } satisfies DuplicateResponse)
+      : null;
+
+  const rolloutObj = rolloutResult.ok ? asRecord(rolloutResult.data) : null;
+  const rolloutSettingsObj = asRecord(rolloutObj?.settings);
+  const rollout =
+    rolloutObj && rolloutSettingsObj
+      ? ({
+          settings: {
+            mode:
+              asString(rolloutSettingsObj.mode) === "legacy" ||
+              asString(rolloutSettingsObj.mode) === "new" ||
+              asString(rolloutSettingsObj.mode) === "shadow" ||
+              asString(rolloutSettingsObj.mode) === "percentage"
+                ? (asString(rolloutSettingsObj.mode) as "legacy" | "new" | "shadow" | "percentage")
+                : "legacy",
+            percentage: asNumber(rolloutSettingsObj.percentage),
+            internalOnly: asBoolean(rolloutSettingsObj.internalOnly),
+            emergencyRollback: asBoolean(rolloutSettingsObj.emergencyRollback)
+          },
+          sourcePreview: asArray<Record<string, unknown>>(
+            rolloutObj.sourcePreview as Array<Record<string, unknown>> | null | undefined
+          ).map((row) => ({
+            seed: asString(row.seed),
+            source: asString(row.source) === "published" ? "published" : "legacy"
+          }))
+        } satisfies RolloutResponse)
+      : null;
 
   const anyError = [comparisonResult, leakageResult, failureResult, duplicateResult, rolloutResult].some(
     (item) => !item.ok
