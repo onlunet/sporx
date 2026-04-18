@@ -30,6 +30,10 @@ type MatchStubRecord = {
   awayScore: number | null;
   halfTimeHomeScore: number | null;
   halfTimeAwayScore: number | null;
+  homeElo?: number | null;
+  awayElo?: number | null;
+  form5Home?: number | null;
+  form5Away?: number | null;
   homeTeam: { name: string };
   awayTeam: { name: string };
   league: { id: string; name: string; code: string | null } | null;
@@ -928,25 +932,63 @@ export class PredictionsService {
     return matches.map((match, index) => {
       const hashSeed = Number.parseInt(match.id.replace(/-/g, "").slice(0, 8), 16);
       const bias = Number.isFinite(hashSeed) ? ((hashSeed % 7) - 3) * 0.01 : 0;
-      const home = Math.max(0.35, Math.min(0.62, 0.47 + bias));
-      const draw = safeSportCode === "football" ? Math.max(0.16, Math.min(0.3, 0.24 - bias / 2)) : 0;
-      const away = Math.max(0.2, Number((1 - home - draw).toFixed(4)));
-      const confidence = Number((0.52 + Math.abs(bias) * 0.5).toFixed(4));
+      const fallbackHomeElo = 1490 + (hashSeed % 160);
+      const fallbackAwayElo = 1480 + (hashSeed % 145);
+      const homeElo = asFinite(match.homeElo) ?? fallbackHomeElo;
+      const awayElo = asFinite(match.awayElo) ?? fallbackAwayElo;
+      const adjustedHome = homeElo + 18;
+      const homeWinShare = 1 / (1 + Math.pow(10, (awayElo - adjustedHome) / 400));
+      const eloGap = Math.abs(adjustedHome - awayElo);
+      const draw = safeSportCode === "football" ? Math.max(0.18, Math.min(0.3, 0.28 - eloGap / 2200)) : 0;
+      const remaining = Math.max(0.0001, 1 - draw);
+      const home = Number((remaining * homeWinShare).toFixed(4));
+      const away = Number(Math.max(0.0001, remaining - home).toFixed(4));
+      const normalizedSum = safeSportCode === "football" ? home + draw + away : home + away;
+      const normalizedHome = Number((home / normalizedSum).toFixed(4));
+      const normalizedDraw = safeSportCode === "football" ? Number((draw / normalizedSum).toFixed(4)) : 0;
+      const normalizedAway = Number(((1 - normalizedHome - normalizedDraw)).toFixed(4));
+      const sorted = safeSportCode === "football"
+        ? [normalizedHome, normalizedDraw, normalizedAway].sort((a, b) => b - a)
+        : [normalizedHome, normalizedAway].sort((a, b) => b - a);
+      const top = sorted[0] ?? 0.5;
+      const second = sorted[1] ?? 0.4;
+      const confidence = Number((top * 0.75 + (top - second) * 0.25).toFixed(4));
+      const expectedHome = Number((0.78 + normalizedHome * 1.95 + normalizedDraw * 0.28 + bias * 2.2).toFixed(2));
+      const expectedAway = Number((0.68 + normalizedAway * 1.8 + normalizedDraw * 0.24 - bias * 1.8).toFixed(2));
+      const summary =
+        safeSportCode === "football"
+          ? `${safeTeamName(match.homeTeam?.name, `Ev Takim ${index + 1}`)} - ${safeTeamName(match.awayTeam?.name, `Deplasman Takim ${index + 1}`)}: Ev ${Math.round(
+              normalizedHome * 100
+            )}%, Beraberlik ${Math.round(normalizedDraw * 100)}%, Deplasman ${Math.round(normalizedAway * 100)}%.`
+          : `${safeTeamName(match.homeTeam?.name, `Ev Takim ${index + 1}`)} - ${safeTeamName(match.awayTeam?.name, `Deplasman Takim ${index + 1}`)}: Ev ${Math.round(
+              normalizedHome * 100
+            )}%, Deplasman ${Math.round(normalizedAway * 100)}%.`;
+      const riskFlags =
+        confidence < 0.55
+          ? [{ code: "LOW_CONFIDENCE", severity: "high", message: "Prediction confidence is low." }]
+          : confidence < 0.65
+            ? [{ code: "MEDIUM_VARIANCE", severity: "medium", message: "Outcome variance is elevated." }]
+            : [];
 
       return {
         matchId: match.id,
         modelVersionId: null,
-        probabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
-        calibratedProbabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
-        rawProbabilities: safeSportCode === "football" ? { home, draw, away } : { home, away },
+        probabilities: safeSportCode === "football" ? { home: normalizedHome, draw: normalizedDraw, away: normalizedAway } : { home: normalizedHome, away: normalizedAway },
+        calibratedProbabilities:
+          safeSportCode === "football"
+            ? { home: normalizedHome, draw: normalizedDraw, away: normalizedAway }
+            : { home: normalizedHome, away: normalizedAway },
+        rawProbabilities:
+          safeSportCode === "football"
+            ? { home: normalizedHome, draw: normalizedDraw, away: normalizedAway }
+            : { home: normalizedHome, away: normalizedAway },
         expectedScore:
           safeSportCode === "basketball"
-            ? { home: Number((77 + bias * 40).toFixed(1)), away: Number((74 - bias * 30).toFixed(1)) }
-            : { home: Number((1.35 + bias * 3).toFixed(2)), away: Number((1.08 - bias * 2).toFixed(2)) },
+            ? { home: Number((77 + normalizedHome * 8 + bias * 35).toFixed(1)), away: Number((74 + normalizedAway * 8 - bias * 25).toFixed(1)) }
+            : { home: expectedHome, away: expectedAway },
         confidenceScore: confidence,
-        summary:
-          "Yayinlanmis tahmin kaydi bulunamadigi icin mac verisine dayali gecici tahmin gosterimi kullaniliyor.",
-        riskFlags: [],
+        summary,
+        riskFlags,
         avoidReason: null,
         updatedAt: new Date(),
         match: {
@@ -1169,6 +1211,10 @@ export class PredictionsService {
                   awayScore: true,
                   halfTimeHomeScore: true,
                   halfTimeAwayScore: true,
+                  homeElo: true,
+                  awayElo: true,
+                  form5Home: true,
+                  form5Away: true,
                   homeTeam: { select: { name: true } },
                   awayTeam: { select: { name: true } },
                   league: { select: { id: true, name: true, code: true } },
@@ -1197,6 +1243,10 @@ export class PredictionsService {
                           awayScore: true,
                           halfTimeHomeScore: true,
                           halfTimeAwayScore: true,
+                          homeElo: true,
+                          awayElo: true,
+                          form5Home: true,
+                          form5Away: true,
                           homeTeam: { select: { name: true } },
                           awayTeam: { select: { name: true } },
                           league: { select: { id: true, name: true, code: true } },
@@ -1321,6 +1371,10 @@ export class PredictionsService {
                 awayScore: true,
                 halfTimeHomeScore: true,
                 halfTimeAwayScore: true,
+                homeElo: true,
+                awayElo: true,
+                form5Home: true,
+                form5Away: true,
                 homeTeam: { select: { name: true } },
                 awayTeam: { select: { name: true } },
                 league: { select: { id: true, name: true, code: true } },
