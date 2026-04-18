@@ -178,6 +178,21 @@ function createPredictionRunRow() {
   };
 }
 
+function createSyntheticPredictionRunRow() {
+  return {
+    ...createPredictionRunRow(),
+    explanationJson: {
+      summary: "Yayinlanmis tahmin kaydi bulunamadigi icin mac verisine dayali gecici tahmin gosterimi kullaniliyor.",
+      selectedSide: "home",
+      probabilities: {
+        home: 0.5,
+        draw: 0.25,
+        away: 0.25
+      }
+    }
+  };
+}
+
 describe("PredictionsService", () => {
   it("public match query returns one row per duplicate published tuple", async () => {
     const prisma = {
@@ -378,7 +393,9 @@ describe("PredictionsService", () => {
 
   it("list endpoint can use synthetic rows only when explicit flag is enabled", async () => {
     const previous = process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK;
+    const previousNodeEnv = process.env.NODE_ENV;
     process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK = "1";
+    process.env.NODE_ENV = "test";
     try {
       const prisma = {
         match: {
@@ -426,6 +443,80 @@ describe("PredictionsService", () => {
       expect(items.length).toBeGreaterThan(0);
       expect((items[0] as any)?.homeTeam).toContain("Ev Takim");
     } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previous === undefined) {
+        delete process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK;
+      } else {
+        process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK = previous;
+      }
+    }
+  });
+
+  it("list endpoint skips synthetic prediction-run fallback rows in production", async () => {
+    const previous = process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK;
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK = "1";
+    process.env.NODE_ENV = "production";
+
+    try {
+      const prisma = {
+        match: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: "match-run-1",
+              matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z"),
+              status: MatchStatus.scheduled,
+              homeScore: null,
+              awayScore: null,
+              halfTimeHomeScore: null,
+              halfTimeAwayScore: null,
+              homeTeam: { name: "Run A" },
+              awayTeam: { name: "Run B" },
+              league: { id: "league-run", name: "Run League", code: "RL" },
+              sport: { code: "football" }
+            }
+          ])
+        },
+        publishedPrediction: {
+          findMany: jest.fn().mockResolvedValue([])
+        },
+        prediction: {
+          findMany: jest.fn().mockResolvedValue([])
+        },
+        predictionRun: {
+          findMany: jest.fn().mockResolvedValue([createSyntheticPredictionRunRow()])
+        }
+      } as any;
+
+      const cache = {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn().mockResolvedValue(undefined)
+      } as unknown as CacheService;
+      const oddsService = {
+        attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+      } as unknown as OddsService;
+      const strategyRegistry = new PredictionSportStrategyRegistry(
+        new FootballPredictionStrategy(),
+        new BasketballPredictionStrategy()
+      );
+      const rollout = {
+        resolveSource: jest.fn().mockResolvedValue("published")
+      };
+
+      const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+      const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+      expect(items).toEqual([]);
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
       if (previous === undefined) {
         delete process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK;
       } else {

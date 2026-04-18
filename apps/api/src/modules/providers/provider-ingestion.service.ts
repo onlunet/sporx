@@ -214,6 +214,17 @@ export class ProviderIngestionService {
     return false;
   }
 
+  private isLegacyPredictionColumnCompatibilityError(error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2022") {
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      /(column|unknown arg|unknown field|does not exist)/i.test(message) &&
+      /(prediction|predictionexplanation|prediction_explanation)/i.test(message)
+    );
+  }
+
   private async upsertLegacyPredictionCompatibility(input: {
     matchId: string;
     modelVersionId: string | null;
@@ -230,77 +241,106 @@ export class ProviderIngestionService {
     isLowConfidence: boolean;
     avoidReason: string | null;
   }) {
-    try {
-      const prediction = await this.prisma.prediction.upsert({
+    const fullPredictionData = {
+      modelVersionId: input.modelVersionId,
+      probabilities: input.probabilities as Prisma.InputJsonValue,
+      expectedScore: input.expectedScore as Prisma.InputJsonValue,
+      rawProbabilities: input.rawProbabilities as Prisma.InputJsonValue,
+      calibratedProbabilities: input.calibratedProbabilities as Prisma.InputJsonValue,
+      rawConfidenceScore: input.rawConfidenceScore,
+      calibratedConfidenceScore: input.calibratedConfidenceScore,
+      confidenceScore: input.confidenceScore,
+      summary: input.summary,
+      riskFlags: input.riskFlags as Prisma.InputJsonValue,
+      isRecommended: input.isRecommended,
+      isLowConfidence: input.isLowConfidence,
+      avoidReason: input.avoidReason,
+      dataSource: "internal_prediction_engine",
+      updatedByProcess: "generatePredictions"
+    };
+    const compatibilityPredictionData = {
+      modelVersionId: input.modelVersionId,
+      probabilities: input.probabilities as Prisma.InputJsonValue,
+      expectedScore: input.expectedScore as Prisma.InputJsonValue,
+      confidenceScore: input.confidenceScore,
+      summary: input.summary,
+      riskFlags: input.riskFlags as Prisma.InputJsonValue,
+      avoidReason: input.avoidReason,
+      dataSource: "internal_prediction_engine"
+    };
+    const explanationContent = {
+      summary: input.summary,
+      probabilities: input.probabilities,
+      calibratedProbabilities: input.calibratedProbabilities,
+      rawProbabilities: input.rawProbabilities,
+      expectedScore: input.expectedScore,
+      riskFlags: input.riskFlags,
+      avoidReason: input.avoidReason,
+      confidenceScore: input.confidenceScore,
+      source: "internal_prediction_engine"
+    } as Prisma.InputJsonValue;
+
+    const persistPrediction = async (
+      data: Prisma.PredictionUncheckedCreateInput | Prisma.PredictionUncheckedUpdateInput
+    ) => {
+      const existing = await this.prisma.prediction.findFirst({
         where: { matchId: input.matchId },
-        update: {
-          modelVersionId: input.modelVersionId,
-          probabilities: input.probabilities as Prisma.InputJsonValue,
-          expectedScore: input.expectedScore as Prisma.InputJsonValue,
-          rawProbabilities: input.rawProbabilities as Prisma.InputJsonValue,
-          calibratedProbabilities: input.calibratedProbabilities as Prisma.InputJsonValue,
-          rawConfidenceScore: input.rawConfidenceScore,
-          calibratedConfidenceScore: input.calibratedConfidenceScore,
-          confidenceScore: input.confidenceScore,
-          summary: input.summary,
-          riskFlags: input.riskFlags as Prisma.InputJsonValue,
-          isRecommended: input.isRecommended,
-          isLowConfidence: input.isLowConfidence,
-          avoidReason: input.avoidReason,
-          dataSource: "internal_prediction_engine",
-          updatedByProcess: "generatePredictions"
-        },
-        create: {
-          matchId: input.matchId,
-          modelVersionId: input.modelVersionId,
-          probabilities: input.probabilities as Prisma.InputJsonValue,
-          expectedScore: input.expectedScore as Prisma.InputJsonValue,
-          rawProbabilities: input.rawProbabilities as Prisma.InputJsonValue,
-          calibratedProbabilities: input.calibratedProbabilities as Prisma.InputJsonValue,
-          rawConfidenceScore: input.rawConfidenceScore,
-          calibratedConfidenceScore: input.calibratedConfidenceScore,
-          confidenceScore: input.confidenceScore,
-          summary: input.summary,
-          riskFlags: input.riskFlags as Prisma.InputJsonValue,
-          isRecommended: input.isRecommended,
-          isLowConfidence: input.isLowConfidence,
-          avoidReason: input.avoidReason,
-          dataSource: "internal_prediction_engine",
-          updatedByProcess: "generatePredictions"
-        },
+        orderBy: { updatedAt: "desc" },
         select: { id: true }
       });
 
-      await this.prisma.predictionExplanation.upsert({
-        where: { predictionId: prediction.id },
-        update: {
-          content: {
-            summary: input.summary,
-            probabilities: input.probabilities,
-            calibratedProbabilities: input.calibratedProbabilities,
-            rawProbabilities: input.rawProbabilities,
-            expectedScore: input.expectedScore,
-            riskFlags: input.riskFlags,
-            avoidReason: input.avoidReason,
-            confidenceScore: input.confidenceScore,
-            source: "internal_prediction_engine"
-          } as Prisma.InputJsonValue
-        },
-        create: {
-          predictionId: prediction.id,
-          content: {
-            summary: input.summary,
-            probabilities: input.probabilities,
-            calibratedProbabilities: input.calibratedProbabilities,
-            rawProbabilities: input.rawProbabilities,
-            expectedScore: input.expectedScore,
-            riskFlags: input.riskFlags,
-            avoidReason: input.avoidReason,
-            confidenceScore: input.confidenceScore,
-            source: "internal_prediction_engine"
-          } as Prisma.InputJsonValue
-        }
+      if (existing) {
+        return this.prisma.prediction.update({
+          where: { id: existing.id },
+          data,
+          select: { id: true }
+        });
+      }
+
+      const createData: Prisma.PredictionUncheckedCreateInput = {
+        ...(data as Prisma.PredictionUncheckedCreateInput),
+        matchId: input.matchId
+      };
+
+      return this.prisma.prediction.create({
+        data: createData,
+        select: { id: true }
       });
+    };
+
+    try {
+      let prediction: { id: string };
+      try {
+        prediction = await persistPrediction(fullPredictionData);
+      } catch (error) {
+        if (this.isLegacyPredictionColumnCompatibilityError(error)) {
+          this.logger.warn(
+            `legacy prediction compatibility path engaged for match ${input.matchId}; retrying with reduced payload.`
+          );
+          prediction = await persistPrediction(compatibilityPredictionData);
+        } else {
+          throw error;
+        }
+      }
+
+      const existingExplanation = await this.prisma.predictionExplanation.findFirst({
+        where: { predictionId: prediction.id },
+        select: { id: true }
+      });
+
+      if (existingExplanation) {
+        await this.prisma.predictionExplanation.update({
+          where: { id: existingExplanation.id },
+          data: { content: explanationContent }
+        });
+      } else {
+        await this.prisma.predictionExplanation.create({
+          data: {
+            predictionId: prediction.id,
+            content: explanationContent
+          }
+        });
+      }
     } catch (error) {
       if (this.isMissingLegacyPredictionTableError(error)) {
         this.logger.warn(

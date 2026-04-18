@@ -1,4 +1,3 @@
-import { MatchStatus } from "@prisma/client";
 import { ProviderIngestionService } from "./provider-ingestion.service";
 
 function createService() {
@@ -18,10 +17,14 @@ function createService() {
       })
     },
     prediction: {
-      upsert: jest.fn().mockResolvedValue({ id: "prediction-1" })
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: "prediction-1" }),
+      update: jest.fn().mockResolvedValue({ id: "prediction-1" })
     },
     predictionExplanation: {
-      upsert: jest.fn().mockResolvedValue({ id: "explanation-1" })
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: "explanation-1" }),
+      update: jest.fn().mockResolvedValue({ id: "explanation-1" })
     }
   };
 
@@ -69,7 +72,7 @@ describe("ProviderIngestionService phase triggers", () => {
       {
         id: "match-1",
         kickoffAt: new Date("2026-04-18T11:00:00.000Z"),
-        status: MatchStatus.live,
+        status: "live",
         homeScore: null,
         awayScore: null,
         halfTimeHomeScore: 1,
@@ -151,14 +154,24 @@ describe("ProviderIngestionService phase triggers", () => {
       avoidReason: null
     });
 
-    expect((prisma as any).prediction.upsert).toHaveBeenCalledWith(
+    expect((prisma as any).prediction.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { matchId: "match-legacy" }
       })
     );
-    expect((prisma as any).predictionExplanation.upsert).toHaveBeenCalledWith(
+    expect((prisma as any).prediction.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ matchId: "match-legacy" })
+      })
+    );
+    expect((prisma as any).predictionExplanation.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { predictionId: "prediction-1" }
+      })
+    );
+    expect((prisma as any).predictionExplanation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ predictionId: "prediction-1" })
       })
     );
   });

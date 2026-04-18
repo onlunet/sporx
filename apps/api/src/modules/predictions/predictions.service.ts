@@ -402,6 +402,17 @@ function areLegacyRowsSyntheticOnly(rows: LegacyPredictionRecord[]): boolean {
   return rows.length > 0 && rows.every((row) => hasSyntheticSummary(row.summary));
 }
 
+function arePredictionRunRowsSyntheticOnly(rows: PredictionRunFallbackRecord[]): boolean {
+  return (
+    rows.length > 0 &&
+    rows.every((row) => {
+      const explanation = asRecord(row.explanationJson);
+      const summary = typeof explanation?.summary === "string" ? explanation.summary : "";
+      return hasSyntheticSummary(summary);
+    })
+  );
+}
+
 function isSyntheticExpandedPayload(items: unknown[]): boolean {
   if (items.length === 0) {
     return false;
@@ -694,7 +705,8 @@ async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Prom
 export class PredictionsService {
   private readonly logger = new Logger(PredictionsService.name);
   private readonly allowLegacyPublicFallback = process.env.PUBLIC_PREDICTIONS_LEGACY_FALLBACK !== "0";
-  private readonly allowSyntheticPublicFallback = process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK === "1";
+  private readonly allowSyntheticPublicFallback =
+    process.env.NODE_ENV !== "production" && process.env.PUBLIC_PREDICTIONS_SYNTHETIC_FALLBACK === "1";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1249,11 +1261,15 @@ export class PredictionsService {
             );
           }
           const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
-          if (runRows.length > 0) {
+          if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
             this.logger.warn(
               `Public predictions prediction-run fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
             );
             normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+          } else if (runRows.length > 0) {
+            this.logger.warn(
+              `Prediction-run fallback skipped because rows are synthetic-only (status=${statusKey}, sport=${sportKey}).`
+            );
           }
         }
       }
@@ -1280,8 +1296,12 @@ export class PredictionsService {
         return [];
       }
       const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
-      if (runRows.length > 0) {
+      if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
         normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+      } else if (runRows.length > 0) {
+        this.logger.warn(
+          `Prediction-run fallback skipped in error path because rows are synthetic-only (status=${statusKey}, sport=${sportKey}).`
+        );
       } else {
         const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
         if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
@@ -1376,8 +1396,10 @@ export class PredictionsService {
           );
         }
         const runRows = await this.fetchPredictionRunRowsByMatch(matchId);
-        if (runRows.length > 0) {
+        if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
           normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+        } else if (runRows.length > 0) {
+          this.logger.warn(`Prediction-run by-match fallback skipped because rows are synthetic-only (matchId=${matchId}).`);
         }
       }
     }
@@ -1438,6 +1460,9 @@ export class PredictionsService {
     }
 
     const runRows = await this.fetchPredictionRunHighConfidenceRows();
-    return runRows.map((row) => normalizePredictionRunFallbackRow(row));
+    if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
+      return runRows.map((row) => normalizePredictionRunFallbackRow(row));
+    }
+    return [];
   }
 }
