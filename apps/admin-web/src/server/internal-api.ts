@@ -109,10 +109,12 @@ export async function fetchInternalApi(
   init: RequestInit,
   options?: {
     allowPublicProxyFallback?: boolean;
+    fallbackOnStatusCodes?: number[];
     timeoutMs?: number;
   }
 ) {
   const allowPublicProxyFallback = options?.allowPublicProxyFallback ?? false;
+  const fallbackStatusCodes = new Set([...(options?.fallbackOnStatusCodes ?? []), ...FALLBACK_STATUS_CODES]);
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const candidates = buildBaseCandidates(allowPublicProxyFallback);
   const hasCandidates = candidates.length > 0;
@@ -131,7 +133,7 @@ export async function fetchInternalApi(
     try {
       const response = await fetch(targetUrl, timedInit);
       const hasNextCandidate = index < candidates.length - 1;
-      if (FALLBACK_STATUS_CODES.has(response.status) && hasNextCandidate) {
+      if (fallbackStatusCodes.has(response.status) && hasNextCandidate) {
         lastResponse = response;
         continue;
       }

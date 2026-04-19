@@ -87,10 +87,15 @@ describe("adminApiGet", () => {
 
     expect(result.ok).toBe(true);
     expect(fetchInternalApi).toHaveBeenCalledTimes(1);
-    const [path, init, options] = vi.mocked(fetchInternalApi).mock.calls[0] as [string, RequestInit, { allowPublicProxyFallback?: boolean }];
+    const [path, init, options] = vi.mocked(fetchInternalApi).mock.calls[0] as [
+      string,
+      RequestInit,
+      { allowPublicProxyFallback?: boolean; fallbackOnStatusCodes?: number[] }
+    ];
     expect(path).toContain(adminSecurityComplianceEndpoints.dataClassifications);
     expect(init.method).toBe("GET");
     expect(options?.allowPublicProxyFallback).toBe(true);
+    expect(options?.fallbackOnStatusCodes).toEqual([403, 404]);
   });
 
   it("calls compliance audit and phase4 attestation helpers", async () => {
@@ -117,9 +122,14 @@ describe("adminApiGet", () => {
     const result = await adminApiPost<{ queued: boolean }>("/api/v1/admin/ingestion/run", { jobType: "syncFixtures" });
 
     expect(result.ok).toBe(true);
-    const [path, init, options] = vi.mocked(fetchInternalApi).mock.calls[0] as [string, RequestInit, { allowPublicProxyFallback?: boolean }];
+    const [path, init, options] = vi.mocked(fetchInternalApi).mock.calls[0] as [
+      string,
+      RequestInit,
+      { allowPublicProxyFallback?: boolean; fallbackOnStatusCodes?: number[] }
+    ];
     expect(path).toBe("/api/v1/admin/ingestion/run");
     expect(init.method).toBe("POST");
     expect(options?.allowPublicProxyFallback).toBe(true);
+    expect(options?.fallbackOnStatusCodes).toEqual([403, 404]);
   });
 });

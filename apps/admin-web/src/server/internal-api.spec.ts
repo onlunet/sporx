@@ -63,4 +63,29 @@ describe("internal-api failover", () => {
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://public.internal/api/v1/auth/refresh");
   });
+
+  it("fails over on 404 when configured via fallbackOnStatusCodes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }))
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), { status: 200 }));
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const response = await fetchInternalApi(
+      "/api/v1/admin/models",
+      {
+        method: "GET"
+      },
+      {
+        fallbackOnStatusCodes: [404]
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://bad.internal/api/v1/admin/models");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("https://good.internal/api/v1/admin/models");
+  });
 });

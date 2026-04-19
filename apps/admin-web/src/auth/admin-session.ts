@@ -55,7 +55,10 @@ export async function refreshAdminTokens(refreshToken?: string) {
         body: JSON.stringify({ refreshToken, actorType: "ADMIN" }),
         cache: "no-store"
       },
-      { allowPublicProxyFallback: true }
+      {
+        allowPublicProxyFallback: true,
+        fallbackOnStatusCodes: [403, 404]
+      }
     );
   } catch {
     return null;

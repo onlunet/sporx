@@ -80,7 +80,8 @@ export async function adminApiGet<T>(path: string): Promise<AdminApiResult<T>> {
         cache: "no-store"
       },
       {
-        allowPublicProxyFallback: true
+        allowPublicProxyFallback: true,
+        fallbackOnStatusCodes: [403, 404]
       }
     );
   } catch {
@@ -162,7 +163,8 @@ export async function adminApiPost<T>(path: string, body: Record<string, unknown
         cache: "no-store"
       },
       {
-        allowPublicProxyFallback: true
+        allowPublicProxyFallback: true,
+        fallbackOnStatusCodes: [403, 404]
       }
     );
   } catch {

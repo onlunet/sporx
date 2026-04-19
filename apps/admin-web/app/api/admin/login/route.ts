@@ -42,7 +42,10 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({ email, password, actorType: "ADMIN" }),
         cache: "no-store"
       },
-      { allowPublicProxyFallback: true }
+      {
+        allowPublicProxyFallback: true,
+        fallbackOnStatusCodes: [403, 404]
+      }
     );
   } catch {
     return buildLoginRedirect(request, nextPath, "auth_service_unreachable");
