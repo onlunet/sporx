@@ -2,23 +2,48 @@ const { spawnSync } = require("node:child_process");
 
 const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
 const directUrl = process.env.SUPABASE_DB_DIRECT_URL?.trim() ?? "";
-const usingSupabasePooler = /(?:^|@)[^/]*pooler\.supabase\.com(?::\d+)?(?:\/|$)/i.test(databaseUrl);
-
 const env = { ...process.env };
+
+function buildSupabaseDirectUrlFromPooler(urlString) {
+  try {
+    const parsed = new URL(urlString);
+    const isSupabasePooler = /(?:^|\.)(pooler\.supabase\.com)$/i.test(parsed.hostname);
+    if (!isSupabasePooler) {
+      return null;
+    }
+
+    const username = decodeURIComponent(parsed.username || "");
+    const [, projectRef] = username.split(".");
+    if (!projectRef) {
+      return null;
+    }
+
+    parsed.hostname = `db.${projectRef}.supabase.co`;
+    parsed.port = "5432";
+    parsed.searchParams.delete("pgbouncer");
+    if (!parsed.searchParams.has("sslmode")) {
+      parsed.searchParams.set("sslmode", "require");
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 if (directUrl) {
   env.DATABASE_URL = directUrl;
   console.log("[prisma:migrate:deploy:safe] SUPABASE_DB_DIRECT_URL kullanilarak migration calistirilacak.");
-} else if (usingSupabasePooler) {
-  console.error(
-    "[prisma:migrate:deploy:safe] DATABASE_URL Supabase pooler gorunuyor ancak SUPABASE_DB_DIRECT_URL tanimli degil. " +
-      "Migration icin direct URL zorunlu."
-  );
-  process.exit(1);
 } else {
-  console.warn(
-    "[prisma:migrate:deploy:safe] SUPABASE_DB_DIRECT_URL tanimli degil. Migration DATABASE_URL ile calistiriliyor."
-  );
+  const derivedDirectUrl = buildSupabaseDirectUrlFromPooler(databaseUrl);
+  if (derivedDirectUrl) {
+    env.DATABASE_URL = derivedDirectUrl;
+    console.log("[prisma:migrate:deploy:safe] Pooler URL'den direct Supabase URL turetildi, migration onunla calistirilacak.");
+  } else {
+    console.warn(
+      "[prisma:migrate:deploy:safe] SUPABASE_DB_DIRECT_URL tanimli degil. Migration DATABASE_URL ile calistiriliyor."
+    );
+  }
 }
 
 const prismaBin = process.platform === "win32" ? "node_modules/.bin/prisma.cmd" : "node_modules/.bin/prisma";
