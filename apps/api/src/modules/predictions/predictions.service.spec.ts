@@ -303,7 +303,7 @@ describe("PredictionsService", () => {
     const first = items[0] as any;
 
     expect(items.length).toBeGreaterThan(0);
-    expect(first?.summary).toContain("Team A - Team B: Ev");
+    expect(first?.summary).toContain("Team A - Team B: model analizi Ev");
     expect(first?.summary).not.toContain("gecici tahmin gosterimi");
   });
 

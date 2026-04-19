@@ -437,7 +437,7 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       ...baseItem,
       predictionType: "totalGoalsOverUnder",
       marketKey: `over_under_${line}`,
-      selectionLabel: `Over/Under ${line}`,
+      selectionLabel: `MS ${line.toFixed(1)} Alt/Üst`,
       line,
       probabilities: {
         over: round4(over),
@@ -513,7 +513,7 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       ...baseItem,
       predictionType: "firstHalfGoals",
       marketKey: "first_half_goals",
-      selectionLabel: "İlk Yarı 0.5 Alt/Üst",
+      selectionLabel: "1Y 0.5 Alt/Üst",
       line: 0.5,
       probabilities: {
         over: round4(firstHalfOver),
@@ -525,7 +525,7 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       ...baseItem,
       predictionType: "secondHalfGoals",
       marketKey: "second_half_goals",
-      selectionLabel: "İkinci Yarı 0.5 Alt/Üst",
+      selectionLabel: "2Y 0.5 Alt/Üst",
       line: 0.5,
       probabilities: {
         over: round4(secondHalfOver),

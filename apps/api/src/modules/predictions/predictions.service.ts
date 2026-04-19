@@ -396,10 +396,26 @@ type PredictionRunFallbackRecord = {
   match: LegacyPredictionRecord["match"];
 };
 
-const SYNTHETIC_SUMMARY_MARKER = "Yayinlanmis tahmin kaydi bulunamadigi";
+const SYNTHETIC_SUMMARY_MARKERS = [
+  "yayinlanmis tahmin kaydi bulunamadigi",
+  "mac verisine dayali gecici tahmin gosterimi"
+];
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLocaleLowerCase("tr-TR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function hasSyntheticSummary(value: unknown): boolean {
-  return typeof value === "string" && value.includes(SYNTHETIC_SUMMARY_MARKER);
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return false;
+  }
+  const normalized = normalizeSearchText(value);
+  return SYNTHETIC_SUMMARY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
 function areLegacyRowsSyntheticOnly(rows: LegacyPredictionRecord[]): boolean {
@@ -586,10 +602,38 @@ function normalizeFallbackSummary(
     return summary;
   }
   const probabilities = asRecord(probabilitySource) ?? {};
-  const homePct = Math.round((asFinite(probabilities.home) ?? 0.34) * 100);
-  const drawPct = Math.round((asFinite(probabilities.draw) ?? 0.33) * 100);
-  const awayPct = Math.round((asFinite(probabilities.away) ?? 0.33) * 100);
-  return `${match.homeTeam.name} - ${match.awayTeam.name}: Ev ${homePct}%, Beraberlik ${drawPct}%, Deplasman ${awayPct}%.`;
+  const home = asFinite(probabilities.home);
+  const draw = asFinite(probabilities.draw);
+  const away = asFinite(probabilities.away);
+  if (home !== undefined || draw !== undefined || away !== undefined) {
+    if (draw !== undefined) {
+      const homePct = Math.round((home ?? 0.34) * 100);
+      const drawPct = Math.round(draw * 100);
+      const awayPct = Math.round((away ?? 0.33) * 100);
+      return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi Ev ${homePct}%, Beraberlik ${drawPct}%, Deplasman ${awayPct}%.`;
+    }
+    const homePct = Math.round((home ?? 0.5) * 100);
+    const awayPct = Math.round((away ?? 0.5) * 100);
+    return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi Ev ${homePct}%, Deplasman ${awayPct}%.`;
+  }
+
+  const over = asFinite(probabilities.over);
+  const under = asFinite(probabilities.under);
+  if (over !== undefined || under !== undefined) {
+    const overPct = Math.round((over ?? 0.5) * 100);
+    const underPct = Math.round((under ?? 0.5) * 100);
+    return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi Üst ${overPct}%, Alt ${underPct}%.`;
+  }
+
+  const yes = asFinite(probabilities.yes) ?? asFinite(probabilities.bttsYes);
+  const no = asFinite(probabilities.no) ?? asFinite(probabilities.bttsNo);
+  if (yes !== undefined || no !== undefined) {
+    const yesPct = Math.round((yes ?? 0.5) * 100);
+    const noPct = Math.round((no ?? 0.5) * 100);
+    return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi KG Var ${yesPct}%, KG Yok ${noPct}%.`;
+  }
+
+  return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi güncellendi.`;
 }
 
 function normalizeLegacyRow(row: LegacyPredictionRecord) {
