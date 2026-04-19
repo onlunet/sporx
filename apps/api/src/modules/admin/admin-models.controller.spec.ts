@@ -1,6 +1,38 @@
 import { AdminModelsController } from "./admin-models.controller";
 
 describe("AdminModelsController", () => {
+  it("models inventory handles schema compatibility errors with prediction-run fallback", async () => {
+    const prisma = {
+      predictionRun: {
+        groupBy: jest.fn().mockResolvedValue([{ modelVersionId: "model-v2", _count: { _all: 7 } }]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            modelVersionId: "model-v2",
+            market: "match_outcome",
+            horizon: "PRE6",
+            createdAt: new Date("2026-04-19T09:00:00.000Z")
+          }
+        ])
+      }
+    } as any;
+
+    const controller = new AdminModelsController(prisma);
+    (controller as any).modelVersionsForInventory = jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("The table `ModelVersion` does not exist."), { code: "P2021" }));
+
+    const rows = await controller.modelsInventory();
+
+    expect(prisma.predictionRun.groupBy).toHaveBeenCalledTimes(1);
+    expect(prisma.predictionRun.findMany).toHaveBeenCalledTimes(1);
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        source: "prediction_run_fallback",
+        predictionCount: 7
+      })
+    );
+  });
+
   it("models inventory fallback uses prediction runs instead of legacy prediction rows", async () => {
     const prisma = {
       modelPerformanceTimeseries: {

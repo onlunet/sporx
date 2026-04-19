@@ -375,6 +375,58 @@ export class AdminModelsController {
     };
   }
 
+  private isSchemaCompatibilityError(error: unknown) {
+    const prismaCode = (error as { code?: string } | null)?.code;
+    if (prismaCode === "P2021" || prismaCode === "P2022" || prismaCode === "P2010") {
+      return true;
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2021" || error.code === "P2022" || error.code === "P2010") {
+        return true;
+      }
+    }
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "";
+
+    return /relation .* does not exist|table .* does not exist|column .* does not exist|no such table|unknown column|invalid `prisma/i.test(
+      message.toLowerCase()
+    );
+  }
+
+  private predictionRunInventoryFallbackRows(
+    predictionRunCounts: Array<{ modelVersionId: string | null; _count: { _all: number } }>,
+    predictionRunMetaRows: Array<{ modelVersionId: string | null; market: string; horizon: string; createdAt: Date }>
+  ) {
+    const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
+    return fallbackRows.map((row, index) => ({
+      id: row.modelVersionId ? `fallback-${row.modelVersionId}` : "fallback-unversioned",
+      modelVersionId: row.modelVersionId,
+      modelName: row.modelName,
+      version: row.version,
+      modelLabel: row.modelLabel,
+      active: index === 0,
+      trainingWindow: "-",
+      predictionCount: row.predictionCount,
+      usageStatus: "Tahminde Kullaniliyor",
+      performancePointCount: 0,
+      calibrationCount: 0,
+      backtestCount: 0,
+      comparisonCount: 0,
+      accuracy: null,
+      brier: null,
+      logLoss: null,
+      lastMeasuredAt: null,
+      source: "prediction_run_fallback",
+      createdAt: row.createdAt
+    }));
+  }
+
   private asObject(value: unknown): Record<string, unknown> | null {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       return value as Record<string, unknown>;
@@ -818,160 +870,159 @@ export class AdminModelsController {
 
   @Get()
   async modelsInventory() {
-    const modelVersions = await this.modelVersionsForInventory();
-    const [performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionRunCounts, predictionRunMetaRows] =
-      await Promise.all([
-      this.prisma.modelPerformanceTimeseries.findMany({
-        orderBy: { measuredAt: "desc" },
-        select: { modelVersionId: true, measuredAt: true, metrics: true }
-      }),
-      this.prisma.predictionCalibration.groupBy({
-        by: ["modelVersionId"],
-        _count: { _all: true }
-      }),
-      this.prisma.backtestResult.groupBy({
-        by: ["modelVersionId"],
-        _count: { _all: true }
-      }),
-      this.prisma.modelComparisonSnapshot.groupBy({
-        by: ["modelVersionId"],
-        _count: { _all: true }
-      }),
-      this.prisma.predictionRun.groupBy({
-        by: ["modelVersionId"],
-        _count: { _all: true }
-      }),
-      this.prisma.predictionRun.findMany({
-        select: { modelVersionId: true, market: true, horizon: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-        take: 20000
-      })
-    ]);
+    try {
+      const modelVersions = await this.modelVersionsForInventory();
+      const [performanceRows, calibrationCounts, backtestCounts, snapshotCounts, predictionRunCounts, predictionRunMetaRows] =
+        await Promise.all([
+        this.prisma.modelPerformanceTimeseries.findMany({
+          orderBy: { measuredAt: "desc" },
+          select: { modelVersionId: true, measuredAt: true, metrics: true }
+        }),
+        this.prisma.predictionCalibration.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.backtestResult.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.modelComparisonSnapshot.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.predictionRun.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.predictionRun.findMany({
+          select: { modelVersionId: true, market: true, horizon: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 20000
+        })
+      ]);
 
-    if (modelVersions.length === 0) {
-      const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
-      return fallbackRows.map((row, index) => ({
-        id: row.modelVersionId ? `fallback-${row.modelVersionId}` : "fallback-unversioned",
-        modelVersionId: row.modelVersionId,
-        modelName: row.modelName,
-        version: row.version,
-        modelLabel: row.modelLabel,
-        active: index === 0,
-        trainingWindow: "-",
-        predictionCount: row.predictionCount,
-        usageStatus: "Tahminde Kullaniliyor",
-        performancePointCount: 0,
-        calibrationCount: 0,
-        backtestCount: 0,
-        comparisonCount: 0,
-        accuracy: null,
-        brier: null,
-        logLoss: null,
-        lastMeasuredAt: null,
-        source: "prediction_run_fallback",
-        createdAt: row.createdAt
-      }));
-    }
-
-    const latestMetricsByModelId = new Map<
-      string,
-      {
-        measuredAt: Date;
-        accuracy?: number;
-        brier?: number;
-        logLoss?: number;
+      if (modelVersions.length === 0) {
+        return this.predictionRunInventoryFallbackRows(predictionRunCounts, predictionRunMetaRows);
       }
-    >();
-    const performancePointCountByModelId = new Map<string, number>();
 
-    for (const row of performanceRows) {
-      performancePointCountByModelId.set(
-        row.modelVersionId,
-        (performancePointCountByModelId.get(row.modelVersionId) ?? 0) + 1
-      );
-      if (!latestMetricsByModelId.has(row.modelVersionId)) {
-        latestMetricsByModelId.set(row.modelVersionId, {
-          measuredAt: row.measuredAt,
-          ...this.metricsFromJson(row.metrics)
-        });
-      }
-    }
-
-    const toCountMap = <T extends { modelVersionId: string | null; _count: { _all: number } }>(rows: T[]) => {
-      const map = new Map<string, number>();
-      for (const row of rows) {
-        if (!row.modelVersionId) {
-          continue;
+      const latestMetricsByModelId = new Map<
+        string,
+        {
+          measuredAt: Date;
+          accuracy?: number;
+          brier?: number;
+          logLoss?: number;
         }
-        map.set(row.modelVersionId, row._count._all);
+      >();
+      const performancePointCountByModelId = new Map<string, number>();
+
+      for (const row of performanceRows) {
+        performancePointCountByModelId.set(
+          row.modelVersionId,
+          (performancePointCountByModelId.get(row.modelVersionId) ?? 0) + 1
+        );
+        if (!latestMetricsByModelId.has(row.modelVersionId)) {
+          latestMetricsByModelId.set(row.modelVersionId, {
+            measuredAt: row.measuredAt,
+            ...this.metricsFromJson(row.metrics)
+          });
+        }
       }
-      return map;
-    };
 
-    const calibrationCountByModelId = toCountMap(calibrationCounts);
-    const backtestCountByModelId = toCountMap(backtestCounts);
-    const comparisonCountByModelId = toCountMap(snapshotCounts);
-    const predictionCountByModelId = toCountMap(predictionRunCounts);
-
-    const rows = modelVersions.map((model) => {
-      const latest = latestMetricsByModelId.get(model.id);
-      const predictionCount = predictionCountByModelId.get(model.id) ?? 0;
-
-      return {
-        id: model.id,
-        modelVersionId: model.id,
-        modelName: model.modelName,
-        version: model.version,
-        modelLabel: `${model.modelName}:${model.version}`,
-        active: model.active,
-        trainingWindow: model.trainingWindow ?? "-",
-        predictionCount,
-        usageStatus: predictionCount > 0 ? "Tahminde Kullanılıyor" : "Kayıtlı (kullanılmadı)",
-        performancePointCount: performancePointCountByModelId.get(model.id) ?? 0,
-        calibrationCount: calibrationCountByModelId.get(model.id) ?? 0,
-        backtestCount: backtestCountByModelId.get(model.id) ?? 0,
-        comparisonCount: comparisonCountByModelId.get(model.id) ?? 0,
-        accuracy: latest?.accuracy ?? null,
-        brier: latest?.brier ?? null,
-        logLoss: latest?.logLoss ?? null,
-        lastMeasuredAt: latest?.measuredAt ?? null,
-        source: "model_registry",
-        createdAt: model.createdAt
+      const toCountMap = <T extends { modelVersionId: string | null; _count: { _all: number } }>(rows: T[]) => {
+        const map = new Map<string, number>();
+        for (const row of rows) {
+          if (!row.modelVersionId) {
+            continue;
+          }
+          map.set(row.modelVersionId, row._count._all);
+        }
+        return map;
       };
-    });
 
-    const knownModelIds = new Set(modelVersions.map((model) => model.id));
-    const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
-    const orphanRows = fallbackRows
-      .filter((row) => row.modelVersionId && !knownModelIds.has(row.modelVersionId))
-      .map((row) => ({
-        id: `orphan-${row.modelVersionId}`,
-        modelVersionId: row.modelVersionId,
-        modelName: row.modelName,
-        version: row.version,
-        modelLabel: row.modelLabel,
-        active: false,
-        trainingWindow: "-",
-        predictionCount: row.predictionCount,
-        usageStatus: "Tahminde Kullaniliyor (Kayit eksik)",
-        performancePointCount: 0,
-        calibrationCount: 0,
-        backtestCount: 0,
-        comparisonCount: 0,
-        accuracy: null,
-        brier: null,
-        logLoss: null,
-        lastMeasuredAt: null,
-        source: "prediction_run_orphan",
-        createdAt: row.createdAt
-      }));
+      const calibrationCountByModelId = toCountMap(calibrationCounts);
+      const backtestCountByModelId = toCountMap(backtestCounts);
+      const comparisonCountByModelId = toCountMap(snapshotCounts);
+      const predictionCountByModelId = toCountMap(predictionRunCounts);
 
-    return [...rows, ...orphanRows].sort(
-      (left, right) =>
-        Number(right.active) - Number(left.active) ||
-        right.predictionCount - left.predictionCount ||
-        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-    );
+      const rows = modelVersions.map((model) => {
+        const latest = latestMetricsByModelId.get(model.id);
+        const predictionCount = predictionCountByModelId.get(model.id) ?? 0;
+
+        return {
+          id: model.id,
+          modelVersionId: model.id,
+          modelName: model.modelName,
+          version: model.version,
+          modelLabel: `${model.modelName}:${model.version}`,
+          active: model.active,
+          trainingWindow: model.trainingWindow ?? "-",
+          predictionCount,
+          usageStatus: predictionCount > 0 ? "Tahminde Kullanılıyor" : "Kayıtlı (kullanılmadı)",
+          performancePointCount: performancePointCountByModelId.get(model.id) ?? 0,
+          calibrationCount: calibrationCountByModelId.get(model.id) ?? 0,
+          backtestCount: backtestCountByModelId.get(model.id) ?? 0,
+          comparisonCount: comparisonCountByModelId.get(model.id) ?? 0,
+          accuracy: latest?.accuracy ?? null,
+          brier: latest?.brier ?? null,
+          logLoss: latest?.logLoss ?? null,
+          lastMeasuredAt: latest?.measuredAt ?? null,
+          source: "model_registry",
+          createdAt: model.createdAt
+        };
+      });
+
+      const knownModelIds = new Set(modelVersions.map((model) => model.id));
+      const fallbackRows = this.predictionRunFallbackRows(predictionRunCounts, predictionRunMetaRows);
+      const orphanRows = fallbackRows
+        .filter((row) => row.modelVersionId && !knownModelIds.has(row.modelVersionId))
+        .map((row) => ({
+          id: `orphan-${row.modelVersionId}`,
+          modelVersionId: row.modelVersionId,
+          modelName: row.modelName,
+          version: row.version,
+          modelLabel: row.modelLabel,
+          active: false,
+          trainingWindow: "-",
+          predictionCount: row.predictionCount,
+          usageStatus: "Tahminde Kullaniliyor (Kayit eksik)",
+          performancePointCount: 0,
+          calibrationCount: 0,
+          backtestCount: 0,
+          comparisonCount: 0,
+          accuracy: null,
+          brier: null,
+          logLoss: null,
+          lastMeasuredAt: null,
+          source: "prediction_run_orphan",
+          createdAt: row.createdAt
+        }));
+
+      return [...rows, ...orphanRows].sort(
+        (left, right) =>
+          Number(right.active) - Number(left.active) ||
+          right.predictionCount - left.predictionCount ||
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      );
+    } catch (error) {
+      if (!this.isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+
+      const [predictionRunCounts, predictionRunMetaRows] = await Promise.all([
+        this.prisma.predictionRun.groupBy({
+          by: ["modelVersionId"],
+          _count: { _all: true }
+        }),
+        this.prisma.predictionRun.findMany({
+          select: { modelVersionId: true, market: true, horizon: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 20000
+        })
+      ]);
+
+      return this.predictionRunInventoryFallbackRows(predictionRunCounts, predictionRunMetaRows);
+    }
   }
 
   @Get("comparison")
