@@ -1,0 +1,2 @@
+-- Baseline for the existing production schema before additive 20260417+ migrations.
+-- This file is intentionally empty: production already had the legacy CamelCase tables.

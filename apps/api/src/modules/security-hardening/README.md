@@ -50,7 +50,7 @@ New tables:
 - `release_attestations`
 - `dependency_inventory_snapshots`
 
-Migration: `apps/api/prisma/migrations/20260417_security_phase4_runtime_hardening/migration.sql`
+Migration: `apps/api/prisma/migrations/202604170004_security_phase4_runtime_hardening/migration.sql`
 
 ## API/runtime wiring
 

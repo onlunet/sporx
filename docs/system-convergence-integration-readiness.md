@@ -148,7 +148,7 @@ Status legend:
   - `VulnerabilityFinding findingKey @unique`
   - `DuplicateSuppressionStat dedupKey @unique`
 
-### 4.3 Migration consistency (20260417_* / 20260418_*)
+### 4.3 Migration consistency (2026041700xx_* plus baseline)
 - Migration set present and ordered for Phase 1-5 packages.
 - No destructive drop operations detected in audited migration SQL set (`DROP TABLE`, `DROP INDEX`, `ALTER TABLE ... DROP COLUMN` not found).
 - Quarantine-first schema strategy preserved in this pass.
