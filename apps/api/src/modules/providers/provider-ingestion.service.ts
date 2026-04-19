@@ -1965,6 +1965,48 @@ export class ProviderIngestionService {
     return now.toISOString().slice(0, 10);
   }
 
+  private addUtcDays(date: Date, offsetDays: number) {
+    const next = new Date(date.getTime());
+    next.setUTCDate(next.getUTCDate() + offsetDays);
+    return next;
+  }
+
+  private toDateString(date: Date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  private buildResultBackfillTargetDates(
+    checkpoint: string | null,
+    defaultDateFrom: string,
+    dateTo: string,
+    fallbackTargetDates: string[],
+    maxDays: number
+  ) {
+    const checkpointDate = this.parseIsoDateOnly(checkpoint ?? undefined);
+    const endDate = this.parseIsoDateOnly(dateTo);
+    if (!checkpointDate || !endDate || this.toDateString(checkpointDate) >= defaultDateFrom) {
+      return {
+        targetDates: fallbackTargetDates,
+        usedCheckpoint: false,
+        nextCheckpoint: null as string | null
+      };
+    }
+
+    const targetDates: string[] = [];
+    let cursor = checkpointDate;
+    const safeMaxDays = Math.max(1, Math.min(60, maxDays));
+    while (cursor.getTime() <= endDate.getTime() && targetDates.length < safeMaxDays) {
+      targetDates.push(this.toDateString(cursor));
+      cursor = this.addUtcDays(cursor, 1);
+    }
+
+    return {
+      targetDates: targetDates.length > 0 ? targetDates : fallbackTargetDates,
+      usedCheckpoint: targetDates.length > 0,
+      nextCheckpoint: targetDates.length > 0 ? this.toDateString(cursor) : null
+    };
+  }
+
   private parseIsoDateOnly(raw: string | undefined) {
     if (!raw || raw.trim().length === 0) {
       return null;
@@ -6948,11 +6990,30 @@ export class ProviderIngestionService {
     const dailyLimit = settings.dailyLimit ?? 100;
     const syncDaysBack = this.parseConfigInt(settings.syncDaysBack, 1);
     const syncDaysAhead = this.parseConfigInt(settings.syncDaysAhead, 1);
+    const defaultDateFrom = this.todayDateString(-syncDaysBack);
+    const dateTo = this.todayDateString(1);
     const dayOffsets =
       jobType === "syncResults"
         ? Array.from({ length: syncDaysBack + 1 }, (_, index) => index - syncDaysBack)
         : Array.from({ length: syncDaysAhead + 1 }, (_, index) => index);
-    const targetDates = dayOffsets.map((offset) => this.todayDateString(offset));
+    const fallbackTargetDates = dayOffsets.map((offset) => this.todayDateString(offset));
+    const checkpoint =
+      jobType === "syncResults" ? await this.getCheckpoint(provider.key, "football_matches_results") : null;
+    const targetPlan =
+      jobType === "syncResults"
+        ? this.buildResultBackfillTargetDates(
+            checkpoint ?? null,
+            defaultDateFrom,
+            dateTo,
+            fallbackTargetDates,
+            dailyLimit
+          )
+        : {
+            targetDates: fallbackTargetDates,
+            usedCheckpoint: false,
+            nextCheckpoint: null as string | null
+          };
+    const targetDates = targetPlan.targetDates;
     const requestedCalls = Math.max(1, targetDates.length);
 
     const quota = await this.quotaGate(provider.key, requestedCalls, dailyLimit);
@@ -7069,6 +7130,9 @@ export class ProviderIngestionService {
       jobType,
       dailyLimit,
       requestedCalls,
+      checkpoint,
+      checkpointBackfill: targetPlan.usedCheckpoint,
+      nextCheckpoint: targetPlan.nextCheckpoint,
       leagueIdFilters,
       leagueFilter: leagueFilter ?? null,
       seasonFilter: seasonFilter ?? null,
@@ -7076,6 +7140,10 @@ export class ProviderIngestionService {
       recordsWritten: written,
       errors
     });
+
+    if (targetPlan.usedCheckpoint && targetPlan.nextCheckpoint) {
+      await this.setCheckpoint(provider.key, "football_matches_results", targetPlan.nextCheckpoint);
+    }
 
     return {
       providerKey: provider.key,
@@ -7087,6 +7155,8 @@ export class ProviderIngestionService {
         jobType,
         dailyLimit,
         requestedCalls,
+        checkpointBackfill: targetPlan.usedCheckpoint,
+        nextCheckpoint: targetPlan.nextCheckpoint,
         leagueIdFilters,
         leagueFilter: leagueFilter ?? null,
         seasonFilter: seasonFilter ?? null
@@ -7490,12 +7560,31 @@ export class ProviderIngestionService {
 
     const syncDaysBack = this.parseConfigInt(settings.syncDaysBack, 1);
     const syncDaysAhead = this.parseConfigInt(settings.syncDaysAhead, 1);
+    const defaultDateFrom = this.todayDateString(-syncDaysBack);
+    const dateTo = this.todayDateString(1);
     const offsets =
       jobType === "syncResults"
         ? Array.from({ length: syncDaysBack + 1 }, (_, index) => index - syncDaysBack)
         : Array.from({ length: syncDaysAhead + 1 }, (_, index) => index);
+    const fallbackTargetDates = offsets.map((offset) => this.todayDateString(offset));
+    const checkpoint =
+      jobType === "syncResults" ? await this.getCheckpoint(provider.key, "football_matches_results") : null;
+    const targetPlan =
+      jobType === "syncResults"
+        ? this.buildResultBackfillTargetDates(
+            checkpoint ?? null,
+            defaultDateFrom,
+            dateTo,
+            fallbackTargetDates,
+            dailyLimit
+          )
+        : {
+            targetDates: fallbackTargetDates,
+            usedCheckpoint: false,
+            nextCheckpoint: null as string | null
+          };
 
-    const quota = await this.quotaGate(provider.key, offsets.length, dailyLimit);
+    const quota = await this.quotaGate(provider.key, targetPlan.targetDates.length, dailyLimit);
     if (!quota.allowed) {
       await this.logApiCall(`provider/${provider.key}/fixtures`, 429, 0, runId);
       return {
@@ -7508,7 +7597,7 @@ export class ProviderIngestionService {
           dailyLimit,
           used: quota.used,
           remaining: quota.remaining,
-          plannedCalls: offsets.length
+          plannedCalls: targetPlan.targetDates.length
         }
       };
     }
@@ -7517,8 +7606,7 @@ export class ProviderIngestionService {
     let recordsWritten = 0;
     let errors = 0;
 
-    for (const offset of offsets) {
-      const targetDate = this.todayDateString(offset);
+    for (const targetDate of targetPlan.targetDates) {
       const startedAt = Date.now();
       const response = await this.sportApiConnector.fetchFixturesByDate(
         settings.apiKey,
@@ -7577,11 +7665,19 @@ export class ProviderIngestionService {
       }
     }
 
+    if (targetPlan.usedCheckpoint && targetPlan.nextCheckpoint) {
+      await this.setCheckpoint(provider.key, "football_matches_results", targetPlan.nextCheckpoint);
+    }
+
     await this.createExternalPayload(provider.key, runId, "sportapi_fixtures", {
       mode: jobType,
       syncDaysBack,
       syncDaysAhead,
       offsets,
+      targetDates: targetPlan.targetDates,
+      checkpoint,
+      checkpointBackfill: targetPlan.usedCheckpoint,
+      nextCheckpoint: targetPlan.nextCheckpoint,
       recordsRead,
       recordsWritten,
       errors,
@@ -7597,7 +7693,9 @@ export class ProviderIngestionService {
         mode: jobType,
         syncDaysBack,
         syncDaysAhead,
-        calls: offsets.length,
+        calls: targetPlan.targetDates.length,
+        checkpointBackfill: targetPlan.usedCheckpoint,
+        nextCheckpoint: targetPlan.nextCheckpoint,
         dailyLimit
       }
     };
