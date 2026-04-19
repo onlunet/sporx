@@ -70,13 +70,19 @@ export async function adminApiGet<T>(path: string): Promise<AdminApiResult<T>> {
 
   let response: Response;
   try {
-    response = await fetchInternalApi(path, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`
+    response = await fetchInternalApi(
+      path,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        },
+        cache: "no-store"
       },
-      cache: "no-store"
-    });
+      {
+        allowPublicProxyFallback: true
+      }
+    );
   } catch {
     return {
       ok: false,
@@ -144,15 +150,21 @@ export async function adminApiPost<T>(path: string, body: Record<string, unknown
 
   let response: Response;
   try {
-    response = await fetchInternalApi(path, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
+    response = await fetchInternalApi(
+      path,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body),
+        cache: "no-store"
       },
-      body: JSON.stringify(body),
-      cache: "no-store"
-    });
+      {
+        allowPublicProxyFallback: true
+      }
+    );
   } catch {
     return {
       ok: false,

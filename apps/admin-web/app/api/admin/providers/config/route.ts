@@ -40,15 +40,28 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const updateProviderResponse = await fetchInternalApi(`/api/v1/admin/providers/${providerKey}`, {
-    method: "PATCH",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session.accessToken}`
-    },
-    body: JSON.stringify({ baseUrl }),
-    cache: "no-store"
-  });
+  let updateProviderResponse: Response;
+  try {
+    updateProviderResponse = await fetchInternalApi(
+      `/api/v1/admin/providers/${providerKey}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ baseUrl }),
+        cache: "no-store"
+      },
+      {
+        allowPublicProxyFallback: true
+      }
+    );
+  } catch {
+    const response = redirectWithState(request, nextPath, { error: "provider_update_failed" });
+    applySessionRefreshCookies(response, request, session);
+    return response;
+  }
 
   if (!updateProviderResponse.ok) {
     const response = redirectWithState(request, nextPath, { error: "provider_update_failed" });
@@ -63,15 +76,28 @@ export async function POST(request: NextRequest) {
     basketballLeagueId
   };
 
-  const updateConfigResponse = await fetchInternalApi(`/api/v1/admin/providers/${providerKey}/configs`, {
-    method: "PATCH",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session.accessToken}`
-    },
-    body: JSON.stringify({ configs }),
-    cache: "no-store"
-  });
+  let updateConfigResponse: Response;
+  try {
+    updateConfigResponse = await fetchInternalApi(
+      `/api/v1/admin/providers/${providerKey}/configs`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({ configs }),
+        cache: "no-store"
+      },
+      {
+        allowPublicProxyFallback: true
+      }
+    );
+  } catch {
+    const response = redirectWithState(request, nextPath, { error: "provider_config_failed" });
+    applySessionRefreshCookies(response, request, session);
+    return response;
+  }
 
   if (!updateConfigResponse.ok) {
     const response = redirectWithState(request, nextPath, { error: "provider_config_failed" });

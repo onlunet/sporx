@@ -42,20 +42,33 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const apiResponse = await fetchInternalApi("/api/v1/admin/teams/identity/rules/action", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session.accessToken}`
-    },
-    body: JSON.stringify({
-      action,
-      teamIds,
-      leftTeamId,
-      rightTeamId
-    }),
-    cache: "no-store"
-  });
+  let apiResponse: Response;
+  try {
+    apiResponse = await fetchInternalApi(
+      "/api/v1/admin/teams/identity/rules/action",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`
+        },
+        body: JSON.stringify({
+          action,
+          teamIds,
+          leftTeamId,
+          rightTeamId
+        }),
+        cache: "no-store"
+      },
+      {
+        allowPublicProxyFallback: true
+      }
+    );
+  } catch {
+    const response = redirectWithState(request, nextPath, { error: "action_failed" });
+    applySessionRefreshCookies(response, request, session);
+    return response;
+  }
 
   if (!apiResponse.ok) {
     const response = redirectWithState(request, nextPath, { error: "action_failed" });
