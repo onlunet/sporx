@@ -193,6 +193,17 @@ function createSyntheticPredictionRunRow() {
   };
 }
 
+function expectNoQuarterScoreSelect(select: Record<string, unknown>) {
+  expect(select).not.toHaveProperty("q1HomeScore");
+  expect(select).not.toHaveProperty("q1AwayScore");
+  expect(select).not.toHaveProperty("q2HomeScore");
+  expect(select).not.toHaveProperty("q2AwayScore");
+  expect(select).not.toHaveProperty("q3HomeScore");
+  expect(select).not.toHaveProperty("q3AwayScore");
+  expect(select).not.toHaveProperty("q4HomeScore");
+  expect(select).not.toHaveProperty("q4AwayScore");
+}
+
 describe("PredictionsService", () => {
   it("public match query returns one row per duplicate published tuple", async () => {
     const prisma = {
@@ -384,6 +395,8 @@ describe("PredictionsService", () => {
 
     expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
     expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expectNoQuarterScoreSelect(prisma.publishedPrediction.findMany.mock.calls[0][0].include.match.select);
+    expectNoQuarterScoreSelect(prisma.prediction.findMany.mock.calls[0][0].include.match.select);
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Legacy A");
   });
@@ -425,6 +438,7 @@ describe("PredictionsService", () => {
     expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
     expect(prisma.prediction.findMany).toHaveBeenCalled();
     expect(prisma.predictionRun.findMany).toHaveBeenCalled();
+    expectNoQuarterScoreSelect(prisma.predictionRun.findMany.mock.calls[0][0].include.match.select);
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Run A");
   });

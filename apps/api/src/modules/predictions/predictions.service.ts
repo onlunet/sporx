@@ -317,14 +317,14 @@ type PublishedPredictionRecord = {
     awayScore: number | null;
     halfTimeHomeScore: number | null;
     halfTimeAwayScore: number | null;
-    q1HomeScore: number | null;
-    q1AwayScore: number | null;
-    q2HomeScore: number | null;
-    q2AwayScore: number | null;
-    q3HomeScore: number | null;
-    q3AwayScore: number | null;
-    q4HomeScore: number | null;
-    q4AwayScore: number | null;
+    q1HomeScore?: number | null;
+    q1AwayScore?: number | null;
+    q2HomeScore?: number | null;
+    q2AwayScore?: number | null;
+    q3HomeScore?: number | null;
+    q3AwayScore?: number | null;
+    q4HomeScore?: number | null;
+    q4AwayScore?: number | null;
     homeTeam: { name: string };
     awayTeam: { name: string };
     league: { id: string; name: string; code: string | null } | null;
@@ -351,14 +351,14 @@ type LegacyPredictionRecord = {
     awayScore: number | null;
     halfTimeHomeScore: number | null;
     halfTimeAwayScore: number | null;
-    q1HomeScore: number | null;
-    q1AwayScore: number | null;
-    q2HomeScore: number | null;
-    q2AwayScore: number | null;
-    q3HomeScore: number | null;
-    q3AwayScore: number | null;
-    q4HomeScore: number | null;
-    q4AwayScore: number | null;
+    q1HomeScore?: number | null;
+    q1AwayScore?: number | null;
+    q2HomeScore?: number | null;
+    q2AwayScore?: number | null;
+    q3HomeScore?: number | null;
+    q3AwayScore?: number | null;
+    q4HomeScore?: number | null;
+    q4AwayScore?: number | null;
     homeTeam: { name: string };
     awayTeam: { name: string };
     league: { id: string; name: string; code: string | null } | null;
@@ -480,49 +480,19 @@ const PUBLISHED_PREDICTION_INCLUDE = {
     }
   },
   match: {
-    select: {
-      ...PREDICTION_MATCH_SELECT,
-      q1HomeScore: true,
-      q1AwayScore: true,
-      q2HomeScore: true,
-      q2AwayScore: true,
-      q3HomeScore: true,
-      q3AwayScore: true,
-      q4HomeScore: true,
-      q4AwayScore: true
-    }
+    select: PREDICTION_MATCH_SELECT
   }
 } as const;
 
 const LEGACY_PREDICTION_INCLUDE = {
   match: {
-    select: {
-      ...PREDICTION_MATCH_SELECT,
-      q1HomeScore: true,
-      q1AwayScore: true,
-      q2HomeScore: true,
-      q2AwayScore: true,
-      q3HomeScore: true,
-      q3AwayScore: true,
-      q4HomeScore: true,
-      q4AwayScore: true
-    }
+    select: PREDICTION_MATCH_SELECT
   }
 } as const;
 
 const PREDICTION_RUN_FALLBACK_INCLUDE = {
   match: {
-    select: {
-      ...PREDICTION_MATCH_SELECT,
-      q1HomeScore: true,
-      q1AwayScore: true,
-      q2HomeScore: true,
-      q2AwayScore: true,
-      q3HomeScore: true,
-      q3AwayScore: true,
-      q4HomeScore: true,
-      q4AwayScore: true
-    }
+    select: PREDICTION_MATCH_SELECT
   }
 } as const;
 
