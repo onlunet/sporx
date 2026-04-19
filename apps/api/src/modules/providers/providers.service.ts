@@ -1,4 +1,5 @@
 ﻿import { Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { FootballDataConnector } from "./football-data.connector";
 import { TheSportsDbConnector } from "./the-sports-db.connector";
@@ -222,6 +223,40 @@ export class ProvidersService {
     private readonly oddsApiIoConnector: OddsApiIoConnector
   ) {}
 
+  private isSchemaCompatibilityError(error: unknown) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "P2021" || code === "P2022" || code === "P2010") {
+      return true;
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2021" || error.code === "P2022" || error.code === "P2010") {
+        return true;
+      }
+    }
+
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return /relation .* does not exist|table .* does not exist|column .* does not exist|no such table|unknown column/i.test(
+      message.toLowerCase()
+    );
+  }
+
+  private providerCatalogFallbackItem(item: ProviderCatalogEntry) {
+    return {
+      key: item.key,
+      name: item.name,
+      isActive: item.defaultEnabled,
+      baseUrl: item.defaultBaseUrl ?? null,
+      plan: item.plan,
+      supportsSports: item.supportsSports,
+      requiresApiKey: item.requiresApiKey,
+      defaultEnabled: item.defaultEnabled,
+      description: item.description,
+      website: item.website,
+      configs: { ...(item.defaultConfigs ?? {}) }
+    };
+  }
+
   private providerMeta(key: string) {
     return PROVIDER_CATALOG.find((item) => item.key === key);
   }
@@ -337,89 +372,116 @@ export class ProvidersService {
   }
 
   async getProviderRuntimeSettings(providerKey: string): Promise<ProviderRuntimeSettings> {
-    await this.ensureProviderCatalog();
+    const buildSettingsFromRaw = (configs: Record<string, string>, baseUrl?: string | null): ProviderRuntimeSettings => {
+      const apiKey = (configs.apiKey?.trim() || this.envKeyByProvider(providerKey)?.trim() || undefined) as
+        | string
+        | undefined;
 
-    const provider = await this.prisma.provider.findUnique({
-      where: { key: providerKey },
-      include: { configs: true }
-    });
-
-    if (!provider) {
-      throw new NotFoundException(`Provider not found: ${providerKey}`);
-    }
-
-    const configs = this.configMap(provider.configs);
-    const apiKey = (configs.apiKey?.trim() || this.envKeyByProvider(providerKey)?.trim() || undefined) as string | undefined;
-
-    return {
-      apiKey,
-      baseUrl: provider.baseUrl ?? undefined,
-      competitionCode: configs.competitionCode,
-      competitionCodes: this.toStringList(configs.competitionCodes),
-      priorityCompetitionCodes: this.toStringList(configs.priorityCompetitionCodes),
-      minuteRateLimit: this.toInt(configs.minuteRateLimit),
-      minuteRateBuffer: this.toInt(configs.minuteRateBuffer),
-      plannedRequestsPerMinute: this.toInt(configs.plannedRequestsPerMinute),
-      reserveRequestsPerMinute: this.toInt(configs.reserveRequestsPerMinute),
-      minIntervalMs: this.toInt(configs.minIntervalMs),
-      maxCallsPerRun: this.toInt(configs.maxCallsPerRun),
-      retryMax: this.toInt(configs.retryMax),
-      leagueId: configs.leagueId,
-      leagueIds: this.toStringList(configs.leagueIds),
-      season: configs.season,
-      soccerLeagueId: configs.soccerLeagueId,
-      basketballLeagueId: configs.basketballLeagueId,
-      soccerSeason: configs.soccerSeason,
-      soccerBackfillFrom: configs.soccerBackfillFrom,
-      soccerRoundMax: this.toInt(configs.soccerRoundMax),
-      soccerRoundStart: this.toInt(configs.soccerRoundStart),
-      nbaLeague: configs.nbaLeague,
-      dailyLimit: this.toInt(configs.dailyLimit),
-      hourlyLimit: this.toInt(configs.hourlyLimit),
-      syncDaysBack: this.toInt(configs.syncDaysBack),
-      syncDaysAhead: this.toInt(configs.syncDaysAhead),
-      standingsLeagueIds: this.toStringList(configs.standingsLeagueIds),
-      matchDetailsMaxMatches: this.toInt(configs.matchDetailsMaxMatches),
-      enrichmentEnabled: this.toBool(configs.enrichmentEnabled),
-      oddsSport: configs.oddsSport,
-      oddsBookmakers: configs.oddsBookmakers,
-      oddsLeague: configs.oddsLeague,
-      oddsLimit: this.toInt(configs.oddsLimit)
+      return {
+        apiKey,
+        baseUrl: baseUrl ?? undefined,
+        competitionCode: configs.competitionCode,
+        competitionCodes: this.toStringList(configs.competitionCodes),
+        priorityCompetitionCodes: this.toStringList(configs.priorityCompetitionCodes),
+        minuteRateLimit: this.toInt(configs.minuteRateLimit),
+        minuteRateBuffer: this.toInt(configs.minuteRateBuffer),
+        plannedRequestsPerMinute: this.toInt(configs.plannedRequestsPerMinute),
+        reserveRequestsPerMinute: this.toInt(configs.reserveRequestsPerMinute),
+        minIntervalMs: this.toInt(configs.minIntervalMs),
+        maxCallsPerRun: this.toInt(configs.maxCallsPerRun),
+        retryMax: this.toInt(configs.retryMax),
+        leagueId: configs.leagueId,
+        leagueIds: this.toStringList(configs.leagueIds),
+        season: configs.season,
+        soccerLeagueId: configs.soccerLeagueId,
+        basketballLeagueId: configs.basketballLeagueId,
+        soccerSeason: configs.soccerSeason,
+        soccerBackfillFrom: configs.soccerBackfillFrom,
+        soccerRoundMax: this.toInt(configs.soccerRoundMax),
+        soccerRoundStart: this.toInt(configs.soccerRoundStart),
+        nbaLeague: configs.nbaLeague,
+        dailyLimit: this.toInt(configs.dailyLimit),
+        hourlyLimit: this.toInt(configs.hourlyLimit),
+        syncDaysBack: this.toInt(configs.syncDaysBack),
+        syncDaysAhead: this.toInt(configs.syncDaysAhead),
+        standingsLeagueIds: this.toStringList(configs.standingsLeagueIds),
+        matchDetailsMaxMatches: this.toInt(configs.matchDetailsMaxMatches),
+        enrichmentEnabled: this.toBool(configs.enrichmentEnabled),
+        oddsSport: configs.oddsSport,
+        oddsBookmakers: configs.oddsBookmakers,
+        oddsLeague: configs.oddsLeague,
+        oddsLimit: this.toInt(configs.oddsLimit)
+      };
     };
+
+    try {
+      await this.ensureProviderCatalog();
+
+      const provider = await this.prisma.provider.findUnique({
+        where: { key: providerKey },
+        include: { configs: true }
+      });
+
+      if (!provider) {
+        throw new NotFoundException(`Provider not found: ${providerKey}`);
+      }
+
+      return buildSettingsFromRaw(this.configMap(provider.configs), provider.baseUrl);
+    } catch (error) {
+      if (!this.isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+
+      const meta = this.providerMeta(providerKey);
+      if (!meta) {
+        throw new NotFoundException(`Provider not found: ${providerKey}`);
+      }
+
+      return buildSettingsFromRaw({ ...(meta.defaultConfigs ?? {}) }, meta.defaultBaseUrl ?? null);
+    }
   }
 
   async listProviders() {
-    await this.ensureProviderCatalog();
+    const sortByPlan = (a: { plan: ProviderPlan; key: string }, b: { plan: ProviderPlan; key: string }) => {
+      const rank: Record<ProviderPlan, number> = { free: 0, paid: 1, local: 2 };
+      const planOrder = rank[a.plan as ProviderPlan] - rank[b.plan as ProviderPlan];
+      if (planOrder !== 0) {
+        return planOrder;
+      }
+      return a.key.localeCompare(b.key);
+    };
 
-    const providers = await this.prisma.provider.findMany({ include: { configs: true }, orderBy: { key: "asc" } });
+    try {
+      await this.ensureProviderCatalog();
 
-    return providers
-      .map((provider) => {
-        const meta = this.providerMeta(provider.key);
-        const configs = this.configMap(provider.configs);
+      const providers = await this.prisma.provider.findMany({ include: { configs: true }, orderBy: { key: "asc" } });
 
-        return {
-          key: provider.key,
-          name: provider.name,
-          isActive: provider.isActive,
-          baseUrl: provider.baseUrl,
-          plan: meta?.plan ?? "local",
-          supportsSports: meta?.supportsSports ?? [],
-          requiresApiKey: meta?.requiresApiKey ?? false,
-          defaultEnabled: meta?.defaultEnabled ?? false,
-          description: meta?.description ?? "",
-          website: meta?.website ?? "",
-          configs
-        };
-      })
-      .sort((a, b) => {
-        const rank: Record<ProviderPlan, number> = { free: 0, paid: 1, local: 2 };
-        const planOrder = rank[a.plan as ProviderPlan] - rank[b.plan as ProviderPlan];
-        if (planOrder !== 0) {
-          return planOrder;
-        }
-        return a.key.localeCompare(b.key);
-      });
+      return providers
+        .map((provider) => {
+          const meta = this.providerMeta(provider.key);
+          const configs = this.configMap(provider.configs);
+
+          return {
+            key: provider.key,
+            name: provider.name,
+            isActive: provider.isActive,
+            baseUrl: provider.baseUrl,
+            plan: (meta?.plan ?? "local") as ProviderPlan,
+            supportsSports: meta?.supportsSports ?? [],
+            requiresApiKey: meta?.requiresApiKey ?? false,
+            defaultEnabled: meta?.defaultEnabled ?? false,
+            description: meta?.description ?? "",
+            website: meta?.website ?? "",
+            configs
+          };
+        })
+        .sort(sortByPlan);
+    } catch (error) {
+      if (!this.isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+      return PROVIDER_CATALOG.map((item) => this.providerCatalogFallbackItem(item)).sort(sortByPlan);
+    }
   }
 
   async updateProvider(key: string, body: { isActive?: boolean; baseUrl?: string | null; name?: string }) {
@@ -506,22 +568,61 @@ export class ProvidersService {
   }
 
   async listActiveApiProviders() {
-    await this.ensureProviderCatalog();
-    const providers = await this.prisma.provider.findMany({
-      where: { isActive: true, key: { not: "historical_csv" } },
-      include: { configs: true }
-    });
+    try {
+      await this.ensureProviderCatalog();
+      const providers = await this.prisma.provider.findMany({
+        where: { isActive: true, key: { not: "historical_csv" } },
+        include: { configs: true }
+      });
 
-    return providers.map((provider) => ({
-      ...provider,
-      configs: this.configMap(provider.configs)
-    }));
+      return providers.map((provider) => ({
+        ...provider,
+        configs: this.configMap(provider.configs)
+      }));
+    } catch (error) {
+      if (!this.isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+
+      return PROVIDER_CATALOG.filter((item) => item.defaultEnabled && item.key !== "historical_csv").map((item) => ({
+        id: `catalog:${item.key}`,
+        key: item.key,
+        name: item.name,
+        baseUrl: item.defaultBaseUrl ?? null,
+        isActive: true,
+        createdAt: new Date(),
+        configs: {
+          ...(item.defaultConfigs ?? {}),
+          ...(this.envKeyByProvider(item.key) ? { apiKey: this.envKeyByProvider(item.key) as string } : {})
+        }
+      }));
+    }
   }
 
   async providerHealth() {
-    await this.ensureProviderCatalog();
+    let providers: Array<{
+      key: string;
+      baseUrl: string | null;
+      configs: Array<{ configKey: string; configValue: string }>;
+    }>;
 
-    const providers = await this.prisma.provider.findMany({ where: { isActive: true }, include: { configs: true } });
+    try {
+      await this.ensureProviderCatalog();
+      providers = await this.prisma.provider.findMany({ where: { isActive: true }, include: { configs: true } });
+    } catch (error) {
+      if (!this.isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+      providers = PROVIDER_CATALOG.filter((item) => item.defaultEnabled).map((item) => ({
+        key: item.key,
+        baseUrl: item.defaultBaseUrl ?? null,
+        configs: Object.entries(item.defaultConfigs ?? {}).map(([configKey, configValue]) => ({
+          configKey,
+          configValue
+        }))
+      }));
+    }
+
     const now = new Date().toISOString();
 
     if (providers.length === 0) {

@@ -59,4 +59,54 @@ describe("IngestionService", () => {
     expect(queue.enqueuePipeline).toHaveBeenCalledTimes(1);
     expect(queue.runInlineFallback).toHaveBeenCalledWith("run-1", "syncFixtures");
   });
+
+  it("falls back to direct provider sync when ingestion tables are missing", async () => {
+    const queue = {
+      enqueuePipeline: jest.fn(),
+      runInlineFallback: jest.fn()
+    };
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn().mockRejectedValue(new Error("relation ingestion_jobs does not exist")),
+        create: jest.fn()
+      },
+      ingestionJobRun: {
+        create: jest.fn()
+      }
+    };
+    const providerIngestionService = {
+      sync: jest.fn().mockResolvedValue({
+        recordsRead: 12,
+        recordsWritten: 7,
+        errors: 0,
+        logs: { provider: "football_data" }
+      })
+    };
+
+    const service = new IngestionService(prisma as any, queue as any, providerIngestionService as any);
+    const result = await service.run("syncFixtures");
+
+    expect(providerIngestionService.sync).toHaveBeenCalledWith("syncFixtures", expect.stringMatching(/^compat-syncFixtures-/));
+    expect(result.status).toBe("succeeded");
+    expect(result.recordsWritten).toBe(7);
+  });
+
+  it("returns empty run list when ingestion run table is missing", async () => {
+    const queue = {
+      enqueuePipeline: jest.fn(),
+      runInlineFallback: jest.fn()
+    };
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn(),
+        create: jest.fn()
+      },
+      ingestionJobRun: {
+        findMany: jest.fn().mockRejectedValue(new Error("relation ingestion_job_runs does not exist"))
+      }
+    };
+    const service = new IngestionService(prisma as any, queue as any, { sync: jest.fn() } as any);
+
+    await expect(service.listRuns()).resolves.toEqual([]);
+  });
 });
