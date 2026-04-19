@@ -446,6 +446,15 @@ export class ProviderIngestionService {
     return fallback;
   }
 
+  private collectPredictionScopeMatchIds(results: ProviderSyncResult[]) {
+    const rawMatchIds = results.flatMap((item) => {
+      const details = item.details ?? {};
+      const matchIds = Array.isArray(details.matchIds) ? details.matchIds : [];
+      return matchIds.map((matchId) => (typeof matchId === "string" ? matchId : null));
+    });
+    return this.uniqueStringList(rawMatchIds);
+  }
+
   private parseDisabledProviderPaths(value: unknown) {
     if (!value) {
       return new Set<string>();
@@ -869,10 +878,17 @@ export class ProviderIngestionService {
       { recordsRead: 0, recordsWritten: 0, errors: 0 }
     );
 
+    const scopedPredictionMatchIds = this.collectPredictionScopeMatchIds(results);
     let predictionSummary: SyncSummary | null = null;
     if ((jobType === "syncFixtures" || jobType === "syncResults") && summary.recordsWritten > 0) {
       try {
-        predictionSummary = await this.generatePredictions(runId);
+        predictionSummary = await this.generatePredictions(runId, {
+          matchIds: scopedPredictionMatchIds.length > 0 ? scopedPredictionMatchIds : undefined,
+          reason:
+            scopedPredictionMatchIds.length > 0
+              ? `post_${jobType}_scoped`
+              : `post_${jobType}_fallback_global`
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "prediction_auto_generation_failed";
         this.logger.error(`Automatic prediction generation failed after ${jobType}: ${message}`);
@@ -6215,19 +6231,22 @@ export class ProviderIngestionService {
     if (!kickoffAt || homeTeamName.length === 0 || awayTeamName.length === 0) {
       return {
         skipped: true,
-        halfTimeSource: null as TheSportsDbHalfTimeSource
+        halfTimeSource: null as TheSportsDbHalfTimeSource,
+        matchId: null as string | null
       };
     }
     if (params.dateFrom && kickoffAt < params.dateFrom) {
       return {
         skipped: true,
-        halfTimeSource: null as TheSportsDbHalfTimeSource
+        halfTimeSource: null as TheSportsDbHalfTimeSource,
+        matchId: null as string | null
       };
     }
     if (params.dateTo && kickoffAt > params.dateTo) {
       return {
         skipped: true,
-        halfTimeSource: null as TheSportsDbHalfTimeSource
+        halfTimeSource: null as TheSportsDbHalfTimeSource,
+        matchId: null as string | null
       };
     }
 
@@ -6289,7 +6308,8 @@ export class ProviderIngestionService {
 
     return {
       skipped: false,
-      halfTimeSource: halfTime.source
+      halfTimeSource: halfTime.source,
+      matchId: upserted.id
     };
   }
 
@@ -6405,6 +6425,7 @@ export class ProviderIngestionService {
     let directHalfTimeScoresWritten = 0;
     let timelineHalfTimeScoresWritten = 0;
     let errors = 0;
+    const writtenMatchIds: string[] = [];
     const perLeague: TheSportsDbLeagueRunSummary[] = [];
     const runErrors: string[] = [];
 
@@ -6516,6 +6537,9 @@ export class ProviderIngestionService {
           }
           recordsWritten += 1;
           summary.matchesWritten += 1;
+          if (result.matchId) {
+            writtenMatchIds.push(result.matchId);
+          }
           if (result.halfTimeSource) {
             halfTimeScoresWritten += 1;
             summary.halfTimeScoresWritten += 1;
@@ -6612,6 +6636,7 @@ export class ProviderIngestionService {
         halfTimeScoresWritten,
         directHalfTimeScoresWritten,
         timelineHalfTimeScoresWritten,
+        matchIds: this.uniqueStringList(writtenMatchIds),
         perLeague,
         quota: {
           used: quota.used,

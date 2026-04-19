@@ -268,6 +268,36 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
     ).toEqual({ home: 1, away: 1, source: "timeline_derived" });
   });
 
+  it("collects scoped prediction match ids from provider sync results", () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).collectPredictionScopeMatchIds([
+        {
+          providerKey: "the_sports_db",
+          recordsRead: 10,
+          recordsWritten: 2,
+          errors: 0,
+          details: { matchIds: ["match-1", "match-2", "match-1", "", null] }
+        },
+        {
+          providerKey: "api_football",
+          recordsRead: 5,
+          recordsWritten: 1,
+          errors: 0,
+          details: { matchIds: ["match-3"] }
+        },
+        {
+          providerKey: "sportapi_ai",
+          recordsRead: 3,
+          recordsWritten: 0,
+          errors: 0,
+          details: {}
+        }
+      ])
+    ).toEqual(["match-1", "match-2", "match-3"]);
+  });
+
   it("writes per-league result checkpoint and run payload summary", async () => {
     const { service, prisma } = createService();
     (service as any).providersService = {
