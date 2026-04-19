@@ -1,4 +1,6 @@
 const { spawnSync } = require("node:child_process");
+const { existsSync } = require("node:fs");
+const { resolve } = require("node:path");
 
 const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
 const directUrl = process.env.SUPABASE_DB_DIRECT_URL?.trim() ?? "";
@@ -46,12 +48,22 @@ if (directUrl) {
   }
 }
 
-const prismaBin = process.platform === "win32" ? "node_modules/.bin/prisma.cmd" : "node_modules/.bin/prisma";
+const prismaExecutableName = process.platform === "win32" ? "prisma.cmd" : "prisma";
+const prismaBinCandidates = [
+  resolve(process.cwd(), "node_modules", ".bin", prismaExecutableName),
+  resolve(process.cwd(), "..", "node_modules", ".bin", prismaExecutableName),
+  resolve(process.cwd(), "..", "..", "node_modules", ".bin", prismaExecutableName),
+  resolve(__dirname, "..", "node_modules", ".bin", prismaExecutableName),
+  resolve(__dirname, "..", "..", "node_modules", ".bin", prismaExecutableName),
+  resolve(__dirname, "..", "..", "..", "node_modules", ".bin", prismaExecutableName)
+];
+const prismaBin = prismaBinCandidates.find((candidate) => existsSync(candidate)) ?? "prisma";
 const args = ["migrate", "deploy", "--schema", "prisma/schema.prisma"];
 
 const result = spawnSync(prismaBin, args, {
   env,
   stdio: "inherit",
+  shell: process.platform === "win32",
 });
 
 if (result.error) {
