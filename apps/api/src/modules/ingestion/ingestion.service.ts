@@ -54,8 +54,8 @@ export class IngestionService {
           error instanceof Error ? error.message : "unknown enqueue error"
         }`
       );
+      this.queue.runInlineFallback(run.id, jobType);
     }
-    this.queue.runInlineFallback(run.id, jobType);
 
     return {
       id: run.id,

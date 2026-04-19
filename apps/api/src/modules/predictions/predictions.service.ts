@@ -404,6 +404,13 @@ const SYNTHETIC_SUMMARY_MARKERS = [
 function normalizeSearchText(value: string) {
   return value
     .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/Ä±/g, "i")
+    .replace(/ÅŸ/g, "s")
+    .replace(/ÄŸ/g, "g")
+    .replace(/Ã¼/g, "u")
+    .replace(/Ã¶/g, "o")
+    .replace(/Ã§/g, "c")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ")
@@ -415,7 +422,14 @@ function hasSyntheticSummary(value: unknown): boolean {
     return false;
   }
   const normalized = normalizeSearchText(value);
-  return SYNTHETIC_SUMMARY_MARKERS.some((marker) => normalized.includes(marker));
+  if (SYNTHETIC_SUMMARY_MARKERS.some((marker) => normalized.includes(marker))) {
+    return true;
+  }
+  return (
+    normalized.includes("tahmin kaydi bulunamadigi") &&
+    normalized.includes("gecici tahmin") &&
+    normalized.includes("mac verisine dayali")
+  );
 }
 
 function areLegacyRowsSyntheticOnly(rows: LegacyPredictionRecord[]): boolean {
@@ -622,7 +636,7 @@ function normalizeFallbackSummary(
   if (over !== undefined || under !== undefined) {
     const overPct = Math.round((over ?? 0.5) * 100);
     const underPct = Math.round((under ?? 0.5) * 100);
-    return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi Üst ${overPct}%, Alt ${underPct}%.`;
+    return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi Ust ${overPct}%, Alt ${underPct}%.`;
   }
 
   const yes = asFinite(probabilities.yes) ?? asFinite(probabilities.bttsYes);
@@ -633,7 +647,7 @@ function normalizeFallbackSummary(
     return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi KG Var ${yesPct}%, KG Yok ${noPct}%.`;
   }
 
-  return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi güncellendi.`;
+  return `${match.homeTeam.name} - ${match.awayTeam.name}: model analizi guncellendi.`;
 }
 
 function normalizeLegacyRow(row: LegacyPredictionRecord) {
@@ -1103,6 +1117,115 @@ export class PredictionsService {
     return message.slice(0, 240);
   }
 
+  private isMissingPublishedPredictionsTableError(error: unknown) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2021" || error.code === "P2022") &&
+      /published_predictions/i.test(error.message)
+    ) {
+      return true;
+    }
+    if (error instanceof Error && /published_predictions/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  }
+
+  private isSyntheticPredictionRunRow(row: PredictionRunFallbackRecord) {
+    const explanation = asRecord(row.explanationJson);
+    const summary = typeof explanation?.summary === "string" ? explanation.summary : "";
+    return hasSyntheticSummary(summary);
+  }
+
+  private async materializePublishedFromPredictionRuns(runRows: PredictionRunFallbackRecord[], contextKey: string) {
+    if (runRows.length === 0) {
+      return 0;
+    }
+
+    const publishedDelegate = this.prisma.publishedPrediction as unknown as {
+      upsert?: (args: Prisma.PublishedPredictionUpsertArgs) => Promise<unknown>;
+    };
+    if (!publishedDelegate || typeof publishedDelegate.upsert !== "function") {
+      return 0;
+    }
+
+    const eligibleRows = runRows.filter((row) => !this.isSyntheticPredictionRunRow(row));
+    if (eligibleRows.length === 0) {
+      return 0;
+    }
+
+    const cooldownKey = `predictions:materialize-published:${contextKey}`;
+    const attemptedRecently = await this.cache.get<boolean>(cooldownKey);
+    if (attemptedRecently) {
+      return 0;
+    }
+    await this.cache.set(cooldownKey, true, 20, ["predictions"]);
+
+    let written = 0;
+    const maxRows = Math.min(Math.max(eligibleRows.length, 40), 180);
+    for (const row of eligibleRows.slice(0, maxRows)) {
+      try {
+        await publishedDelegate.upsert({
+          where: {
+            matchId_market_lineKey_horizon: {
+              matchId: row.matchId,
+              market: row.market,
+              lineKey: row.lineKey,
+              horizon: row.horizon
+            }
+          },
+          create: {
+            matchId: row.matchId,
+            market: row.market,
+            line: row.line,
+            lineKey: row.lineKey,
+            horizon: row.horizon,
+            predictionRunId: row.id,
+            publishedAt: row.createdAt
+          },
+          update: {
+            line: row.line,
+            predictionRunId: row.id,
+            publishedAt: row.createdAt
+          }
+        });
+        written += 1;
+      } catch (error) {
+        if (this.isMissingPublishedPredictionsTableError(error)) {
+          this.logger.warn("published_predictions table missing; materialize step skipped.");
+          return 0;
+        }
+      }
+    }
+
+    if (written > 0) {
+      this.logger.warn(
+        `Published prediction self-heal materialized ${written} row(s) from prediction runs (${contextKey}).`
+      );
+    }
+    return written;
+  }
+
+  private sanitizeExpandedSummaries(items: ExpandedPredictionItem[]) {
+    return items.map((item) => {
+      const safeSummary = normalizeFallbackSummary(
+        item.summary ?? "",
+        {
+          homeTeam: { name: item.homeTeam ?? "Ev Takim" },
+          awayTeam: { name: item.awayTeam ?? "Deplasman Takim" }
+        },
+        item.probabilities
+      );
+      if (safeSummary === item.summary) {
+        return item;
+      }
+      return {
+        ...item,
+        summary: safeSummary
+      };
+    });
+  }
+
   private async findPublishedRows(
     baseWhere: Prisma.PublishedPredictionWhereInput,
     take: number,
@@ -1347,6 +1470,31 @@ export class PredictionsService {
       );
 
       if (rows.length === 0) {
+        const predictionRunDelegate = this.prisma.predictionRun as unknown as {
+          findMany?: (...args: unknown[]) => Promise<unknown>;
+        };
+        if (predictionRunDelegate && typeof predictionRunDelegate.findMany === "function") {
+          const runRowsForMaterialize = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
+          const materialized = await this.materializePublishedFromPredictionRuns(
+            runRowsForMaterialize,
+            `list:${sportKey}:${statusKey}`
+          );
+          if (materialized > 0) {
+            rows = await this.findPublishedRows(
+              {
+                matchId: { in: matchIds },
+                match: {
+                  status: { in: effectiveStatuses },
+                  ...(sportCode ? { sport: { code: sportCode } } : {})
+                }
+              },
+              Math.max(take * 2, 100)
+            ).catch(() => []);
+          }
+        }
+      }
+
+      if (rows.length === 0) {
         rows = await this.findPublishedRows(
           {
             match: {
@@ -1483,10 +1631,11 @@ export class PredictionsService {
     const enriched = await this.oddsService
       .attachMarketAnalysis(deduped, includeMarketAnalysis, line)
       .catch(() => deduped);
+    const sanitized = this.sanitizeExpandedSummaries(enriched);
 
-    await this.cache.set(cacheKey, enriched, 20, ["predictions", "market-analysis"]);
-    await this.cache.set(stableCacheKey, enriched, 300, ["predictions", "market-analysis"]);
-    return enriched;
+    await this.cache.set(cacheKey, sanitized, 20, ["predictions", "market-analysis"]);
+    await this.cache.set(stableCacheKey, sanitized, 300, ["predictions", "market-analysis"]);
+    return sanitized;
   }
 
   async listByMatch(matchId: string, params?: ListByMatchParams) {
@@ -1494,10 +1643,26 @@ export class PredictionsService {
     const line = parseLine(params?.line);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
 
-    const rows = await this.findPublishedRows({ matchId }, 20, [{ publishedAt: "desc" }]).catch((error) => {
+    let rows = await this.findPublishedRows({ matchId }, 20, [{ publishedAt: "desc" }]).catch((error) => {
       this.logger.warn(`listByMatch fallback to empty set due to query error: ${this.formatErrorMessage(error)}`);
       return [] as PublishedPredictionRecord[];
     });
+
+    if (rows.length === 0) {
+      const predictionRunDelegate = this.prisma.predictionRun as unknown as {
+        findMany?: (...args: unknown[]) => Promise<unknown>;
+      };
+      if (predictionRunDelegate && typeof predictionRunDelegate.findMany === "function") {
+        const runRowsForMaterialize = await this.fetchPredictionRunRowsByMatch(matchId);
+        const materialized = await this.materializePublishedFromPredictionRuns(
+          runRowsForMaterialize,
+          `match:${matchId}`
+        );
+        if (materialized > 0) {
+          rows = await this.findPublishedRows({ matchId }, 20, [{ publishedAt: "desc" }]).catch(() => []);
+        }
+      }
+    }
 
     let normalizedRows: NormalizedPredictionRow[] = rows.map((row) => normalizePublishedRow(row));
 
@@ -1546,11 +1711,12 @@ export class PredictionsService {
     }
 
     const deduped = Array.from(uniqueByMarket.values());
-    return this.oddsService.attachMarketAnalysis(deduped, includeMarketAnalysis, line).catch(() => deduped);
+    const enriched = await this.oddsService.attachMarketAnalysis(deduped, includeMarketAnalysis, line).catch(() => deduped);
+    return this.sanitizeExpandedSummaries(enriched);
   }
 
   async highConfidence() {
-    const rows = await this.findPublishedRows(
+    let rows = await this.findPublishedRows(
       {
         predictionRun: {
           confidence: { gte: 0.7 }
@@ -1561,6 +1727,29 @@ export class PredictionsService {
       this.logger.warn(`highConfidence fallback to empty set due to query error: ${this.formatErrorMessage(error)}`);
       return [] as PublishedPredictionRecord[];
     });
+
+    if (rows.length === 0) {
+      const predictionRunDelegate = this.prisma.predictionRun as unknown as {
+        findMany?: (...args: unknown[]) => Promise<unknown>;
+      };
+      if (predictionRunDelegate && typeof predictionRunDelegate.findMany === "function") {
+        const runRowsForMaterialize = await this.fetchPredictionRunHighConfidenceRows();
+        const materialized = await this.materializePublishedFromPredictionRuns(
+          runRowsForMaterialize,
+          "high-confidence"
+        );
+        if (materialized > 0) {
+          rows = await this.findPublishedRows(
+            {
+              predictionRun: {
+                confidence: { gte: 0.7 }
+              }
+            },
+            50
+          ).catch(() => []);
+        }
+      }
+    }
 
     if (rows.length > 0) {
       return rows.map((row) => normalizePublishedRow(row));

@@ -307,6 +307,50 @@ describe("PredictionsService", () => {
     expect(first?.summary).not.toContain("gecici tahmin gosterimi");
   });
 
+  it("list endpoint rewrites Turkish synthetic summary variants to model-style summary", async () => {
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-1", matchDateTimeUTC: new Date("2026-04-18T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            createPublishedRow(
+              "run-synthetic-summary-tr",
+              "Yayınlanmış tahmin kaydı bulunamadığı için maç verisine dayalı geçici tahmin gösterimi kullanılıyor."
+            )
+          ])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+    const first = items[0] as any;
+
+    expect(items.length).toBeGreaterThan(0);
+    expect(first?.summary).toContain("Team A - Team B: model analizi Ev");
+    expect(first?.summary.toLocaleLowerCase("tr-TR")).not.toContain("geçici tahmin");
+  });
+
   it("list endpoint falls back to legacy rows when published source is empty", async () => {
     const prisma = {
       match: {
@@ -383,6 +427,51 @@ describe("PredictionsService", () => {
     expect(prisma.predictionRun.findMany).toHaveBeenCalled();
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Run A");
+  });
+
+  it("list endpoint self-heals published rows from prediction runs when published source is empty", async () => {
+    const publishedFindMany = jest
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createPublishedRow("run-materialized", "run summary")]);
+    const publishedUpsert = jest.fn().mockResolvedValue({});
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-run-1", matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z") }])
+      },
+      publishedPrediction: {
+        findMany: publishedFindMany,
+        upsert: publishedUpsert
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      predictionRun: {
+        findMany: jest.fn().mockResolvedValue([createPredictionRunRow()])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    expect(prisma.predictionRun.findMany).toHaveBeenCalled();
+    expect(publishedUpsert).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
   });
 
   it("list endpoint returns empty when all real sources are empty and synthetic fallback is disabled", async () => {

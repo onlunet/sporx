@@ -10,6 +10,7 @@ import { InternalRuntimeSecurityService } from "../security-hardening/internal-r
 @Injectable()
 export class IngestionQueueService implements OnModuleDestroy {
   private readonly logger = new Logger(IngestionQueueService.name);
+  private readonly runHeartbeatMs = this.readRunHeartbeatMs();
   private worker: Worker | null = null;
   private workerStartPromise: Promise<void> | null = null;
   private flowProducer: FlowProducer | null = null;
@@ -198,6 +199,8 @@ export class IngestionQueueService implements OnModuleDestroy {
       return false;
     }
 
+    const stopHeartbeat = this.startRunHeartbeat(runId);
+
     try {
       const result = await this.providerIngestionService.sync(jobType, runId);
 
@@ -251,6 +254,58 @@ export class IngestionQueueService implements OnModuleDestroy {
         }
       });
       return false;
+    } finally {
+      await stopHeartbeat();
+    }
+  }
+
+  private readRunHeartbeatMs() {
+    const raw = process.env.INGESTION_RUN_HEARTBEAT_MS;
+    const fallback = 60_000;
+    if (!raw) {
+      return fallback;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 5_000) {
+      return fallback;
+    }
+    return Math.round(parsed);
+  }
+
+  private startRunHeartbeat(runId: string) {
+    const intervalMs = this.runHeartbeatMs;
+    if (intervalMs <= 0) {
+      return async () => undefined;
+    }
+
+    let stopped = false;
+    let inFlight: Promise<void> | null = null;
+    const timer = setInterval(() => {
+      if (stopped) {
+        return;
+      }
+      inFlight = this.heartbeatRun(runId);
+    }, intervalMs);
+
+    return async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (inFlight) {
+        await inFlight.catch(() => undefined);
+      }
+    };
+  }
+
+  private async heartbeatRun(runId: string) {
+    try {
+      await this.prisma.ingestionJobRun.updateMany({
+        where: { id: runId, status: "running" },
+        data: { startedAt: new Date() }
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Ingestion run heartbeat skipped for ${runId}: ${error instanceof Error ? error.message : "unknown"}`
+      );
     }
   }
 

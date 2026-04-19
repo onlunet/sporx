@@ -12,7 +12,7 @@ describe("IngestionService", () => {
     errors: 0
   });
 
-  it("enqueues pipeline and schedules inline fallback", async () => {
+  it("enqueues pipeline without inline fallback when queue is healthy", async () => {
     const queue = {
       enqueuePipeline: jest.fn().mockResolvedValue(undefined),
       runInlineFallback: jest.fn()
@@ -34,7 +34,7 @@ describe("IngestionService", () => {
       runId: "run-1",
       jobType: "syncFixtures"
     });
-    expect(queue.runInlineFallback).toHaveBeenCalledWith("run-1", "syncFixtures");
+    expect(queue.runInlineFallback).not.toHaveBeenCalled();
   });
 
   it("keeps inline fallback when enqueue fails", async () => {
