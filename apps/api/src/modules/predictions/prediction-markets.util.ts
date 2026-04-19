@@ -1,3 +1,6 @@
+import { MatchStatus } from "@prisma/client";
+import { normalizePublicMatchStatus } from "../matches/public-match-status.util";
+
 type UnknownRecord = Record<string, unknown>;
 
 type Severity = "low" | "medium" | "high" | "critical" | "unknown";
@@ -309,20 +312,22 @@ function normalizePair(valueHome: number, valueAway: number) {
 }
 
 function effectiveMatchStatus(statusRaw: string | undefined, kickoffAt: Date | undefined, homeScore: number | null | undefined, awayScore: number | null | undefined) {
+  const kickoff = kickoffAt instanceof Date && Number.isFinite(kickoffAt.getTime()) ? kickoffAt : new Date(Date.now());
   const status = (statusRaw ?? "").toLowerCase();
-  const hasScore = homeScore !== null && homeScore !== undefined && awayScore !== null && awayScore !== undefined;
-  const now = Date.now();
-  const kickoffMs = kickoffAt?.getTime();
-  if (hasScore && kickoffMs !== undefined && kickoffMs <= now + 2 * 60 * 60 * 1000) {
-    return "finished";
-  }
-  if (status.length > 0) {
-    return status;
-  }
-  if (hasScore && kickoffMs !== undefined && kickoffMs <= now + 2 * 60 * 60 * 1000) {
-    return "finished";
-  }
-  return "scheduled";
+  const normalized =
+    status === MatchStatus.live ||
+    status === MatchStatus.finished ||
+    status === MatchStatus.postponed ||
+    status === MatchStatus.cancelled ||
+    status === MatchStatus.scheduled
+      ? (status as MatchStatus)
+      : MatchStatus.scheduled;
+  return normalizePublicMatchStatus({
+    status: normalized,
+    matchDateTimeUTC: kickoff,
+    homeScore,
+    awayScore
+  });
 }
 
 function createHalfTimeFullTimeProbabilities(

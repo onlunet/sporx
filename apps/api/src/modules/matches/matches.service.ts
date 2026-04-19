@@ -2,6 +2,11 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { MatchStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
+import {
+  expandStatusesForPublicFilter,
+  matchesPublicStatusFilter,
+  normalizePublicMatchStatus
+} from "./public-match-status.util";
 import { PredictionsService } from "../predictions/predictions.service";
 
 type ListMatchesParams = {
@@ -79,11 +84,12 @@ export class MatchesService {
   async list(params?: ListMatchesParams) {
     const statuses = parseStatusFilter(params?.status);
     const sportCode = parseSportFilter(params?.sport);
-    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live, MatchStatus.finished];
+    const requestedStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live, MatchStatus.finished];
+    const queryStatuses = expandStatusesForPublicFilter(requestedStatuses);
     const take = normalizeTake(params?.take);
     const sportKey = sportCode ?? "all";
-    const statusKey = effectiveStatuses.join("|");
-    const cacheKey = `matches:list:v3:${sportKey}:${statusKey}:${take}`;
+    const statusKey = requestedStatuses.join("|");
+    const cacheKey = `matches:list:v4:${sportKey}:${statusKey}:${take}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -119,11 +125,11 @@ export class MatchesService {
     } as const;
 
     try {
-      if (statuses && statuses.length === 1) {
+      if (queryStatuses.length === 1) {
         matches = await queryWithTimeout(
           this.prisma.match.findMany({
             where: {
-              status: { in: effectiveStatuses },
+              status: { in: queryStatuses },
               ...(sportCode ? { sport: { code: sportCode } } : {})
             },
             orderBy: { matchDateTimeUTC: "desc" },
@@ -133,9 +139,9 @@ export class MatchesService {
           12000
         );
       } else {
-        const perStatusTake = Math.max(Math.ceil(take / effectiveStatuses.length) + 24, 40);
+        const perStatusTake = Math.max(Math.ceil(take / queryStatuses.length) + 24, 40);
         const statusChunks = await Promise.all(
-          effectiveStatuses.map(async (status) => {
+          queryStatuses.map(async (status) => {
             try {
               return await queryWithTimeout(
                 this.prisma.match.findMany({
@@ -211,19 +217,24 @@ export class MatchesService {
     const teamNameById = new Map(teams.map((team) => [team.id, team.name]));
     const leagueNameById = new Map(leagues.map((league) => [league.id, league.name]));
 
-    const data = matches.map((match) => ({
-      id: match.id,
-      kickoffAt: match.matchDateTimeUTC.toISOString(),
-      leagueName: leagueNameById.get(match.leagueId) ?? "Unknown League",
-      homeTeam: teamNameById.get(match.homeTeamId) ?? "Unknown Home Team",
-      awayTeam: teamNameById.get(match.awayTeamId) ?? "Unknown Away Team",
-      status: match.status,
-      score: { home: match.homeScore, away: match.awayScore },
-      halfTimeScore:
-        match.halfTimeHomeScore !== null && match.halfTimeAwayScore !== null
-          ? { home: match.halfTimeHomeScore, away: match.halfTimeAwayScore }
-          : null
-    }));
+    const data = matches
+      .map((match) => {
+        const normalizedStatus = normalizePublicMatchStatus(match);
+        return {
+          id: match.id,
+          kickoffAt: match.matchDateTimeUTC.toISOString(),
+          leagueName: leagueNameById.get(match.leagueId) ?? "Unknown League",
+          homeTeam: teamNameById.get(match.homeTeamId) ?? "Unknown Home Team",
+          awayTeam: teamNameById.get(match.awayTeamId) ?? "Unknown Away Team",
+          status: normalizedStatus,
+          score: { home: match.homeScore, away: match.awayScore },
+          halfTimeScore:
+            match.halfTimeHomeScore !== null && match.halfTimeAwayScore !== null
+              ? { home: match.halfTimeHomeScore, away: match.halfTimeAwayScore }
+              : null
+        };
+      })
+      .filter((match) => matchesPublicStatusFilter(requestedStatuses, match.status));
 
     await this.cache.set(cacheKey, data, 120, ["matches"]);
     await this.cache.set(stableCacheKey, data, 600, ["matches"]);

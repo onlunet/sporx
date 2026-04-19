@@ -3,6 +3,11 @@ import { MatchStatus, Prisma, PublishDecisionStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CacheService } from "../../cache/cache.service";
 import { OddsService } from "../odds/odds.service";
+import {
+  expandStatusesForPublicFilter,
+  matchesPublicStatusFilter,
+  normalizePublicMatchStatus
+} from "../matches/public-match-status.util";
 import { ExpandedPredictionItem } from "./prediction-markets.util";
 import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
 import { PipelineRolloutService } from "./pipeline-rollout.service";
@@ -573,7 +578,10 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
     riskFlags: row.predictionRun.riskFlagsJson,
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.publishedAt ?? row.predictionRun.createdAt,
-    match: row.match
+    match: {
+      ...row.match,
+      status: normalizePublicMatchStatus(row.match)
+    }
   };
 }
 
@@ -634,7 +642,10 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
     riskFlags: row.riskFlags,
     avoidReason: row.avoidReason,
     updatedAt: row.updatedAt,
-    match: row.match
+    match: {
+      ...row.match,
+      status: normalizePublicMatchStatus(row.match)
+    }
   };
 }
 
@@ -671,7 +682,10 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
     riskFlags: row.riskFlagsJson,
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.createdAt,
-    match: row.match
+    match: {
+      ...row.match,
+      status: normalizePublicMatchStatus(row.match)
+    }
   };
 }
 
@@ -1039,7 +1053,7 @@ export class PredictionsService {
         updatedAt: new Date(),
         match: {
           sport: { code: match.sport?.code ?? safeSportCode },
-          status: match.status,
+          status: normalizePublicMatchStatus(match),
           matchDateTimeUTC: match.matchDateTimeUTC,
           homeScore: match.homeScore,
           awayScore: match.awayScore,
@@ -1310,18 +1324,19 @@ export class PredictionsService {
   async list(params?: ListPredictionsParams) {
     const statuses = parseStatusFilter(params?.status);
     const sportCode = parseSportFilter(params?.sport);
-    const effectiveStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
+    const requestedStatuses = statuses ?? [MatchStatus.scheduled, MatchStatus.live];
+    const queryStatuses = expandStatusesForPublicFilter(requestedStatuses);
     const predictionType = parsePredictionType(params?.predictionType);
     const line = parseLine(params?.line);
     const take = parseTake(params?.take, statuses !== undefined);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
-    const statusKey = effectiveStatuses.join("|");
+    const statusKey = requestedStatuses.join("|");
     const typeKey = predictionType ?? "all";
     const sportKey = sportCode ?? "all";
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v16:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v17:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -1351,11 +1366,11 @@ export class PredictionsService {
     try {
       const targetTake = Math.max(take, 60);
       const relevantMatches =
-        effectiveStatuses.length === 1
+        queryStatuses.length === 1
           ? await queryWithTimeout(
               this.prisma.match.findMany({
                 where: {
-                  status: { in: effectiveStatuses },
+                  status: { in: queryStatuses },
                   ...(sportCode ? { sport: { code: sportCode } } : {})
                 },
                 select: {
@@ -1382,7 +1397,7 @@ export class PredictionsService {
             )
           : (
               await Promise.all(
-                effectiveStatuses.map(async (status) => {
+                queryStatuses.map(async (status) => {
                   try {
                     return await queryWithTimeout(
                       this.prisma.match.findMany({
@@ -1408,7 +1423,7 @@ export class PredictionsService {
                           sport: { select: { code: true } }
                         },
                         orderBy: { matchDateTimeUTC: "desc" },
-                        take: Math.max(Math.ceil(targetTake / effectiveStatuses.length) + 24, 36)
+                        take: Math.max(Math.ceil(targetTake / queryStatuses.length) + 24, 36)
                       }),
                       9000
                     );
@@ -1432,7 +1447,7 @@ export class PredictionsService {
         {
           matchId: { in: matchIds },
           match: {
-            status: { in: effectiveStatuses },
+            status: { in: queryStatuses },
             ...(sportCode ? { sport: { code: sportCode } } : {})
           }
         },
@@ -1444,7 +1459,7 @@ export class PredictionsService {
           findMany?: (...args: unknown[]) => Promise<unknown>;
         };
         if (predictionRunDelegate && typeof predictionRunDelegate.findMany === "function") {
-          const runRowsForMaterialize = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
+          const runRowsForMaterialize = await this.fetchPredictionRunRows(queryStatuses, sportCode, take, matchIds);
           const materialized = await this.materializePublishedFromPredictionRuns(
             runRowsForMaterialize,
             `list:${sportKey}:${statusKey}`
@@ -1454,7 +1469,7 @@ export class PredictionsService {
               {
                 matchId: { in: matchIds },
                 match: {
-                  status: { in: effectiveStatuses },
+                  status: { in: queryStatuses },
                   ...(sportCode ? { sport: { code: sportCode } } : {})
                 }
               },
@@ -1468,7 +1483,7 @@ export class PredictionsService {
         rows = await this.findPublishedRows(
           {
             match: {
-              status: { in: effectiveStatuses },
+              status: { in: queryStatuses },
               ...(sportCode ? { sport: { code: sportCode } } : {})
             }
           },
@@ -1478,7 +1493,7 @@ export class PredictionsService {
 
       normalizedRows = rows.map((row) => normalizePublishedRow(row));
       if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
-        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take);
+        const legacyRows = await this.fetchLegacyRows(queryStatuses, sportCode, take);
         if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
           this.logger.warn(
             `Public predictions fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
@@ -1490,7 +1505,7 @@ export class PredictionsService {
               `Legacy fallback skipped because rows are synthetic-only; trying prediction-run fallback (status=${statusKey}, sport=${sportKey}).`
             );
           }
-          const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take, matchIds);
+          const runRows = await this.fetchPredictionRunRows(queryStatuses, sportCode, take, matchIds);
           if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
             this.logger.warn(
               `Public predictions prediction-run fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
@@ -1525,7 +1540,7 @@ export class PredictionsService {
       if (!this.allowLegacyPublicFallback) {
         return [];
       }
-      const runRows = await this.fetchPredictionRunRows(effectiveStatuses, sportCode, take).catch(() => []);
+      const runRows = await this.fetchPredictionRunRows(queryStatuses, sportCode, take).catch(() => []);
       if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
         normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
       } else if (runRows.length > 0) {
@@ -1533,14 +1548,14 @@ export class PredictionsService {
           `Prediction-run fallback skipped in error path because rows are synthetic-only (status=${statusKey}, sport=${sportKey}).`
         );
       } else {
-        const legacyRows = await this.fetchLegacyRows(effectiveStatuses, sportCode, take).catch(() => []);
+        const legacyRows = await this.fetchLegacyRows(queryStatuses, sportCode, take).catch(() => []);
         if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
           normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
         } else if (this.allowSyntheticPublicFallback) {
           const syntheticMatches = await queryWithTimeout(
             this.prisma.match.findMany({
               where: {
-                status: { in: effectiveStatuses },
+                status: { in: queryStatuses },
                 ...(sportCode ? { sport: { code: sportCode } } : {})
               },
               select: {
@@ -1601,7 +1616,9 @@ export class PredictionsService {
     const enriched = await this.oddsService
       .attachMarketAnalysis(deduped, includeMarketAnalysis, line)
       .catch(() => deduped);
-    const sanitized = this.sanitizeExpandedSummaries(enriched);
+    const sanitized = this
+      .sanitizeExpandedSummaries(enriched)
+      .filter((item) => matchesPublicStatusFilter(requestedStatuses, toMatchStatus(item.matchStatus)));
 
     await this.cache.set(cacheKey, sanitized, 20, ["predictions", "market-analysis"]);
     await this.cache.set(stableCacheKey, sanitized, 300, ["predictions", "market-analysis"]);

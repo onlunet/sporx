@@ -205,6 +205,10 @@ function expectNoQuarterScoreSelect(select: Record<string, unknown>) {
 }
 
 describe("PredictionsService", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it("public match query returns one row per duplicate published tuple", async () => {
     const prisma = {
       publishedPrediction: {
@@ -723,6 +727,124 @@ describe("PredictionsService", () => {
       ])
     );
     expect(rollout.resolveSource).not.toHaveBeenCalled();
+  });
+
+  it("list endpoint excludes future-dated finished rows from finished results", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-04-20T00:30:00.000Z"));
+
+    const futureBase = createPublishedRow("run-future-finished");
+    const futureFinished = {
+      ...futureBase,
+      matchId: "match-future",
+      match: {
+        ...futureBase.match,
+        status: MatchStatus.finished,
+        matchDateTimeUTC: new Date("2026-04-20T01:30:00.000Z"),
+        homeScore: 1,
+        awayScore: 0
+      }
+    };
+
+    const completedBase = createPublishedRow("run-completed");
+    const completed = {
+      ...completedBase,
+      matchId: "match-completed",
+      match: {
+        ...completedBase.match,
+        status: MatchStatus.finished,
+        matchDateTimeUTC: new Date("2026-04-19T18:00:00.000Z"),
+        homeScore: 2,
+        awayScore: 1
+      }
+    };
+
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "match-future", matchDateTimeUTC: futureFinished.match.matchDateTimeUTC },
+          { id: "match-completed", matchDateTimeUTC: completed.match.matchDateTimeUTC }
+        ])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([futureFinished, completed])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "finished", sport: "football", take: 10 });
+
+    const matchIds = Array.from(new Set(items.map((item) => (item as any).matchId)));
+    expect(matchIds).toEqual(["match-completed"]);
+    expect(items.every((item) => (item as any).matchStatus === MatchStatus.finished)).toBe(true);
+  });
+
+  it("list endpoint remaps future-dated finished rows into live feed", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-04-20T00:30:00.000Z"));
+
+    const futureBase = createPublishedRow("run-live-from-finished");
+    const futureFinished = {
+      ...futureBase,
+      matchId: "match-live",
+      match: {
+        ...futureBase.match,
+        status: MatchStatus.finished,
+        matchDateTimeUTC: new Date("2026-04-20T01:30:00.000Z"),
+        homeScore: 1,
+        awayScore: 0
+      }
+    };
+
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([{ id: "match-live", matchDateTimeUTC: futureFinished.match.matchDateTimeUTC }])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([futureFinished])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "live", sport: "football", take: 10 });
+
+    expect(items.length).toBeGreaterThan(0);
+    expect(Array.from(new Set(items.map((item) => (item as any).matchId)))).toEqual(["match-live"]);
+    expect(items.every((item) => (item as any).matchStatus === MatchStatus.live)).toBe(true);
   });
 
   it("high confidence endpoint reads published predictions only", async () => {
