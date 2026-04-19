@@ -10,6 +10,7 @@
 
 ## Core environment variables
 - `DATABASE_URL`
+- `SUPABASE_DB_DIRECT_URL` (Supabase pooler kullaniliyorsa migration icin zorunlu)
 - `REDIS_URL`
 - `JWT_ACCESS_SECRET`
 - `JWT_REFRESH_SECRET`
