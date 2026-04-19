@@ -1,7 +1,7 @@
 const FALLBACK_STATUS_CODES = new Set([500, 502, 503, 504]);
 const API_PREFIX = "/api/v1";
 const PREFERRED_BASE_TTL_MS = 120_000;
-const DEFAULT_TIMEOUT_MS = 8_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
 
 let preferredBaseUrl: string | null = null;
 let preferredBaseUntil = 0;
@@ -48,11 +48,16 @@ function parseCsvCandidates(raw?: string) {
 
 function buildBaseCandidates(allowPublicProxyFallback: boolean) {
   const rawCandidates = [
+    process.env.ADMIN_API_URL,
+    process.env.INTERNAL_API_SERVICE_URL,
     process.env.INTERNAL_API_URL,
     process.env.API_URL,
     process.env.NEXT_PUBLIC_API_URL,
     ...parseCsvCandidates(process.env.INTERNAL_API_FALLBACK_URLS),
     allowPublicProxyFallback ? process.env.PUBLIC_WEB_URL : undefined,
+    "http://api:4000",
+    "http://sporx-api:4000",
+    "http://backend:4000",
     "http://localhost:4000"
   ];
 
