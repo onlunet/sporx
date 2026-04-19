@@ -78,6 +78,20 @@ export class TheSportsDbConnector {
     );
   }
 
+  async fetchPastSoccerEvents(apiKey: string | undefined, leagueId: string, baseUrl?: string) {
+    return this.requestJson<{ events?: Array<Record<string, unknown>> }>(
+      this.buildUrl(`/eventspastleague.php?id=${leagueId}`, apiKey, baseUrl),
+      "the_sports_db past soccer events"
+    );
+  }
+
+  async fetchSoccerSeasonEvents(apiKey: string | undefined, leagueId: string, season: string, baseUrl?: string) {
+    return this.requestJson<{ events?: Array<Record<string, unknown>> }>(
+      this.buildUrl(`/eventsseason.php?id=${leagueId}&s=${encodeURIComponent(season)}`, apiKey, baseUrl),
+      "the_sports_db soccer season events"
+    );
+  }
+
   async fetchSoccerRoundEvents(apiKey: string | undefined, leagueId: string, season: string, round: number, baseUrl?: string) {
     return this.requestJson<{ events?: Array<Record<string, unknown>> }>(
       this.buildUrl(`/eventsround.php?id=${leagueId}&r=${round}&s=${season}`, apiKey, baseUrl),

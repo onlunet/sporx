@@ -58,6 +58,33 @@ type TheSportsDbTeamCandidate = {
   strAlternate: string | null;
 };
 
+type TheSportsDbHalfTimeSource = "direct" | "timeline_derived" | "live_ht_score" | null;
+
+type TheSportsDbHalfTimeRead = {
+  home: number | null;
+  away: number | null;
+  source: TheSportsDbHalfTimeSource;
+};
+
+type TheSportsDbLeagueRunSummary = {
+  leagueId: string;
+  season: string;
+  mode: "syncFixtures" | "syncResults";
+  plannedCalls: number;
+  attemptedCalls: number;
+  successfulCalls: number;
+  skippedDueQuota: number;
+  eventsRead: number;
+  matchesWritten: number;
+  halfTimeScoresWritten: number;
+  directHalfTimeScoresWritten: number;
+  timelineHalfTimeScoresWritten: number;
+  roundsAttempted: number;
+  errors: string[];
+  checkpointBefore: string | null;
+  checkpointAfter: string | null;
+};
+
 type TheSportsDbCanonicalLineupPlayer = {
   playerName: string;
   position: string | null;
@@ -2123,6 +2150,43 @@ export class ProviderIngestionService {
     return month >= 9 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
   }
 
+  private uniqueStringList(values: Array<string | null | undefined>) {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+      const token = String(value ?? "").trim();
+      if (token.length === 0 || seen.has(token)) {
+        continue;
+      }
+      seen.add(token);
+      result.push(token);
+    }
+    return result;
+  }
+
+  private prioritizeTheSportsDbTurkeyLeague(leagueIds: string[]) {
+    const turkeyLeagueId = "4339";
+    const deduped = this.uniqueStringList(leagueIds);
+    if (!deduped.includes(turkeyLeagueId)) {
+      return [turkeyLeagueId, ...deduped];
+    }
+    return [turkeyLeagueId, ...deduped.filter((item) => item !== turkeyLeagueId)];
+  }
+
+  private theSportsDbSoccerLeagueIds(settings: { soccerLeagueId?: string; soccerLeagueIds?: string[] }) {
+    if (settings.soccerLeagueIds && settings.soccerLeagueIds.length > 0) {
+      return this.prioritizeTheSportsDbTurkeyLeague(settings.soccerLeagueIds);
+    }
+    return this.prioritizeTheSportsDbTurkeyLeague([settings.soccerLeagueId ?? "4339"]);
+  }
+
+  private theSportsDbBasketballLeagueIds(settings: { basketballLeagueId?: string; basketballLeagueIds?: string[] }) {
+    if (settings.basketballLeagueIds && settings.basketballLeagueIds.length > 0) {
+      return this.uniqueStringList(settings.basketballLeagueIds);
+    }
+    return this.uniqueStringList([settings.basketballLeagueId ?? "4387"]);
+  }
+
   private normalizeKey(value: string) {
     return value
       .normalize("NFKD")
@@ -3689,6 +3753,166 @@ export class ProviderIngestionService {
     };
   }
 
+  private readTheSportsDbDirectHalfTimeScore(event: Record<string, unknown>): TheSportsDbHalfTimeRead {
+    const direct = this.readHalfTimeScorePair(event);
+    if (this.hasHalfTimePair(direct.home, direct.away)) {
+      return {
+        home: direct.home,
+        away: direct.away,
+        source: "direct"
+      };
+    }
+
+    const progress = String(event.strProgress ?? event.strStatus ?? "").trim().toUpperCase();
+    const currentHome = this.toNullableScore(event.intHomeScore);
+    const currentAway = this.toNullableScore(event.intAwayScore);
+    if ((progress === "HT" || progress.includes("HALF TIME") || progress.includes("HALFTIME")) && this.hasScorePair(currentHome, currentAway)) {
+      return {
+        home: currentHome,
+        away: currentAway,
+        source: "live_ht_score"
+      };
+    }
+
+    return {
+      home: direct.home,
+      away: direct.away,
+      source: null
+    };
+  }
+
+  private parseTimelineGoalMinute(value: unknown) {
+    const token = String(value ?? "").trim();
+    if (token.length === 0) {
+      return null;
+    }
+
+    const match = token.match(/(\d{1,3})(?:\s*\+\s*(\d{1,2}))?/);
+    if (!match) {
+      return null;
+    }
+
+    const base = Number(match[1]);
+    const stoppage = match[2] ? Number(match[2]) : 0;
+    if (!Number.isFinite(base) || !Number.isFinite(stoppage)) {
+      return null;
+    }
+
+    return { base, stoppage };
+  }
+
+  private timelineMinuteIsFirstHalf(minute: { base: number; stoppage: number } | null) {
+    if (!minute) {
+      return false;
+    }
+    if (minute.base < 45) {
+      return true;
+    }
+    return minute.base === 45;
+  }
+
+  private isGoalTimelineEvent(row: Record<string, unknown>) {
+    const token = [
+      row.strTimeline,
+      row.strTimelineDetail,
+      row.strEvent,
+      row.type,
+      row.event,
+      row.detail
+    ]
+      .map((item) => String(item ?? "").toLowerCase())
+      .join(" ");
+
+    if (!token.includes("goal")) {
+      return false;
+    }
+
+    return !/(disallowed|missed|saved|var|cancelled|canceled|no goal)/i.test(token);
+  }
+
+  private resolveTimelineGoalSide(row: Record<string, unknown>, homeTeamName: string, awayTeamName: string) {
+    const homeAlias = this.normalizeAlias(homeTeamName);
+    const awayAlias = this.normalizeAlias(awayTeamName);
+    const teamToken = this.normalizeAlias(
+      [
+        row.strTeam,
+        row.strPlayerTeam,
+        row.strTimelineTeam,
+        row.team,
+        row.teamName
+      ]
+        .map((item) => String(item ?? ""))
+        .filter((item) => item.trim().length > 0)
+        .join(" ")
+    );
+
+    if (teamToken.length === 0) {
+      return null;
+    }
+
+    let side: "home" | "away" | null = null;
+    if (homeAlias.length > 0 && (teamToken === homeAlias || teamToken.includes(homeAlias) || homeAlias.includes(teamToken))) {
+      side = "home";
+    } else if (awayAlias.length > 0 && (teamToken === awayAlias || teamToken.includes(awayAlias) || awayAlias.includes(teamToken))) {
+      side = "away";
+    }
+
+    if (!side) {
+      return null;
+    }
+
+    const detailToken = `${String(row.strTimeline ?? "")} ${String(row.strTimelineDetail ?? "")}`.toLowerCase();
+    if (detailToken.includes("own goal")) {
+      return side === "home" ? "away" : "home";
+    }
+
+    return side;
+  }
+
+  private deriveTheSportsDbHalfTimeFromTimeline(
+    timeline: Array<Record<string, unknown>>,
+    homeTeamName: string,
+    awayTeamName: string
+  ): TheSportsDbHalfTimeRead {
+    let home = 0;
+    let away = 0;
+    let reliableGoalEvents = 0;
+
+    for (const row of timeline) {
+      if (!this.isGoalTimelineEvent(row)) {
+        continue;
+      }
+
+      const minute =
+        this.parseTimelineGoalMinute(row.intTime) ??
+        this.parseTimelineGoalMinute(row.strTime) ??
+        this.parseTimelineGoalMinute(row.strMinute) ??
+        this.parseTimelineGoalMinute(row.strTimelineDetail) ??
+        this.parseTimelineGoalMinute(row.strTimeline);
+      const side = this.resolveTimelineGoalSide(row, homeTeamName, awayTeamName);
+      if (!minute || !side) {
+        continue;
+      }
+
+      reliableGoalEvents += 1;
+      if (!this.timelineMinuteIsFirstHalf(minute)) {
+        continue;
+      }
+
+      if (side === "home") {
+        home += 1;
+      } else {
+        away += 1;
+      }
+    }
+
+    if (reliableGoalEvents <= 0) {
+      return { home: null, away: null, source: null };
+    }
+
+    return { home, away, source: "timeline_derived" };
+  }
+
   private readHalfTimeScore(row: Record<string, unknown>, side: "home" | "away") {
     const keyCandidates =
       side === "home"
@@ -3699,6 +3923,7 @@ export class ProviderIngestionService {
             "half_time_home_score",
             "score_ht_home",
             "home_half_score",
+            "intHomeScoreHalfTime",
             "intHomeScoreHT",
             "intHomeScore1stHalf",
             "home_ht",
@@ -3711,6 +3936,7 @@ export class ProviderIngestionService {
             "half_time_away_score",
             "score_ht_away",
             "away_half_score",
+            "intAwayScoreHalfTime",
             "intAwayScoreHT",
             "intAwayScore1stHalf",
             "away_ht",
@@ -3858,17 +4084,20 @@ export class ProviderIngestionService {
   }
 
   private footballStatus(status: string): MatchStatus {
-    const value = status.toUpperCase();
-    if (["FINISHED", "FT", "AET", "PEN"].some((item) => value.includes(item))) {
+    const value = status.trim().toUpperCase();
+    if (["MATCH FINISHED", "FINISHED", "FT", "AET", "PEN"].some((item) => value.includes(item))) {
       return MatchStatus.finished;
     }
-    if (["IN_PLAY", "LIVE", "PAUSED"].some((item) => value.includes(item))) {
+    if (["IN_PLAY", "LIVE", "PAUSED", "1H", "2H", "HT", "HALF TIME", "HALFTIME"].some((item) => value.includes(item))) {
       return MatchStatus.live;
+    }
+    if (value === "NS" || value.includes("NOT STARTED")) {
+      return MatchStatus.scheduled;
     }
     if (value.includes("POSTPONED")) {
       return MatchStatus.postponed;
     }
-    if (value.includes("CANCELLED")) {
+    if (value.includes("CANCELLED") || value.includes("CANCELED")) {
       return MatchStatus.cancelled;
     }
     return MatchStatus.scheduled;
@@ -3909,6 +4138,23 @@ export class ProviderIngestionService {
 
     const parsed = new Date(`${datePart}T${withSeconds}Z`);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private parseTheSportsDbEventDate(event: Record<string, unknown>) {
+    const timestamp = typeof event.strTimestamp === "string" ? event.strTimestamp.trim() : "";
+    if (timestamp.length > 0) {
+      const parsed = new Date(timestamp);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+    return this.parseEventDate(event.dateEvent, event.strTime);
+  }
+
+  private theSportsDbFootballStatus(event: Record<string, unknown>) {
+    const status = String(event.strStatus ?? "").trim();
+    const progress = String(event.strProgress ?? "").trim();
+    return this.footballStatus([status, progress].filter((item) => item.length > 0).join(" "));
   }
 
   private pickFootballDataReferee(raw: Record<string, unknown>) {
@@ -5920,6 +6166,133 @@ export class ProviderIngestionService {
     }
   }
 
+  private uniqueTheSportsDbEvents(events: Array<Record<string, unknown>>) {
+    return Array.from(
+      new Map(
+        events.map((event) => {
+          const fallback = `${String(event.strHomeTeam ?? "").trim()}_${String(event.strAwayTeam ?? "").trim()}_${String(event.dateEvent ?? "").trim()}_${String(event.strTime ?? "").trim()}`;
+          return [String(event.idEvent ?? fallback), event];
+        })
+      ).values()
+    );
+  }
+
+  private theSportsDbProviderMatchKey(
+    event: Record<string, unknown>,
+    sportCode: "football" | "basketball",
+    homeTeamName: string,
+    awayTeamName: string,
+    kickoffAt: Date
+  ) {
+    const idEvent = String(event.idEvent ?? "").trim();
+    if (idEvent.length > 0) {
+      return idEvent;
+    }
+    return `${sportCode}-${this.normalizeKey(homeTeamName)}-${this.normalizeKey(awayTeamName)}-${kickoffAt.toISOString()}`;
+  }
+
+  private async upsertTheSportsDbEvent(params: {
+    provider: ProviderRecord;
+    event: Record<string, unknown>;
+    fallbackSportCode: "football" | "basketball";
+    dateFrom?: Date;
+    dateTo?: Date;
+    timeline?: Array<Record<string, unknown>>;
+  }) {
+    const event = params.event;
+    const sportRaw = String(event.strSport ?? "").toLowerCase();
+    const resolvedSportCode =
+      sportRaw.includes("basket")
+        ? "basketball"
+        : sportRaw.includes("soccer") || sportRaw.includes("football")
+          ? "football"
+          : params.fallbackSportCode;
+    const resolvedSportName = resolvedSportCode === "basketball" ? "Basketball" : "Football";
+    const kickoffAt = this.parseTheSportsDbEventDate(event);
+    const homeTeamName = String(event.strHomeTeam ?? "").trim();
+    const awayTeamName = String(event.strAwayTeam ?? "").trim();
+
+    if (!kickoffAt || homeTeamName.length === 0 || awayTeamName.length === 0) {
+      return {
+        skipped: true,
+        halfTimeSource: null as TheSportsDbHalfTimeSource
+      };
+    }
+    if (params.dateFrom && kickoffAt < params.dateFrom) {
+      return {
+        skipped: true,
+        halfTimeSource: null as TheSportsDbHalfTimeSource
+      };
+    }
+    if (params.dateTo && kickoffAt > params.dateTo) {
+      return {
+        skipped: true,
+        halfTimeSource: null as TheSportsDbHalfTimeSource
+      };
+    }
+
+    const directHalfTime = this.readTheSportsDbDirectHalfTimeScore(event);
+    const timelineHalfTime =
+      this.hasHalfTimePair(directHalfTime.home, directHalfTime.away) || !params.timeline
+        ? { home: null, away: null, source: null as TheSportsDbHalfTimeSource }
+        : this.deriveTheSportsDbHalfTimeFromTimeline(params.timeline, homeTeamName, awayTeamName);
+    const halfTime = this.hasHalfTimePair(directHalfTime.home, directHalfTime.away) ? directHalfTime : timelineHalfTime;
+    const providerMatchKey = this.theSportsDbProviderMatchKey(
+      event,
+      resolvedSportCode,
+      homeTeamName,
+      awayTeamName,
+      kickoffAt
+    );
+    const status =
+      resolvedSportCode === "football"
+        ? this.theSportsDbFootballStatus(event)
+        : this.basketballStatus(String(event.strStatus ?? event.strProgress ?? "Scheduled"));
+    const refereeName = typeof event.strReferee === "string" && event.strReferee.trim().length > 0 ? String(event.strReferee) : null;
+
+    const upserted = await this.upsertMatchFromExternal({
+      providerId: params.provider.id,
+      providerKey: params.provider.key,
+      providerMatchKey,
+      sportCode: resolvedSportCode,
+      sportName: resolvedSportName,
+      leagueName: String(event.strLeague ?? (resolvedSportCode === "football" ? "Football" : "Basketball")),
+      leagueCountry: "INT",
+      kickoffAt,
+      homeTeamName,
+      awayTeamName,
+      homeTeamCountry: "INT",
+      awayTeamCountry: "INT",
+      status,
+      homeScore: this.toNullableScore(event.intHomeScore),
+      awayScore: this.toNullableScore(event.intAwayScore),
+      halfTimeHomeScore: halfTime.home,
+      halfTimeAwayScore: halfTime.away,
+      refereeName,
+      dataSource: params.provider.key
+    });
+
+    if (halfTime.source) {
+      try {
+        await this.applyContextPatchToFeatureSnapshot(upserted.id, {
+          theSportsDbHalfTimeSource: halfTime.source,
+          theSportsDbHalfTimeUpdatedAt: new Date().toISOString()
+        });
+      } catch (error) {
+        this.logger.warn(
+          `TheSportsDB half-time metadata write skipped for ${providerMatchKey}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`
+        );
+      }
+    }
+
+    return {
+      skipped: false,
+      halfTimeSource: halfTime.source
+    };
+  }
+
   private async syncTheSportsDb(
     provider: { id: string; key: string; baseUrl: string | null },
     runId: string,
@@ -5927,8 +6300,8 @@ export class ProviderIngestionService {
   ): Promise<ProviderSyncResult> {
     const settings = await this.providersService.getProviderRuntimeSettings(provider.key);
     const apiKey = settings.apiKey;
-    const soccerLeagueId = settings.soccerLeagueId || "4328";
-    const basketballLeagueId = settings.basketballLeagueId || "4387";
+    const soccerLeagueIds = this.theSportsDbSoccerLeagueIds(settings);
+    const basketballLeagueIds = this.theSportsDbBasketballLeagueIds(settings);
     const baseUrl = settings.baseUrl ?? provider.baseUrl ?? undefined;
     const dailyLimit = settings.dailyLimit ?? 240;
     const enrichmentEnabled = this.parseBooleanConfig(settings.enrichmentEnabled, true);
@@ -5949,8 +6322,8 @@ export class ProviderIngestionService {
       return this.resolveTheSportsDbAliases(provider, runId, {
         apiKey,
         baseUrl,
-        soccerLeagueId,
-        basketballLeagueId,
+        soccerLeagueIds,
+        basketballLeagueIds,
         dailyLimit
       });
     }
@@ -5959,8 +6332,8 @@ export class ProviderIngestionService {
       return this.enrichTheSportsDbTeamProfiles(provider, runId, {
         apiKey,
         baseUrl,
-        soccerLeagueId,
-        basketballLeagueId,
+        soccerLeagueIds,
+        basketballLeagueIds,
         dailyLimit
       });
     }
@@ -5987,26 +6360,32 @@ export class ProviderIngestionService {
     }
 
     const isResultsBackfill = jobType === "syncResults";
-    const roundStart = this.toSafeRoundMax(settings.soccerRoundStart, 18);
-    const roundMax = this.toSafeRoundMax(settings.soccerRoundMax, 60);
-    const requestedRoundCalls = isResultsBackfill ? Math.max(0, roundMax - roundStart + 1) : 0;
-    const plannedCalls = 2 + requestedRoundCalls;
+    const mode = isResultsBackfill ? "syncResults" : "syncFixtures";
+    const soccerSeason = settings.soccerSeason || this.footballSeasonLabel(new Date());
+    const backfillFromDate =
+      this.parseIsoDateOnly(settings.soccerBackfillFrom) ?? new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    const backfillToDate = new Date();
+    const plannedCalls =
+      soccerLeagueIds.length * (isResultsBackfill ? 2 : 1) + (isResultsBackfill ? 0 : basketballLeagueIds.length);
     const quota = await this.quotaGate(provider.key, plannedCalls, dailyLimit);
     const remainingCalls = Number.isFinite(quota.remaining)
       ? Math.max(0, Math.floor(quota.remaining))
       : plannedCalls;
-    const allowedRoundCalls = isResultsBackfill ? Math.max(0, Math.min(requestedRoundCalls, remainingCalls - 2)) : 0;
 
-    if (remainingCalls < 2) {
-      await this.logApiCall(`provider/${provider.key}/eventsnextleague`, 429, 0, runId);
+    if (remainingCalls <= 0) {
+      await this.logApiCall(`provider/${provider.key}/${isResultsBackfill ? "sync-results" : "sync-fixtures"}`, 429, 0, runId);
       return {
         providerKey: provider.key,
         recordsRead: 0,
         recordsWritten: 0,
-        errors: 0,
+        errors: 1,
         details: {
-          mode: isResultsBackfill ? "syncResults" : "syncFixtures",
+          mode,
           message: "TheSportsDB günlük kota nedeniyle senkron atlandı.",
+          plannedCalls,
+          attemptedCalls: 0,
+          successfulCalls: 0,
+          skippedDueQuota: plannedCalls,
           quota: {
             used: quota.used,
             remaining: quota.remaining,
@@ -6016,201 +6395,196 @@ export class ProviderIngestionService {
       };
     }
 
-    if (isResultsBackfill && allowedRoundCalls <= 0) {
-      await this.logApiCall(`provider/${provider.key}/eventsround`, 429, 0, runId);
-      return {
-        providerKey: provider.key,
-        recordsRead: 0,
-        recordsWritten: 0,
-        errors: 0,
-        details: {
-          mode: "syncResults",
-          message: "TheSportsDB round-backfill kota nedeniyle bu çalışmada atlandı.",
-          quota: {
-            used: quota.used,
-            remaining: quota.remaining,
-            limit: quota.limit,
-            requestedRoundCalls,
-            allowedRoundCalls
-          }
-        }
-      };
-    }
-
-    const startedAt = Date.now();
-    const [soccer, basketball] = await Promise.all([
-      this.theSportsDbConnector.fetchUpcomingSoccerEvents(apiKey, soccerLeagueId, baseUrl),
-      this.theSportsDbConnector.fetchUpcomingBasketballEvents(apiKey, basketballLeagueId, baseUrl)
-    ]);
-
-    const soccerEvents = [...(soccer.events ?? [])];
-    const basketballEvents = basketball.events ?? [];
-    const soccerSeason = settings.soccerSeason || this.footballSeasonLabel(new Date());
-    const backfillFromDate =
-      this.parseIsoDateOnly(settings.soccerBackfillFrom) ?? new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
-    const backfillToDate = new Date();
-    const roundEnd = isResultsBackfill ? Math.min(roundMax, roundStart + allowedRoundCalls - 1) : roundStart - 1;
-    let soccerRoundCalls = 0;
-    let soccerRoundEventsRead = 0;
-    let written = 0;
+    let callBudget = remainingCalls;
+    let attemptedCalls = 0;
+    let successfulCalls = 0;
+    let skippedDueQuota = 0;
+    let recordsRead = 0;
+    let recordsWritten = 0;
+    let halfTimeScoresWritten = 0;
+    let directHalfTimeScoresWritten = 0;
+    let timelineHalfTimeScoresWritten = 0;
     let errors = 0;
+    const perLeague: TheSportsDbLeagueRunSummary[] = [];
+    const runErrors: string[] = [];
 
-    if (isResultsBackfill && allowedRoundCalls > 0) {
-      let emptyStreak = 0;
-      for (let round = roundStart; round <= roundEnd; round += 1) {
-        if (emptyStreak >= 8) {
-          break;
+    const fetchWithQuota = async <T>(
+      path: string,
+      fetcher: () => Promise<T>,
+      summary?: TheSportsDbLeagueRunSummary
+    ): Promise<T | null> => {
+      if (callBudget <= 0) {
+        skippedDueQuota += 1;
+        if (summary) {
+          summary.skippedDueQuota += 1;
         }
-        let roundResponse: { events?: Array<Record<string, unknown>> } = {};
-        let fetched = false;
-        let lastRoundError = "";
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          try {
-            roundResponse = await this.theSportsDbConnector.fetchSoccerRoundEvents(
-              apiKey,
-              soccerLeagueId,
-              soccerSeason,
-              round,
-              baseUrl
-            );
-            fetched = true;
-            break;
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "unknown round fetch error";
-            lastRoundError = message;
-            if (!message.includes("429")) {
-              throw error;
-            }
-            await this.sleep(900 + attempt * 600);
-          }
-        }
-        if (!fetched) {
-          errors += 1;
-          if (lastRoundError.includes("429")) {
-            // Quota/rate limit reached: stop this batch early instead of hanging the run.
-            break;
-          }
-          continue;
-        }
-        soccerRoundCalls += 1;
-        const roundEvents = roundResponse.events ?? [];
-        soccerRoundEventsRead += roundEvents.length;
-        if (roundEvents.length === 0) {
-          emptyStreak += 1;
-          continue;
-        }
-        emptyStreak = 0;
-        soccerEvents.push(...roundEvents);
-        await this.sleep(250);
+        return null;
       }
-    }
-
-    const durationMs = Date.now() - startedAt;
-
-    await this.logApiCall(
-      `provider/${provider.key}/${isResultsBackfill ? "eventsround" : "eventsnextleague"}`,
-      200,
-      durationMs,
-      runId
-    );
-
-    const uniqueSoccerEvents = Array.from(
-      new Map(
-        soccerEvents.map((event) => {
-          const fallback = `${String(event.strHomeTeam ?? "").trim()}_${String(event.strAwayTeam ?? "").trim()}_${String(event.dateEvent ?? "").trim()}_${String(event.strTime ?? "").trim()}`;
-          return [String(event.idEvent ?? fallback), event];
-        })
-      ).values()
-    );
-
-    const processEvent = async (
-      event: Record<string, unknown>,
-      fallbackSportCode: "football" | "basketball",
-      dateFrom?: Date,
-      dateTo?: Date
-    ) => {
-      const sportRaw = String(event.strSport ?? "").toLowerCase();
-      const resolvedSportCode = sportRaw.includes("basket")
-        ? "basketball"
-        : sportRaw.includes("soccer") || sportRaw.includes("football")
-          ? "football"
-          : fallbackSportCode;
-      const resolvedSportName = resolvedSportCode === "basketball" ? "Basketball" : "Football";
-      const kickoffAt = this.parseEventDate(event.dateEvent, event.strTime);
-      const homeTeamName = String(event.strHomeTeam ?? "").trim();
-      const awayTeamName = String(event.strAwayTeam ?? "").trim();
-
-      if (!kickoffAt || homeTeamName.length === 0 || awayTeamName.length === 0) {
+      callBudget -= 1;
+      attemptedCalls += 1;
+      if (summary) {
+        summary.attemptedCalls += 1;
+      }
+      const startedAt = Date.now();
+      try {
+        const response = await fetcher();
+        successfulCalls += 1;
+        if (summary) {
+          summary.successfulCalls += 1;
+        }
+        await this.logApiCall(`provider/${provider.key}/${path}`, 200, Date.now() - startedAt, runId);
+        return response;
+      } catch (error) {
         errors += 1;
-        return;
+        const message = error instanceof Error ? error.message : "unknown";
+        const statusCode = message.includes("429") ? 429 : 500;
+        await this.logApiCall(`provider/${provider.key}/${path}`, statusCode, Date.now() - startedAt, runId);
+        if (summary) {
+          summary.errors.push(message);
+        }
+        runErrors.push(`${path}: ${message}`);
+        if (statusCode === 429) {
+          callBudget = 0;
+        }
+        return null;
       }
-      if (dateFrom && kickoffAt < dateFrom) {
-        return;
-      }
-      if (dateTo && kickoffAt > dateTo) {
-        return;
-      }
-
-      const providerMatchKey = String(event.idEvent ?? `${resolvedSportCode}-${homeTeamName}-${awayTeamName}-${kickoffAt.toISOString()}`);
-      const status =
-        resolvedSportCode === "football"
-          ? this.footballStatus(String(event.strStatus ?? "SCHEDULED"))
-          : this.basketballStatus(String(event.strStatus ?? "Scheduled"));
-      const refereeName = typeof event.strReferee === "string" && event.strReferee.trim().length > 0 ? String(event.strReferee) : null;
-      const halfTimePair = this.readHalfTimeScorePair(event);
-
-      await this.upsertMatchFromExternal({
-        providerId: provider.id,
-        providerKey: provider.key,
-        providerMatchKey,
-        sportCode: resolvedSportCode,
-        sportName: resolvedSportName,
-        leagueName: String(event.strLeague ?? (resolvedSportCode === "football" ? "Football" : "Basketball")),
-        leagueCountry: "INT",
-        kickoffAt,
-        homeTeamName,
-        awayTeamName,
-        homeTeamCountry: "INT",
-        awayTeamCountry: "INT",
-        status,
-        homeScore: this.toNullableScore(event.intHomeScore),
-        awayScore: this.toNullableScore(event.intAwayScore),
-        halfTimeHomeScore: halfTimePair.home,
-        halfTimeAwayScore: halfTimePair.away,
-        refereeName,
-        dataSource: provider.key
-      });
-      written += 1;
     };
 
-    for (const event of uniqueSoccerEvents) {
+    for (const leagueId of soccerLeagueIds) {
+      const checkpointEntityType = isResultsBackfill
+        ? `the_sports_db_results:${leagueId}:${soccerSeason}`
+        : `the_sports_db_fixtures:${leagueId}`;
+      const checkpointBefore = await this.getCheckpoint(provider.key, checkpointEntityType);
+      const summary: TheSportsDbLeagueRunSummary = {
+        leagueId,
+        season: soccerSeason,
+        mode,
+        plannedCalls: isResultsBackfill ? 2 : 1,
+        attemptedCalls: 0,
+        successfulCalls: 0,
+        skippedDueQuota: 0,
+        eventsRead: 0,
+        matchesWritten: 0,
+        halfTimeScoresWritten: 0,
+        directHalfTimeScoresWritten: 0,
+        timelineHalfTimeScoresWritten: 0,
+        roundsAttempted: 0,
+        errors: [],
+        checkpointBefore: checkpointBefore ?? null,
+        checkpointAfter: null
+      };
+
+      const soccerEvents: Array<Record<string, unknown>> = [];
       if (isResultsBackfill) {
-        await processEvent(event, "football", backfillFromDate, backfillToDate);
+        const past = await fetchWithQuota(
+          `eventspastleague/${leagueId}`,
+          () => this.theSportsDbConnector.fetchPastSoccerEvents(apiKey, leagueId, baseUrl),
+          summary
+        );
+        soccerEvents.push(...this.toRecordArray(past?.events));
+
+        const season = await fetchWithQuota(
+          `eventsseason/${leagueId}/${soccerSeason}`,
+          () => this.theSportsDbConnector.fetchSoccerSeasonEvents(apiKey, leagueId, soccerSeason, baseUrl),
+          summary
+        );
+        soccerEvents.push(...this.toRecordArray(season?.events));
       } else {
-        await processEvent(event, "football");
+        const upcoming = await fetchWithQuota(
+          `eventsnextleague/${leagueId}`,
+          () => this.theSportsDbConnector.fetchUpcomingSoccerEvents(apiKey, leagueId, baseUrl),
+          summary
+        );
+        soccerEvents.push(...this.toRecordArray(upcoming?.events));
       }
+
+      const uniqueSoccerEvents = this.uniqueTheSportsDbEvents(soccerEvents);
+      summary.eventsRead = uniqueSoccerEvents.length;
+      recordsRead += uniqueSoccerEvents.length;
+
+      for (const event of uniqueSoccerEvents) {
+        try {
+          const result = await this.upsertTheSportsDbEvent({
+            provider,
+            event,
+            fallbackSportCode: "football",
+            dateFrom: isResultsBackfill ? backfillFromDate : undefined,
+            dateTo: isResultsBackfill ? backfillToDate : undefined
+          });
+          if (result.skipped) {
+            continue;
+          }
+          recordsWritten += 1;
+          summary.matchesWritten += 1;
+          if (result.halfTimeSource) {
+            halfTimeScoresWritten += 1;
+            summary.halfTimeScoresWritten += 1;
+            if (result.halfTimeSource === "timeline_derived") {
+              timelineHalfTimeScoresWritten += 1;
+              summary.timelineHalfTimeScoresWritten += 1;
+            } else {
+              directHalfTimeScoresWritten += 1;
+              summary.directHalfTimeScoresWritten += 1;
+            }
+          }
+        } catch (error) {
+          errors += 1;
+          const message = error instanceof Error ? error.message : "unknown";
+          summary.errors.push(message);
+          runErrors.push(`event:${leagueId}: ${message}`);
+        }
+      }
+
+      const checkpointAfter = new Date().toISOString();
+      await this.setCheckpoint(provider.key, checkpointEntityType, checkpointAfter);
+      summary.checkpointAfter = checkpointAfter;
+      perLeague.push(summary);
     }
 
-    for (const event of basketballEvents) {
-      await processEvent(event, "basketball");
+    if (!isResultsBackfill) {
+      for (const basketballLeagueId of basketballLeagueIds) {
+        const response = await fetchWithQuota(
+          `eventsseason/basketball/${basketballLeagueId}`,
+          () => this.theSportsDbConnector.fetchUpcomingBasketballEvents(apiKey, basketballLeagueId, baseUrl)
+        );
+        const basketballEvents = this.uniqueTheSportsDbEvents(this.toRecordArray(response?.events));
+        recordsRead += basketballEvents.length;
+        for (const event of basketballEvents) {
+          try {
+            const result = await this.upsertTheSportsDbEvent({
+              provider,
+              event,
+              fallbackSportCode: "basketball"
+            });
+            if (!result.skipped) {
+              recordsWritten += 1;
+            }
+          } catch (error) {
+            errors += 1;
+            runErrors.push(`basketball:${basketballLeagueId}: ${error instanceof Error ? error.message : "unknown"}`);
+          }
+        }
+      }
     }
 
     await this.createExternalPayload(provider.key, runId, "the_sports_db_events", {
-      mode: isResultsBackfill ? "syncResults" : "syncFixtures",
-      soccerLeagueId,
-      basketballLeagueId,
+      mode,
+      provider: provider.key,
+      leagues: soccerLeagueIds,
       soccerSeason,
       soccerBackfillFrom: backfillFromDate.toISOString().slice(0, 10),
       soccerBackfillTo: backfillToDate.toISOString().slice(0, 10),
-      soccerRoundStart: roundStart,
-      soccerRoundEnd: roundEnd,
-      requestedRoundCalls,
-      allowedRoundCalls,
-      soccerRoundCalls,
-      soccerRoundEventsRead,
-      recordsRead: uniqueSoccerEvents.length + basketballEvents.length,
-      recordsWritten: written,
-      errors,
+      plannedCalls,
+      attemptedCalls,
+      successfulCalls,
+      skippedDueQuota,
+      perLeague,
+      recordsRead,
+      recordsWritten,
+      halfTimeScoresWritten,
+      directHalfTimeScoresWritten,
+      timelineHalfTimeScoresWritten,
+      errors: runErrors.slice(0, 50),
       quota: {
         used: quota.used,
         remaining: quota.remaining,
@@ -6220,22 +6594,25 @@ export class ProviderIngestionService {
 
     return {
       providerKey: provider.key,
-      recordsRead: uniqueSoccerEvents.length + basketballEvents.length,
-      recordsWritten: written,
+      recordsRead,
+      recordsWritten,
       errors,
       details: {
-        mode: isResultsBackfill ? "syncResults" : "syncFixtures",
-        soccerLeagueId,
-        basketballLeagueId,
+        mode,
+        leagues: soccerLeagueIds,
         soccerSeason,
         soccerBackfillFrom: backfillFromDate.toISOString().slice(0, 10),
         soccerBackfillTo: backfillToDate.toISOString().slice(0, 10),
-        soccerRoundStart: roundStart,
-        soccerRoundEnd: roundEnd,
-        requestedRoundCalls,
-        allowedRoundCalls,
-        soccerRoundCalls,
-        soccerRoundEventsRead,
+        plannedCalls,
+        attemptedCalls,
+        successfulCalls,
+        skippedDueQuota,
+        recordsRead,
+        recordsWritten,
+        halfTimeScoresWritten,
+        directHalfTimeScoresWritten,
+        timelineHalfTimeScoresWritten,
+        perLeague,
         quota: {
           used: quota.used,
           remaining: quota.remaining,
@@ -6282,13 +6659,13 @@ export class ProviderIngestionService {
     options: {
       apiKey?: string;
       baseUrl?: string;
-      soccerLeagueId: string;
-      basketballLeagueId: string;
+      soccerLeagueIds: string[];
+      basketballLeagueIds: string[];
       dailyLimit: number;
     }
   ): Promise<ProviderSyncResult> {
     const leagueIds = Array.from(
-      new Set([options.soccerLeagueId, options.basketballLeagueId].map((item) => item.trim()).filter((item) => item.length > 0))
+      new Set([...options.soccerLeagueIds, ...options.basketballLeagueIds].map((item) => item.trim()).filter((item) => item.length > 0))
     );
     const quota = await this.quotaGate(provider.key, leagueIds.length, options.dailyLimit);
     if (!quota.allowed) {
@@ -6493,13 +6870,13 @@ export class ProviderIngestionService {
     options: {
       apiKey?: string;
       baseUrl?: string;
-      soccerLeagueId: string;
-      basketballLeagueId: string;
+      soccerLeagueIds: string[];
+      basketballLeagueIds: string[];
       dailyLimit: number;
     }
   ): Promise<ProviderSyncResult> {
     const leagueIds = Array.from(
-      new Set([options.soccerLeagueId, options.basketballLeagueId].map((item) => item.trim()).filter((item) => item.length > 0))
+      new Set([...options.soccerLeagueIds, ...options.basketballLeagueIds].map((item) => item.trim()).filter((item) => item.length > 0))
     );
     const quota = await this.quotaGate(provider.key, leagueIds.length, options.dailyLimit);
     if (!quota.allowed) {
@@ -6694,6 +7071,9 @@ export class ProviderIngestionService {
 
     let recordsWritten = 0;
     let errors = 0;
+    let halfTimeScoresWritten = 0;
+    let directHalfTimeScoresWritten = 0;
+    let timelineHalfTimeScoresWritten = 0;
     const detailSummaries: Array<Record<string, unknown>> = [];
 
     for (const match of matchesToProcess) {
@@ -6761,6 +7141,7 @@ export class ProviderIngestionService {
       let lineupPlayersWritten = 0;
       let teamStatsUpserted = 0;
       let timelineEventsWritten = 0;
+      let halfTimeSource: TheSportsDbHalfTimeSource = null;
 
       try {
         const enrichmentWriteResult = await this.persistTheSportsDbEnrichment({
@@ -6784,6 +7165,46 @@ export class ProviderIngestionService {
         this.logger.warn(
           `TheSportsDB enrichment write failed for ${eventId}: ${error instanceof Error ? error.message : "unknown"}`
         );
+      }
+
+      if (eventRecord && !this.hasHalfTimePair(match.halfTimeHomeScore, match.halfTimeAwayScore)) {
+        const directHalfTime = this.readTheSportsDbDirectHalfTimeScore(eventRecord);
+        const resolvedHalfTime = this.hasHalfTimePair(directHalfTime.home, directHalfTime.away)
+          ? directHalfTime
+          : this.deriveTheSportsDbHalfTimeFromTimeline(timeline, match.homeTeam.name, match.awayTeam.name);
+
+        if (this.hasHalfTimePair(resolvedHalfTime.home, resolvedHalfTime.away)) {
+          try {
+            await this.prisma.match.update({
+              where: { id: match.id },
+              data: {
+                halfTimeHomeScore: resolvedHalfTime.home,
+                halfTimeAwayScore: resolvedHalfTime.away,
+                dataSource: match.dataSource ?? provider.key,
+                importedAt: new Date(),
+                updatedByProcess: "the_sports_db_match_details"
+              }
+            });
+            halfTimeSource = resolvedHalfTime.source;
+            halfTimeScoresWritten += 1;
+            if (resolvedHalfTime.source === "timeline_derived") {
+              timelineHalfTimeScoresWritten += 1;
+            } else {
+              directHalfTimeScoresWritten += 1;
+            }
+            await this.applyContextPatchToFeatureSnapshot(match.id, {
+              theSportsDbHalfTimeSource: resolvedHalfTime.source,
+              theSportsDbHalfTimeUpdatedAt: new Date().toISOString()
+            });
+          } catch (error) {
+            errors += 1;
+            this.logger.warn(
+              `TheSportsDB half-time enrichment failed for ${eventId}: ${
+                error instanceof Error ? error.message : "unknown"
+              }`
+            );
+          }
+        }
       }
 
       await this.matchContextEnrichment.upsertContext({
@@ -6829,7 +7250,8 @@ export class ProviderIngestionService {
         lineupRowsWritten,
         lineupPlayersWritten,
         teamStatsUpserted,
-        timelineEventsWritten
+        timelineEventsWritten,
+        halfTimeSource: halfTimeSource ?? "missing"
       });
       recordsWritten += 1;
     }
@@ -6839,6 +7261,9 @@ export class ProviderIngestionService {
     await this.createExternalPayload(provider.key, runId, "the_sports_db_match_details", {
       recordsRead: matches.length,
       recordsWritten,
+      halfTimeScoresWritten,
+      directHalfTimeScoresWritten,
+      timelineHalfTimeScoresWritten,
       errors,
       skippedByQuota,
       details: detailSummaries.slice(0, 30)
@@ -6852,6 +7277,9 @@ export class ProviderIngestionService {
       details: {
         jobType: "enrichMatchDetails",
         processedMatches: matchesToProcess.length,
+        halfTimeScoresWritten,
+        directHalfTimeScoresWritten,
+        timelineHalfTimeScoresWritten,
         skippedByQuota,
         checkpoint: cursor
       }

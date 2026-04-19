@@ -42,7 +42,9 @@ type ProviderRuntimeSettings = {
   leagueIds?: string[];
   season?: string;
   soccerLeagueId?: string;
+  soccerLeagueIds?: string[];
   basketballLeagueId?: string;
+  basketballLeagueIds?: string[];
   soccerSeason?: string;
   soccerBackfillFrom?: string;
   soccerRoundMax?: number;
@@ -97,7 +99,8 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     website: "https://www.thesportsdb.com/",
     defaultConfigs: {
       apiKey: "123",
-      soccerLeagueId: "4328",
+      soccerLeagueId: "4339",
+      soccerLeagueIds: "4339,4328",
       basketballLeagueId: "4387",
       dailyLimit: "240",
       matchDetailsMaxMatches: "20",
@@ -394,7 +397,9 @@ export class ProvidersService {
         leagueIds: this.toStringList(configs.leagueIds),
         season: configs.season,
         soccerLeagueId: configs.soccerLeagueId,
+        soccerLeagueIds: this.toStringList(configs.soccerLeagueIds),
         basketballLeagueId: configs.basketballLeagueId,
+        basketballLeagueIds: this.toStringList(configs.basketballLeagueIds),
         soccerSeason: configs.soccerSeason,
         soccerBackfillFrom: configs.soccerBackfillFrom,
         soccerRoundMax: this.toInt(configs.soccerRoundMax),

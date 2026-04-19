@@ -1,4 +1,5 @@
 import { ProviderIngestionService } from "./provider-ingestion.service";
+import { MatchStatus } from "@prisma/client";
 
 function createService() {
   const seen = new Set<string>();
@@ -7,14 +8,23 @@ function createService() {
       findUnique: jest.fn(async ({ where }: any) => {
         const entityType = where?.providerKey_entityType?.entityType;
         if (typeof entityType === "string" && seen.has(entityType)) {
-          return { providerKey: "prediction_phase_trigger" };
+          return { providerKey: "prediction_phase_trigger", cursor: "seen-cursor" };
         }
         return null;
       }),
       create: jest.fn(async ({ data }: any) => {
         seen.add(String(data.entityType));
         return data;
+      }),
+      upsert: jest.fn(async ({ create, update, where }: any) => {
+        const entityType = where?.providerKey_entityType?.entityType ?? create?.entityType;
+        seen.add(String(entityType));
+        return { ...create, ...update };
       })
+    },
+    apiLog: {
+      count: jest.fn().mockResolvedValue(0),
+      create: jest.fn().mockResolvedValue({ id: "api-log-1" })
     },
     prediction: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -172,6 +182,224 @@ describe("ProviderIngestionService phase triggers", () => {
     expect((prisma as any).predictionExplanation.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ predictionId: "prediction-1" })
+      })
+    );
+  });
+});
+
+describe("ProviderIngestionService TheSportsDB helpers", () => {
+  it("parses multi-league soccer config with Turkish Super Lig first", () => {
+    const { service } = createService();
+
+    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueIds: ["4328", "4339", "4335"] })).toEqual([
+      "4339",
+      "4328",
+      "4335"
+    ]);
+  });
+
+  it("keeps legacy soccerLeagueId config backward compatible", () => {
+    const { service } = createService();
+
+    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4328" })).toEqual(["4339", "4328"]);
+    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4339" })).toEqual(["4339"]);
+  });
+
+  it("maps TheSportsDB football statuses robustly", () => {
+    const { service } = createService();
+
+    expect((service as any).theSportsDbFootballStatus({ strStatus: "Match Finished" })).toBe(MatchStatus.finished);
+    expect((service as any).theSportsDbFootballStatus({ strStatus: "NS" })).toBe(MatchStatus.scheduled);
+    expect((service as any).theSportsDbFootballStatus({ strProgress: "HT" })).toBe(MatchStatus.live);
+    expect((service as any).theSportsDbFootballStatus({ strStatus: "Postponed" })).toBe(MatchStatus.postponed);
+    expect((service as any).theSportsDbFootballStatus({ strStatus: "Cancelled" })).toBe(MatchStatus.cancelled);
+  });
+
+  it("prefers TheSportsDB strTimestamp over date/time fields", () => {
+    const { service } = createService();
+
+    const parsed = (service as any).parseTheSportsDbEventDate({
+      strTimestamp: "2026-04-19T17:00:00+03:00",
+      dateEvent: "2026-04-19",
+      strTime: "12:00:00"
+    });
+
+    expect(parsed.toISOString()).toBe("2026-04-19T14:00:00.000Z");
+  });
+
+  it("uses idEvent as TheSportsDB provider match key", () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).theSportsDbProviderMatchKey(
+        { idEvent: "12345" },
+        "football",
+        "Galatasaray",
+        "Fenerbahce",
+        new Date("2026-04-19T17:00:00.000Z")
+      )
+    ).toBe("12345");
+  });
+
+  it("parses direct TheSportsDB half-time score fields", () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).readTheSportsDbDirectHalfTimeScore({
+        intHomeScoreHalfTime: "1",
+        intAwayScoreHalfTime: "0"
+      })
+    ).toEqual({ home: 1, away: 0, source: "direct" });
+  });
+
+  it("derives half-time score from reliable TheSportsDB timeline goals", () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).deriveTheSportsDbHalfTimeFromTimeline(
+        [
+          { strTimeline: "Goal", strTimelineDetail: "12' Goal", strTeam: "Galatasaray" },
+          { strTimeline: "Goal", strTimelineDetail: "45+2' Goal", strTeam: "Fenerbahce" },
+          { strTimeline: "Goal", strTimelineDetail: "60' Goal", strTeam: "Galatasaray" }
+        ],
+        "Galatasaray",
+        "Fenerbahce"
+      )
+    ).toEqual({ home: 1, away: 1, source: "timeline_derived" });
+  });
+
+  it("writes per-league result checkpoint and run payload summary", async () => {
+    const { service, prisma } = createService();
+    (service as any).providersService = {
+      getProviderRuntimeSettings: jest.fn().mockResolvedValue({
+        apiKey: "test-key",
+        soccerLeagueIds: ["4339"],
+        soccerSeason: "2025-2026",
+        soccerBackfillFrom: "2026-01-01",
+        dailyLimit: 10
+      })
+    };
+    (service as any).theSportsDbConnector = {
+      fetchPastSoccerEvents: jest.fn().mockResolvedValue({
+        events: [
+          {
+            idEvent: "tsdb-1",
+            strSport: "Soccer",
+            idLeague: "4339",
+            strLeague: "Turkish Super Lig",
+            strSeason: "2025-2026",
+            strTimestamp: "2026-04-19T17:00:00+03:00",
+            strHomeTeam: "Galatasaray",
+            strAwayTeam: "Fenerbahce",
+            intHomeScore: "2",
+            intAwayScore: "1",
+            intHomeScoreHalfTime: "1",
+            intAwayScoreHalfTime: "0",
+            strStatus: "Match Finished"
+          }
+        ]
+      }),
+      fetchSoccerSeasonEvents: jest.fn().mockResolvedValue({ events: [] })
+    };
+    jest.spyOn(service as any, "upsertMatchFromExternal").mockResolvedValue({
+      id: "match-1",
+      kickoffAt: new Date("2026-04-19T14:00:00.000Z"),
+      status: MatchStatus.finished,
+      homeScore: 2,
+      awayScore: 1,
+      halfTimeHomeScore: 1,
+      halfTimeAwayScore: 0
+    });
+    jest.spyOn(service as any, "applyContextPatchToFeatureSnapshot").mockResolvedValue(undefined);
+
+    const result = await (service as any).syncTheSportsDb(
+      { id: "provider-1", key: "the_sports_db", baseUrl: null },
+      "run-tsdb",
+      "syncResults"
+    );
+
+    expect((service as any).theSportsDbConnector.fetchPastSoccerEvents).toHaveBeenCalledWith(
+      "test-key",
+      "4339",
+      undefined
+    );
+    expect((service as any).theSportsDbConnector.fetchSoccerSeasonEvents).toHaveBeenCalledWith(
+      "test-key",
+      "4339",
+      "2025-2026",
+      undefined
+    );
+    expect((prisma as any).ingestionCheckpoint.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          providerKey_entityType: {
+            providerKey: "the_sports_db",
+            entityType: "the_sports_db_results:4339:2025-2026"
+          }
+        }
+      })
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        mode: "syncResults",
+        plannedCalls: 2,
+        attemptedCalls: 2,
+        successfulCalls: 2,
+        recordsRead: 1,
+        recordsWritten: 1,
+        halfTimeScoresWritten: 1
+      })
+    );
+    expect((result.details.perLeague as any[])[0]).toEqual(
+      expect.objectContaining({
+        leagueId: "4339",
+        eventsRead: 1,
+        matchesWritten: 1,
+        halfTimeScoresWritten: 1,
+        checkpointBefore: null
+      })
+    );
+  });
+
+  it("uses remaining quota for partial result runs and skips the rest safely", async () => {
+    const { service } = createService();
+    (service as any).providersService = {
+      getProviderRuntimeSettings: jest.fn().mockResolvedValue({
+        apiKey: "test-key",
+        soccerLeagueIds: ["4339"],
+        soccerSeason: "2025-2026",
+        soccerBackfillFrom: "2026-01-01",
+        dailyLimit: 1
+      })
+    };
+    (service as any).theSportsDbConnector = {
+      fetchPastSoccerEvents: jest.fn().mockResolvedValue({ events: [] }),
+      fetchSoccerSeasonEvents: jest.fn().mockResolvedValue({ events: [] })
+    };
+
+    const result = await (service as any).syncTheSportsDb(
+      { id: "provider-1", key: "the_sports_db", baseUrl: null },
+      "run-quota",
+      "syncResults"
+    );
+
+    expect((service as any).theSportsDbConnector.fetchPastSoccerEvents).toHaveBeenCalledTimes(1);
+    expect((service as any).theSportsDbConnector.fetchSoccerSeasonEvents).not.toHaveBeenCalled();
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        mode: "syncResults",
+        plannedCalls: 2,
+        attemptedCalls: 1,
+        successfulCalls: 1,
+        skippedDueQuota: 1
+      })
+    );
+    expect((result.details.perLeague as any[])[0]).toEqual(
+      expect.objectContaining({
+        leagueId: "4339",
+        attemptedCalls: 1,
+        successfulCalls: 1,
+        skippedDueQuota: 1
       })
     );
   });
