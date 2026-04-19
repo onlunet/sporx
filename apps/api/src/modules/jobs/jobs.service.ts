@@ -49,6 +49,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly schedulerEnabled = this.resolveSchedulerEnabled();
   private readonly tickMs = this.readSchedulerTickMs();
   private readonly staleThresholdMs = this.readStaleThresholdMs();
+  private readonly runningMaxAgeMs = this.readRunningMaxAgeMs();
   private readonly staleRecoveryIntervalMs = this.readStaleRecoveryIntervalMs();
   private readonly schedulerLockKey = process.env.SCHEDULER_LOCK_KEY ?? "jobs-scheduler";
   private readonly schedulerLockOwner = `${process.env.HOSTNAME ?? "worker"}:${process.pid}`;
@@ -462,10 +463,19 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
 
   private async recoverStaleRuns() {
     const staleBefore = new Date(Date.now() - this.staleThresholdMs);
+    const maxRunningAgeBefore = new Date(Date.now() - this.runningMaxAgeMs);
     const staleRuns = await this.prisma.ingestionJobRun.findMany({
       where: {
-        status: { in: [IngestionStatus.queued, IngestionStatus.running] },
-        OR: [{ startedAt: { lt: staleBefore } }, { startedAt: null, createdAt: { lt: staleBefore } }]
+        OR: [
+          {
+            status: IngestionStatus.queued,
+            createdAt: { lt: staleBefore }
+          },
+          {
+            status: IngestionStatus.running,
+            OR: [{ startedAt: { lt: staleBefore } }, { createdAt: { lt: maxRunningAgeBefore } }]
+          }
+        ]
       },
       select: { id: true, status: true, startedAt: true, createdAt: true }
     });
@@ -476,6 +486,9 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
 
     const now = new Date();
     for (const run of staleRuns) {
+      const recoveredDueToMaxRuntime =
+        run.status === IngestionStatus.running && run.createdAt.getTime() < maxRunningAgeBefore.getTime();
+      const staleSince = recoveredDueToMaxRuntime ? run.createdAt : run.startedAt ?? run.createdAt;
       await this.prisma.ingestionJobRun.update({
         where: { id: run.id },
         data: {
@@ -484,14 +497,29 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
           errors: { increment: 1 },
           logs: {
             recoveredBy: "jobs_scheduler",
-            reason: "stale_run_timeout",
+            reason: recoveredDueToMaxRuntime ? "max_running_age_exceeded" : "stale_run_timeout",
             previousStatus: run.status,
-            staleSince: (run.startedAt ?? run.createdAt).toISOString()
+            staleSince: staleSince.toISOString()
           }
         }
       });
     }
 
     this.logger.warn(`Recovered ${staleRuns.length} stale ingestion run(s)`);
+  }
+
+  private readRunningMaxAgeMs() {
+    const raw = process.env.INGESTION_RUNNING_MAX_AGE_MS;
+    const fallback = 45 * 60 * 1000;
+    if (!raw) {
+      return fallback;
+    }
+
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < this.staleThresholdMs) {
+      return fallback;
+    }
+
+    return Math.round(parsed);
   }
 }
