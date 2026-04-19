@@ -59,16 +59,45 @@ const prismaBinCandidates = [
 ];
 const prismaBin = prismaBinCandidates.find((candidate) => existsSync(candidate)) ?? "prisma";
 const args = ["migrate", "deploy", "--schema", "prisma/schema.prisma"];
+const allowP3005 =
+  String(process.env.PRISMA_MIGRATE_ALLOW_P3005 ?? "true")
+    .trim()
+    .toLowerCase() !== "false";
 
 const result = spawnSync(prismaBin, args, {
   env,
-  stdio: "inherit",
+  stdio: "pipe",
+  encoding: "utf8",
   shell: process.platform === "win32",
 });
+
+const stdout = typeof result.stdout === "string" ? result.stdout : "";
+const stderr = typeof result.stderr === "string" ? result.stderr : "";
+if (stdout.length > 0) {
+  process.stdout.write(stdout);
+}
+if (stderr.length > 0) {
+  process.stderr.write(stderr);
+}
 
 if (result.error) {
   console.error("[prisma:migrate:deploy:safe] Prisma komutu baslatilamadi:", result.error.message);
   process.exit(1);
+}
+
+const combinedOutput = `${stdout}\n${stderr}`;
+const hasP3005 =
+  combinedOutput.includes("P3005") ||
+  combinedOutput.toLowerCase().includes("database schema is not empty");
+
+if ((result.status ?? 1) !== 0 && hasP3005 && allowP3005) {
+  console.warn(
+    "[prisma:migrate:deploy:safe] P3005 algilandi (non-empty schema / baseline eksik). Uygulama ayakta kalsin diye migrate hatasi toleransli gecildi."
+  );
+  console.warn(
+    "[prisma:migrate:deploy:safe] Kalici cozum: production DB icin Prisma baseline islemini bir kez tamamlayin."
+  );
+  process.exit(0);
 }
 
 process.exit(result.status ?? 1);
