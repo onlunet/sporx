@@ -136,7 +136,6 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         ["syncResults", intervals.resultsMinutes],
         ["syncResultsReconcile", intervals.resultsReconcileMinutes],
         ["syncStandings", intervals.standingsMinutes],
-        ["generatePredictions", syncEveryMinutes],
         ["providerHealthCheck", intervals.providerHealthMinutes],
         ["syncOddsPreMatch", intervals.oddsPreMatchMinutes],
         ["syncOddsLive", intervals.oddsLiveMinutes],

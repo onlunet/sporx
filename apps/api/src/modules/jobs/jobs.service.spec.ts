@@ -47,6 +47,7 @@ describe("JobsService", () => {
     expect(scheduledJobTypes).toContain("syncResults");
     expect(scheduledJobTypes).toContain("syncFixturesHotPulse");
     expect(scheduledJobTypes).toContain("syncResultsReconcile");
+    expect(scheduledJobTypes).not.toContain("generatePredictions");
   });
 
   it("keeps scheduler active for api role by default", async () => {

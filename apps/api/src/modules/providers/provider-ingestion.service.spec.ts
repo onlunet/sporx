@@ -298,6 +298,37 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
     ).toEqual(["match-1", "match-2", "match-3"]);
   });
 
+  it("skips post-sync auto prediction when provider results have no scoped match ids", async () => {
+    const { service } = createService();
+    (service as any).providersService = {
+      listActiveApiProviders: jest.fn().mockResolvedValue([{ key: "football_data" }]),
+      getProviderRuntimeSettings: jest.fn()
+    };
+    (service as any).incidentReadinessService = {
+      getEmergencyControlStatus: jest.fn().mockResolvedValue({ disabledProviderPath: null })
+    };
+    jest.spyOn(service as any, "supportsProviderFetch").mockReturnValue(true);
+    jest.spyOn(service as any, "normalizeStaleMatchStatuses").mockResolvedValue(undefined);
+    jest.spyOn(service as any, "syncFootballData").mockResolvedValue({
+      providerKey: "football_data",
+      recordsRead: 10,
+      recordsWritten: 4,
+      errors: 0,
+      details: {}
+    });
+
+    const result = await service.sync("syncResults", "run-no-scope");
+
+    expect((service as any).generatePredictions).not.toHaveBeenCalled();
+    expect(result.recordsRead).toBe(10);
+    expect(result.recordsWritten).toBe(4);
+    expect(result.logs).toEqual(
+      expect.objectContaining({
+        predictionGeneration: null
+      })
+    );
+  });
+
   it("writes per-league result checkpoint and run payload summary", async () => {
     const { service, prisma } = createService();
     (service as any).providersService = {

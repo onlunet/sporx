@@ -880,14 +880,15 @@ export class ProviderIngestionService {
 
     const scopedPredictionMatchIds = this.collectPredictionScopeMatchIds(results);
     let predictionSummary: SyncSummary | null = null;
-    if ((jobType === "syncFixtures" || jobType === "syncResults") && summary.recordsWritten > 0) {
+    if (
+      (jobType === "syncFixtures" || jobType === "syncResults") &&
+      summary.recordsWritten > 0 &&
+      scopedPredictionMatchIds.length > 0
+    ) {
       try {
         predictionSummary = await this.generatePredictions(runId, {
-          matchIds: scopedPredictionMatchIds.length > 0 ? scopedPredictionMatchIds : undefined,
-          reason:
-            scopedPredictionMatchIds.length > 0
-              ? `post_${jobType}_scoped`
-              : `post_${jobType}_fallback_global`
+          matchIds: scopedPredictionMatchIds,
+          reason: `post_${jobType}_scoped`
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "prediction_auto_generation_failed";
