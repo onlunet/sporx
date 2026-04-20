@@ -465,3 +465,98 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
     );
   });
 });
+
+describe("ProviderIngestionService SportAPI helpers", () => {
+  it("derives half-time score from SportAPI first-half goal events", () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).deriveSportApiHalfTimeFromEvents(
+        [
+          { event_type: "goal", team_side: "home", minute: "25'" },
+          { event_type: "goal", team_side: "home", minute: "45'+1" },
+          { event_type: "goal", team_side: "home", minute: "80'" }
+        ],
+        "Gaziantep FK",
+        "Kayserispor"
+      )
+    ).toEqual({ home: 2, away: 0, source: "timeline_derived" });
+  });
+
+  it("enriches historical SportAPI matches with missing half-time scores", async () => {
+    const { service, prisma } = createService();
+    (prisma as any).match = {
+      findMany: jest
+        .fn()
+        .mockResolvedValueOnce([
+          {
+            id: "match-old-missing",
+            status: MatchStatus.finished,
+            matchDateTimeUTC: new Date("2026-04-10T17:00:00.000Z"),
+            homeScore: 3,
+            awayScore: 0,
+            halfTimeHomeScore: null,
+            halfTimeAwayScore: null,
+            homeElo: null,
+            awayElo: null,
+            form5Home: null,
+            form5Away: null,
+            dataSource: "sportapi_ai",
+            league: { id: "league-1", name: "Super Lig" },
+            homeTeam: { id: "team-1", name: "Gaziantep FK", country: "TR" },
+            awayTeam: { id: "team-2", name: "Kayserispor", country: "TR" },
+            providerMappings: [{ providerMatchKey: "7245", mappingConfidence: 0.92 }]
+          }
+        ])
+        .mockResolvedValueOnce([]),
+      update: jest.fn().mockResolvedValue({})
+    };
+    (service as any).providersService = {
+      getProviderRuntimeSettings: jest.fn().mockResolvedValue({
+        apiKey: "sportapi-key",
+        dailyLimit: 1000,
+        matchDetailsMaxMatches: 50,
+        matchDetailsBackfillDays: 180
+      })
+    };
+    (service as any).sportApiConnector = {
+      fetchFixture: jest.fn().mockResolvedValue({
+        fixture: {
+          id: 7245,
+          events: [
+            { event_type: "goal", team_side: "home", minute: "25'" },
+            { event_type: "goal", team_side: "home", minute: "45'+1" },
+            { event_type: "goal", team_side: "home", minute: "80'" }
+          ]
+        }
+      })
+    };
+    jest.spyOn(service as any, "applyContextPatchToFeatureSnapshot").mockResolvedValue(undefined);
+
+    const result = await (service as any).syncSportApi(
+      { id: "provider-sportapi", key: "sportapi_ai", baseUrl: null },
+      "run-sportapi-details",
+      "enrichMatchDetails"
+    );
+
+    expect((prisma as any).match.findMany).toHaveBeenCalledTimes(2);
+    expect((prisma as any).match.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "match-old-missing" },
+        data: expect.objectContaining({
+          halfTimeHomeScore: 2,
+          halfTimeAwayScore: 0,
+          updatedByProcess: "sportapi_match_details"
+        })
+      })
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        jobType: "enrichMatchDetails",
+        halfTimeScoresWritten: 1,
+        timelineHalfTimeScoresWritten: 1,
+        backfillDays: 180
+      })
+    );
+  });
+});

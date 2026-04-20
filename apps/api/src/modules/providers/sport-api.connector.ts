@@ -95,6 +95,26 @@ export class SportApiConnector {
     };
   }
 
+  async fetchFixture(apiKey: string, fixtureId: string, baseUrl?: string) {
+    const response = await this.request(
+      `${this.resolveBaseUrl(baseUrl)}/api/fixtures/${fixtureId}`,
+      {
+        headers: this.headers(apiKey)
+      },
+      "sportapi_ai fixture"
+    );
+
+    if (!response.ok) {
+      throw new Error(`sportapi_ai fixture failed: ${response.status}`);
+    }
+
+    return (await response.json()) as {
+      success?: boolean;
+      fixture?: Record<string, unknown>;
+      data?: Record<string, unknown>;
+    };
+  }
+
   async fetchLeagues(apiKey: string, baseUrl?: string) {
     const response = await this.request(
       `${this.resolveBaseUrl(baseUrl)}/api/leagues`,

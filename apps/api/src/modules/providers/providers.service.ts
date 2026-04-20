@@ -56,6 +56,7 @@ type ProviderRuntimeSettings = {
   syncDaysAhead?: number;
   standingsLeagueIds?: string[];
   matchDetailsMaxMatches?: number;
+  matchDetailsBackfillDays?: number;
   enrichmentEnabled?: boolean;
   oddsSport?: string;
   oddsBookmakers?: string;

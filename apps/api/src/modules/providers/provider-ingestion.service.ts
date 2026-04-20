@@ -3970,6 +3970,71 @@ export class ProviderIngestionService {
     return null;
   }
 
+  private deriveSportApiHalfTimeFromEvents(
+    eventsRaw: unknown,
+    homeTeamName: string,
+    awayTeamName: string
+  ) {
+    if (!Array.isArray(eventsRaw) || eventsRaw.length === 0) {
+      return { home: null as number | null, away: null as number | null, source: null };
+    }
+
+    let home = 0;
+    let away = 0;
+    let reliableGoalEvents = 0;
+
+    for (const rawEvent of eventsRaw) {
+      const event = this.toRecord(rawEvent);
+      if (!event) {
+        continue;
+      }
+
+      const eventType = this.normalizeAlias(String(event.event_type ?? event.type ?? ""));
+      if (!eventType.includes("goal") && !eventType.includes("own")) {
+        continue;
+      }
+
+      const minuteText = String(event.minute ?? event.time ?? "").trim();
+      const parsedMinute = this.parseTimelineGoalMinute(minuteText);
+      if (!this.timelineMinuteIsFirstHalf(parsedMinute)) {
+        continue;
+      }
+
+      const teamSide = this.normalizeAlias(String(event.team_side ?? event.side ?? ""));
+      if (teamSide === "home") {
+        home += 1;
+        reliableGoalEvents += 1;
+        continue;
+      }
+      if (teamSide === "away") {
+        away += 1;
+        reliableGoalEvents += 1;
+        continue;
+      }
+
+      const teamName = this.normalizeAlias(String(event.team_name ?? event.team ?? ""));
+      if (teamName.length === 0) {
+        continue;
+      }
+
+      const normalizedHome = this.normalizeAlias(homeTeamName);
+      const normalizedAway = this.normalizeAlias(awayTeamName);
+      if (teamName === normalizedHome || teamName.includes(normalizedHome) || normalizedHome.includes(teamName)) {
+        home += 1;
+        reliableGoalEvents += 1;
+      } else if (teamName === normalizedAway || teamName.includes(normalizedAway) || normalizedAway.includes(teamName)) {
+        away += 1;
+        reliableGoalEvents += 1;
+      }
+    }
+
+    if (reliableGoalEvents <= 0) {
+      return { home: null as number | null, away: null as number | null, source: null };
+    }
+
+    return { home, away, source: "timeline_derived" as const };
+  }
+
   private readQuarterScoreFromSideScores(sideScores: Record<string, unknown>, quarter: 1 | 2 | 3 | 4) {
     const keyCandidates = [
       `q${quarter}`,
@@ -7312,6 +7377,235 @@ export class ProviderIngestionService {
     };
   }
 
+  private async loadSportApiMatchDetailCandidates(providerId: string, maxMatches: number, backfillDays: number) {
+    const now = new Date();
+    const backfillFrom = new Date(now.getTime() - backfillDays * 24 * 60 * 60 * 1000);
+    const activeWindowFrom = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+    const activeWindowTo = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const include = {
+      league: true,
+      homeTeam: true,
+      awayTeam: true,
+      providerMappings: {
+        where: { providerId },
+        select: {
+          providerMatchKey: true,
+          mappingConfidence: true
+        }
+      }
+    } as const;
+
+    const priorityMatches = await this.prisma.match.findMany({
+      where: {
+        sport: { code: "football" },
+        status: MatchStatus.finished,
+        matchDateTimeUTC: {
+          gte: backfillFrom,
+          lte: now
+        },
+        OR: [{ halfTimeHomeScore: null }, { halfTimeAwayScore: null }],
+        providerMappings: {
+          some: {
+            providerId
+          }
+        }
+      },
+      include,
+      orderBy: { matchDateTimeUTC: "desc" },
+      take: maxMatches
+    });
+
+    if (priorityMatches.length >= maxMatches) {
+      return priorityMatches;
+    }
+
+    const activeWindowMatches = await this.prisma.match.findMany({
+      where: {
+        sport: { code: "football" },
+        matchDateTimeUTC: {
+          gte: activeWindowFrom,
+          lte: activeWindowTo
+        },
+        providerMappings: {
+          some: {
+            providerId
+          }
+        }
+      },
+      include,
+      orderBy: { matchDateTimeUTC: "asc" },
+      take: maxMatches
+    });
+
+    const merged = new Map<string, (typeof priorityMatches)[number]>();
+    for (const match of priorityMatches) {
+      merged.set(match.id, match);
+    }
+    for (const match of activeWindowMatches) {
+      if (!merged.has(match.id)) {
+        merged.set(match.id, match);
+      }
+      if (merged.size >= maxMatches) {
+        break;
+      }
+    }
+
+    return Array.from(merged.values()).slice(0, maxMatches);
+  }
+
+  private async enrichSportApiMatchDetails(
+    provider: ProviderRecord,
+    runId: string,
+    options: {
+      apiKey?: string;
+      baseUrl?: string;
+      dailyLimit: number;
+      maxMatches: number;
+      backfillDays: number;
+    }
+  ): Promise<ProviderSyncResult> {
+    const maxMatches = Math.max(10, Math.min(100, options.maxMatches));
+    const backfillDays = Math.max(7, Math.min(365, options.backfillDays));
+    const matches = await this.loadSportApiMatchDetailCandidates(provider.id, maxMatches, backfillDays);
+    const plannedCalls = matches.length;
+    const quota = await this.quotaGate(provider.key, plannedCalls, options.dailyLimit);
+    let matchesToProcess = matches;
+    let skippedByQuota = 0;
+
+    if (!quota.allowed) {
+      const remainingCalls = Number.isFinite(quota.remaining) ? Math.max(0, Math.floor(quota.remaining)) : 0;
+      if (remainingCalls <= 0) {
+        await this.logApiCall(`provider/${provider.key}/enrich-match-details`, 429, 0, runId);
+        return {
+          providerKey: provider.key,
+          recordsRead: matches.length,
+          recordsWritten: 0,
+          errors: 1,
+          details: {
+            message: "SportAPI maç detay enrichment için günlük kota yetersiz.",
+            dailyLimit: options.dailyLimit,
+            plannedCalls,
+            used: quota.used,
+            remaining: quota.remaining
+          }
+        };
+      }
+
+      matchesToProcess = matches.slice(0, remainingCalls);
+      skippedByQuota = matches.length - matchesToProcess.length;
+      await this.logApiCall(`provider/${provider.key}/enrich-match-details`, 206, 0, runId);
+    }
+
+    let recordsWritten = 0;
+    let errors = 0;
+    let halfTimeScoresWritten = 0;
+    let timelineHalfTimeScoresWritten = 0;
+    const detailSummaries: Array<Record<string, unknown>> = [];
+
+    for (const match of matchesToProcess) {
+      const mapping = match.providerMappings.find((item: { providerMatchKey: string }) => item.providerMatchKey.length > 0);
+      if (!mapping) {
+        continue;
+      }
+
+      const fixtureId = mapping.providerMatchKey;
+      let fixtureRecord: Record<string, unknown> | null = null;
+      try {
+        const startedAt = Date.now();
+        const response = await this.sportApiConnector.fetchFixture(options.apiKey!, fixtureId, options.baseUrl);
+        await this.logApiCall(`provider/${provider.key}/fixtures/${fixtureId}`, 200, Date.now() - startedAt, runId);
+        fixtureRecord = this.toRecord(response.fixture) ?? this.toRecord(response.data);
+      } catch (error) {
+        errors += 1;
+        await this.logApiCall(`provider/${provider.key}/fixtures/${fixtureId}`, 500, 0, runId);
+        this.logger.warn(`SportAPI fixture detail failed for ${fixtureId}: ${error instanceof Error ? error.message : "unknown"}`);
+      }
+
+      if (!fixtureRecord) {
+        continue;
+      }
+
+      const directHalfTime = this.readHalfTimeScorePair(fixtureRecord);
+      const resolvedHalfTime =
+        this.hasHalfTimePair(directHalfTime.home, directHalfTime.away)
+          ? { home: directHalfTime.home, away: directHalfTime.away, source: "direct" as const }
+          : this.deriveSportApiHalfTimeFromEvents(
+              fixtureRecord.events,
+              match.homeTeam.name,
+              match.awayTeam.name
+            );
+
+      let halfTimeSource: string | null = null;
+      if (
+        this.hasHalfTimePair(resolvedHalfTime.home, resolvedHalfTime.away) &&
+        !this.hasHalfTimePair(match.halfTimeHomeScore, match.halfTimeAwayScore)
+      ) {
+        try {
+          await this.prisma.match.update({
+            where: { id: match.id },
+            data: {
+              halfTimeHomeScore: resolvedHalfTime.home,
+              halfTimeAwayScore: resolvedHalfTime.away,
+              dataSource: match.dataSource ?? provider.key,
+              importedAt: new Date(),
+              updatedByProcess: "sportapi_match_details"
+            }
+          });
+          halfTimeSource = resolvedHalfTime.source;
+          halfTimeScoresWritten += 1;
+          if (resolvedHalfTime.source === "timeline_derived") {
+            timelineHalfTimeScoresWritten += 1;
+          }
+          await this.applyContextPatchToFeatureSnapshot(match.id, {
+            sportApiHalfTimeSource: resolvedHalfTime.source,
+            sportApiHalfTimeUpdatedAt: new Date().toISOString()
+          });
+        } catch (error) {
+          errors += 1;
+          this.logger.warn(
+            `SportAPI half-time enrichment failed for ${fixtureId}: ${error instanceof Error ? error.message : "unknown"}`
+          );
+        }
+      }
+
+      detailSummaries.push({
+        matchId: match.id,
+        providerMatchKey: fixtureId,
+        halfTimeSource: halfTimeSource ?? "missing",
+        eventsCount: Array.isArray(fixtureRecord.events) ? fixtureRecord.events.length : 0
+      });
+      recordsWritten += 1;
+    }
+
+    const cursor = new Date().toISOString();
+    await this.setCheckpoint(provider.key, "sportapi_match_details", cursor);
+    await this.createExternalPayload(provider.key, runId, "sportapi_match_details", {
+      recordsRead: matches.length,
+      recordsWritten,
+      halfTimeScoresWritten,
+      timelineHalfTimeScoresWritten,
+      errors,
+      skippedByQuota,
+      details: detailSummaries.slice(0, 30)
+    });
+
+    return {
+      providerKey: provider.key,
+      recordsRead: matches.length,
+      recordsWritten,
+      errors,
+      details: {
+        jobType: "enrichMatchDetails",
+        processedMatches: matchesToProcess.length,
+        halfTimeScoresWritten,
+        timelineHalfTimeScoresWritten,
+        skippedByQuota,
+        checkpoint: cursor,
+        backfillDays
+      }
+    };
+  }
+
   private async syncBallDontLie(
     provider: { id: string; key: string; baseUrl: string | null },
     runId: string,
@@ -7954,6 +8248,16 @@ export class ProviderIngestionService {
     }
 
     const dailyLimit = settings.dailyLimit ?? 1000;
+
+    if (jobType === "enrichMatchDetails") {
+      return this.enrichSportApiMatchDetails(provider, runId, {
+        apiKey: settings.apiKey,
+        baseUrl: settings.baseUrl ?? provider.baseUrl ?? undefined,
+        dailyLimit,
+        maxMatches: this.parseConfigInt(settings.matchDetailsMaxMatches, 50),
+        backfillDays: this.parseConfigInt(settings.matchDetailsBackfillDays, 180)
+      });
+    }
 
     if (jobType === "syncLeagues") {
       const quota = await this.quotaGate(provider.key, 1, dailyLimit);
