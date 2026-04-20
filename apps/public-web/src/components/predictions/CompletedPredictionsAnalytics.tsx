@@ -5,6 +5,8 @@ import { BarChart3, CheckCircle2, Target, XCircle, AlertTriangle } from "lucide-
 import {
   MatchPredictionItem,
   buildPredictionPerformanceReport,
+  explainFailedPredictionFactors,
+  explainFailedPrediction,
   evaluatePredictionResult,
   isCompletedMatchStatus,
   predictionTypeLabel,
@@ -125,13 +127,21 @@ function verdictLabel(item: MatchPredictionItem, sport?: SportScope): { text: st
     return { text: "Doğru", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" };
   }
   if (result === false) {
-    return { text: "Başarısız", className: "border-rose-500/30 bg-rose-500/10 text-rose-300" };
+    return {
+      text: "Başarısız",
+      className: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+      reason: explainFailedPrediction(item) ?? "Tahmin sonucu gerçekle uyuşmadı"
+    };
   }
   return {
     text: "Değerlendirilemedi",
     className: "border-slate-500/30 bg-slate-500/10 text-slate-300",
     reason: notEvaluatedReason(item, sport)
   };
+}
+
+function failureFactors(item: MatchPredictionItem): string[] {
+  return evaluatePredictionResult(item) === false ? explainFailedPredictionFactors(item) : [];
 }
 
 function asScore(item: MatchPredictionItem): string {
@@ -589,12 +599,14 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
                 <th className="py-2 pr-3 font-medium">Skor</th>
                 {sport === "basketball" ? <th className="py-2 pr-3 font-medium">Toplam Sayı</th> : null}
                 {sport === "basketball" ? <th className="py-2 pr-3 font-medium">4 Periyot Dağılımı</th> : null}
+                <th className="py-2 pr-3 font-medium">Neden Şaştı?</th>
                 <th className="py-2 pr-3 font-medium">Durum</th>
               </tr>
             </thead>
             <tbody>
               {playedItems.slice(0, 120).map((item, index) => {
                 const verdict = verdictLabel(item, sport);
+                const factors = failureFactors(item);
                 const key = `${item.matchId}-${item.predictionType}-${item.marketKey ?? "market"}-${item.line ?? "na"}-${index}`;
                 return (
                   <tr key={key} className="border-b border-white/5 text-slate-200">
@@ -616,6 +628,22 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
                       </td>
                     ) : null}
                     <td className="py-2 pr-3">
+                      {factors.length > 0 ? (
+                        <div className="space-y-1">
+                          {factors.map((factor, factorIndex) => (
+                            <div
+                              key={`${key}-factor-${factorIndex}`}
+                              className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-2 py-1 text-xs text-amber-100"
+                            >
+                              {factor}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-500">-</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
                       <div className="space-y-1">
                         <span className={`inline-flex rounded-full border px-2 py-1 text-xs ${verdict.className}`}>{verdict.text}</span>
                         {verdict.reason ? <div className="text-xs text-amber-300">{verdict.reason}</div> : null}
@@ -626,7 +654,7 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
               })}
               {playedItems.length === 0 && (
                 <tr>
-                  <td colSpan={sport === "basketball" ? 7 : 5} className="py-3 text-slate-400">
+                  <td colSpan={sport === "basketball" ? 8 : 6} className="py-3 text-slate-400">
                     Sonuçlanmış tahmin bulunamadı.
                   </td>
                 </tr>

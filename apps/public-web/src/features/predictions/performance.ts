@@ -119,6 +119,72 @@ function resolveLine(item: MatchPredictionItem): number {
   return 0.5;
 }
 
+type FailureReason = {
+  priority: number;
+  text: string;
+};
+
+function pushFailureReason(reasons: FailureReason[], text: string, priority: number) {
+  if (!text || reasons.some((item) => item.text === text)) {
+    return;
+  }
+  reasons.push({ text, priority });
+}
+
+function mapRiskFlagToReason(code: string): FailureReason | null {
+  switch (code) {
+    case "LOW_LINEUP_CERTAINTY":
+      return { priority: 100, text: "Kadro belirsizdi; oyuncu bazlı sinyal maça yakın netleşmedi." };
+    case "NO_LINEUP_COVERAGE":
+    case "LOW_LINEUP_COVERAGE":
+    case "MISSING_LINEUP_REQUIRED":
+      return { priority: 95, text: "Kadro verisi eksikti; model ilk 11 etkisini yeterince okuyamadı." };
+    case "HIGH_MISSING_STATS_RATIO":
+    case "LOW_EVENT_COVERAGE":
+    case "MISSING_EVENT_STATS":
+      return { priority: 92, text: "İstatistik kapsamı düşüktü; maç formu ve olay verisi eksik kaldı." };
+    case "LOW_ELO_COVERAGE":
+    case "ELO_BACKFILLED":
+      return { priority: 85, text: "Takım güç verisi zayıftı; rating tarafı tahmini/backfill beslendi." };
+    case "LOW_CALIBRATION_SAMPLE":
+    case "LOW_HISTORICAL_SUPPORT":
+      return { priority: 84, text: "Geçmiş örnek sayısı sınırlıydı; kalibrasyon yeterince oturmadı." };
+    case "NO_ODDS_COVERAGE":
+    case "MISSING_ODDS":
+      return { priority: 83, text: "Piyasa oran referansı eksikti; model dış teyit alamadı." };
+    case "PROVIDER_DISAGREEMENT":
+    case "HIGH_PROVIDER_DISAGREEMENT":
+      return { priority: 82, text: "Kaynaklar arasında ayrışma vardı; veri güveni düştü." };
+    case "ALIAS_CONFIDENCE_LOW":
+      return { priority: 80, text: "Takım eşleştirme güveni zayıftı; provider verisi tam oturmadı." };
+    case "WEATHER_VARIANCE":
+      return { priority: 78, text: "Hava koşulları varyansı artırdı; maç akışı modelden saptı." };
+    case "REFEREE_STRICTNESS":
+      return { priority: 74, text: "Hakem profili maç akışını etkileyebilecek kadar sertti." };
+    case "REFEREE_DATA_ESTIMATED":
+      return { priority: 72, text: "Hakem verisi resmi kaynaktan gelmedi; bu bağlam tahmini kaldı." };
+    case "ADVANCED_ENGINE_FALLBACK":
+    case "META_MODEL_FALLBACK":
+      return { priority: 70, text: "Ana model yerine fallback akış devreye girdi; tahmin kalitesi zayıflamış olabilir." };
+    case "CONFLICTING_SIGNALS":
+      return { priority: 68, text: "Model iç sinyalleri birbiriyle çelişti; net yön oluşmadı." };
+    case "HIGH_VARIANCE_MATCH":
+    case "HIGH_VOLATILITY":
+    case "MEDIUM_VARIANCE":
+    case "UNSTABLE_LAMBDA":
+      return { priority: 66, text: "Maç varyansı yüksekti; model istikrarlı bir senaryo kuramadı." };
+    case "LOW_CONFIDENCE":
+    case "LOW_PUBLISH_SCORE":
+      return { priority: 64, text: "Model güven skoru zaten düşüktü; kenar yeterince güçlü değildi." };
+    case "STALE_DATA":
+      return { priority: 62, text: "Veri tazeliği zayıftı; model eski bağlamla karar verdi." };
+    case "LOW_SCORE_BIAS":
+      return { priority: 55, text: "Model düşük skorlu senaryoya fazla yaslandı; maç akışı bunu bozdu." };
+    default:
+      return null;
+  }
+}
+
 function resolvedHalfTimeScore(item: MatchPredictionItem): { home: number; away: number } | null {
   if (
     item.halfTimeHomeScore !== null &&
@@ -247,6 +313,82 @@ function evaluatePrediction(item: MatchPredictionItem): boolean | null {
 
 export function evaluatePredictionResult(item: MatchPredictionItem): boolean | null {
   return evaluatePrediction(item);
+}
+
+export function explainFailedPredictionFactors(item: MatchPredictionItem): string[] {
+  if (evaluatePrediction(item) !== false) {
+    return [];
+  }
+
+  const reasons: FailureReason[] = [];
+
+  for (const flag of item.riskFlags ?? []) {
+    const mapped = mapRiskFlagToReason(flag.code);
+    if (mapped) {
+      pushFailureReason(reasons, mapped.text, mapped.priority);
+    }
+  }
+
+  const contradictionScore = Math.max(0, item.marketAnalysis?.contradictionScore ?? 0);
+  const probabilityGap = Math.abs(item.marketAnalysis?.probabilityGap ?? 0);
+  const volatilityScore = Math.max(0, item.marketAnalysis?.volatilityScore ?? 0);
+
+  if (contradictionScore >= 0.22) {
+    pushFailureReason(reasons, "Model ile piyasa ciddi ayrıştı; fiyatlama modeli teyit etmedi.", 90);
+  } else if (probabilityGap >= 0.14) {
+    pushFailureReason(reasons, "Model ile piyasa olasılık farkı yüksekti; maç önü fiyatlama farklı yöndeydi.", 76);
+  }
+
+  if (volatilityScore >= 0.18) {
+    pushFailureReason(reasons, "Piyasa hareketi oynaktı; maç önü denge kararsızdı.", 74);
+  }
+
+  if (typeof item.confidenceScore === "number" && item.confidenceScore < 0.55) {
+    pushFailureReason(reasons, "Model kenarı zayıftı; güven skoru bu seçim için düşük kaldı.", 73);
+  }
+
+  if (item.avoidReason) {
+    if (/kadro/i.test(item.avoidReason)) {
+      pushFailureReason(reasons, "Kadro tarafındaki belirsizlik tahmini temkinli hale getirmişti.", 88);
+    } else if (/guven skoru dusuk|güven skoru düşük/i.test(item.avoidReason)) {
+      pushFailureReason(reasons, "Tahmin zaten düşük güven skoruyla üretilmişti.", 72);
+    } else if (/degiskenlik yuksek|değişkenlik yüksek/i.test(item.avoidReason)) {
+      pushFailureReason(reasons, "Model bu maçta yüksek varyans uyarısı vermişti.", 71);
+    }
+  }
+
+  if (
+    item.expectedScore &&
+    typeof item.expectedScore.home === "number" &&
+    typeof item.expectedScore.away === "number" &&
+    Math.abs(item.expectedScore.home - item.expectedScore.away) < 0.2 &&
+    (item.predictionType === "fullTimeResult" || item.predictionType === "firstHalfResult" || item.predictionType === "halfTimeFullTime")
+  ) {
+    pushFailureReason(reasons, "Beklenen skor dengeliydi; model net bir taraf üstünlüğü kuramamıştı.", 60);
+  }
+
+  if (reasons.length === 0) {
+    const contradictionDetail = item.contradictionSignals?.find((signal) => signal.detail && signal.detail.trim().length > 0)?.detail;
+    if (contradictionDetail) {
+      pushFailureReason(reasons, contradictionDetail.trim(), 55);
+    }
+  }
+
+  if (reasons.length === 0) {
+    return ["Belirgin veri açığı işaretlenmedi; model bu maçın varyansını doğru ayıramadı."];
+  }
+
+  return reasons
+    .sort((left, right) => right.priority - left.priority)
+    .slice(0, 2)
+    .map((item) => item.text);
+}
+
+export function explainFailedPrediction(item: MatchPredictionItem): string | null {
+  if (evaluatePrediction(item) !== false) {
+    return null;
+  }
+  return explainFailedPredictionFactors(item).join(" ");
 }
 
 function roundPercentage(value: number): number {
