@@ -412,6 +412,7 @@ export class ProvidersService {
         syncDaysAhead: this.toInt(configs.syncDaysAhead),
         standingsLeagueIds: this.toStringList(configs.standingsLeagueIds),
         matchDetailsMaxMatches: this.toInt(configs.matchDetailsMaxMatches),
+        matchDetailsBackfillDays: this.toInt(configs.matchDetailsBackfillDays),
         enrichmentEnabled: this.toBool(configs.enrichmentEnabled),
         oddsSport: configs.oddsSport,
         oddsBookmakers: configs.oddsBookmakers,
