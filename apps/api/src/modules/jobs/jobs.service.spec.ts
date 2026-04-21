@@ -3,8 +3,13 @@ import { JobsService } from "./jobs.service";
 describe("JobsService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.useRealTimers();
     process.env.SERVICE_ROLE = "worker";
     delete process.env.INGESTION_RUNNING_MAX_AGE_MS;
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it("schedules syncResults automatically with new football-data cadence jobs", async () => {
@@ -140,5 +145,111 @@ describe("JobsService", () => {
         })
       })
     );
+  });
+
+  it("does not schedule match detail enrichment outside the configured UTC window", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-04-21T12:00:00.000Z"));
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: "job-1" })
+      },
+      ingestionJobRun: {
+        findMany: jest.fn(async (args: any) => {
+          if (args?.where?.status) {
+            return [];
+          }
+          return [];
+        }),
+        update: jest.fn().mockResolvedValue(undefined)
+      },
+      systemSetting: {
+        findMany: jest.fn().mockResolvedValue([
+          { key: "sync.window.matchDetail.enabled", value: true },
+          { key: "sync.window.matchDetail.startUtcMinute", value: 10 },
+          { key: "sync.window.matchDetail.endUtcMinute", value: 150 }
+        ])
+      },
+      match: {
+        count: jest.fn().mockResolvedValue(0)
+      }
+    };
+    const ingestionService = {
+      run: jest.fn(async (jobType: string) => ({ id: `run-${jobType}` }))
+    };
+    const cacheService = {
+      acquireLock: jest.fn().mockResolvedValue(true),
+      renewLock: jest.fn().mockResolvedValue(true),
+      releaseLock: jest.fn().mockResolvedValue(undefined)
+    };
+
+    const service = new JobsService(prisma as any, ingestionService as any, cacheService as any);
+    await (service as any).tick("interval");
+
+    const scheduledJobTypes = ingestionService.run.mock.calls.map((call) => call[0]);
+    expect(scheduledJobTypes).not.toContain("enrichMatchDetails");
+  });
+
+  it("schedules match detail enrichment once inside the configured UTC window", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-04-21T00:30:00.000Z"));
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: "job-1" })
+      },
+      ingestionJobRun: {
+        findMany: jest.fn(async (args: any) => {
+          if (args?.where?.status) {
+            return [];
+          }
+          return [
+            {
+              jobType: "enrichMatchDetails",
+              status: "succeeded",
+              createdAt: new Date("2026-04-21T00:20:00.000Z"),
+              startedAt: new Date("2026-04-21T00:20:00.000Z"),
+              finishedAt: new Date("2026-04-21T00:22:00.000Z")
+            }
+          ];
+        }),
+        update: jest.fn().mockResolvedValue(undefined)
+      },
+      systemSetting: {
+        findMany: jest.fn().mockResolvedValue([
+          { key: "sync.window.matchDetail.enabled", value: true },
+          { key: "sync.window.matchDetail.startUtcMinute", value: 10 },
+          { key: "sync.window.matchDetail.endUtcMinute", value: 150 }
+        ])
+      },
+      match: {
+        count: jest.fn().mockResolvedValue(0)
+      }
+    };
+    const ingestionService = {
+      run: jest.fn(async (jobType: string) => ({ id: `run-${jobType}` }))
+    };
+    const cacheService = {
+      acquireLock: jest.fn().mockResolvedValue(true),
+      renewLock: jest.fn().mockResolvedValue(true),
+      releaseLock: jest.fn().mockResolvedValue(undefined)
+    };
+
+    const service = new JobsService(prisma as any, ingestionService as any, cacheService as any);
+    await (service as any).tick("interval");
+
+    const scheduledJobTypes = ingestionService.run.mock.calls.map((call) => call[0]);
+    expect(scheduledJobTypes).not.toContain("enrichMatchDetails");
+
+    prisma.ingestionJobRun.findMany.mockImplementation(async (args: any) => {
+      if (args?.where?.status) {
+        return [];
+      }
+      return [];
+    });
+
+    await (service as any).tick("interval");
+
+    const scheduledAfterEmptyLatest = ingestionService.run.mock.calls.map((call) => call[0]);
+    expect(scheduledAfterEmptyLatest).toContain("enrichMatchDetails");
   });
 });

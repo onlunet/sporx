@@ -41,6 +41,12 @@ type SchedulerLockState = {
   lost: boolean;
 };
 
+type DailyUtcWindow = {
+  enabled: boolean;
+  startUtcMinute: number;
+  endUtcMinute: number;
+};
+
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobsService.name);
@@ -130,24 +136,31 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       this.assertSchedulerLockHeld(lockState);
       const forceOnStartup = reason === "startup";
 
-      const schedulePlan: Array<readonly [JobType, number]> = [
-        ["syncFixtures", syncEveryMinutes],
-        ["syncFixturesHotPulse", intervals.hotPulseMinutes],
-        ["syncResults", intervals.resultsMinutes],
-        ["syncResultsReconcile", intervals.resultsReconcileMinutes],
-        ["syncStandings", intervals.standingsMinutes],
-        ["providerHealthCheck", intervals.providerHealthMinutes],
-        ["syncOddsPreMatch", intervals.oddsPreMatchMinutes],
-        ["syncOddsLive", intervals.oddsLiveMinutes],
-        ["syncOddsClosing", intervals.oddsClosingMinutes],
-        ["generateMarketAnalysis", intervals.marketAnalysisMinutes],
-        ["resolveProviderAliases", intervals.aliasSyncMinutes],
-        ["enrichTeamProfiles", intervals.teamProfileMinutes],
-        ["enrichMatchDetails", intervals.detailMinutes]
+      const schedulePlan: Array<{ jobType: JobType; maxAgeMinutes: number; window?: DailyUtcWindow }> = [
+        { jobType: "syncFixtures", maxAgeMinutes: syncEveryMinutes },
+        { jobType: "syncFixturesHotPulse", maxAgeMinutes: intervals.hotPulseMinutes },
+        { jobType: "syncResults", maxAgeMinutes: intervals.resultsMinutes },
+        { jobType: "syncResultsReconcile", maxAgeMinutes: intervals.resultsReconcileMinutes },
+        { jobType: "syncStandings", maxAgeMinutes: intervals.standingsMinutes },
+        { jobType: "providerHealthCheck", maxAgeMinutes: intervals.providerHealthMinutes },
+        { jobType: "syncOddsPreMatch", maxAgeMinutes: intervals.oddsPreMatchMinutes },
+        { jobType: "syncOddsLive", maxAgeMinutes: intervals.oddsLiveMinutes },
+        { jobType: "syncOddsClosing", maxAgeMinutes: intervals.oddsClosingMinutes },
+        { jobType: "generateMarketAnalysis", maxAgeMinutes: intervals.marketAnalysisMinutes },
+        { jobType: "resolveProviderAliases", maxAgeMinutes: intervals.aliasSyncMinutes },
+        { jobType: "enrichTeamProfiles", maxAgeMinutes: intervals.teamProfileMinutes },
+        {
+          jobType: "enrichMatchDetails",
+          maxAgeMinutes: intervals.detailMinutes,
+          window: intervals.matchDetailWindow
+        }
       ];
 
-      for (const [jobType, maxAgeMinutes] of schedulePlan) {
+      for (const { jobType, maxAgeMinutes, window } of schedulePlan) {
         this.assertSchedulerLockHeld(lockState);
+        if (!this.shouldScheduleWindowedJob(window, latestRunsByType.get(jobType))) {
+          continue;
+        }
         await this.ensureRecentRun(jobType, maxAgeMinutes, forceOnStartup, latestRunsByType.get(jobType));
       }
     } catch (error) {
@@ -249,7 +262,10 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       "sync.interval.oddsPreMatchMinutes",
       "sync.interval.oddsLiveMinutes",
       "sync.interval.oddsClosingMinutes",
-      "sync.interval.marketAnalysisMinutes"
+      "sync.interval.marketAnalysisMinutes",
+      "sync.window.matchDetail.enabled",
+      "sync.window.matchDetail.startUtcMinute",
+      "sync.window.matchDetail.endUtcMinute"
     ] as const;
 
     const [settings, nextDayMatches, hotFootballMatches] = await Promise.all([
@@ -307,7 +323,12 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         oddsPreMatchMinutes: this.settingNumber(settingMap.get("sync.interval.oddsPreMatchMinutes"), 30),
         oddsLiveMinutes: this.settingNumber(settingMap.get("sync.interval.oddsLiveMinutes"), 5),
         oddsClosingMinutes: this.settingNumber(settingMap.get("sync.interval.oddsClosingMinutes"), 20),
-        marketAnalysisMinutes: this.settingNumber(settingMap.get("sync.interval.marketAnalysisMinutes"), 20)
+        marketAnalysisMinutes: this.settingNumber(settingMap.get("sync.interval.marketAnalysisMinutes"), 20),
+        matchDetailWindow: {
+          enabled: this.settingBoolean(settingMap.get("sync.window.matchDetail.enabled"), false),
+          startUtcMinute: this.settingMinuteOfDay(settingMap.get("sync.window.matchDetail.startUtcMinute"), 10),
+          endUtcMinute: this.settingMinuteOfDay(settingMap.get("sync.window.matchDetail.endUtcMinute"), 150)
+        }
       }
     };
   }
@@ -342,6 +363,81 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     }
 
     return fallback;
+  }
+
+  private settingBoolean(value: unknown, fallback: boolean) {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).value : value;
+    if (typeof raw === "boolean") {
+      return raw;
+    }
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return raw !== 0;
+    }
+    if (typeof raw === "string") {
+      const normalized = raw.trim().toLowerCase();
+      if (["1", "true", "yes", "on"].includes(normalized)) {
+        return true;
+      }
+      if (["0", "false", "no", "off"].includes(normalized)) {
+        return false;
+      }
+    }
+    return fallback;
+  }
+
+  private settingMinuteOfDay(value: unknown, fallback: number) {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).value : value;
+    const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(0, Math.min(1439, Math.round(parsed)));
+  }
+
+  private shouldScheduleWindowedJob(
+    window: DailyUtcWindow | undefined,
+    latest:
+      | {
+          status: IngestionStatus;
+          createdAt: Date;
+          startedAt: Date | null;
+          finishedAt: Date | null;
+        }
+      | undefined
+  ) {
+    if (!window?.enabled) {
+      return true;
+    }
+
+    const now = new Date();
+    const windowStart = this.currentWindowStartUtc(now, window);
+    if (!windowStart) {
+      return false;
+    }
+
+    const latestReferenceAt = latest?.createdAt;
+    if (latestReferenceAt && latestReferenceAt.getTime() >= windowStart.getTime()) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private currentWindowStartUtc(now: Date, window: DailyUtcWindow) {
+    const minuteOfDay = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const start = window.startUtcMinute;
+    const end = window.endUtcMinute;
+    const inWindow = start <= end ? minuteOfDay >= start && minuteOfDay <= end : minuteOfDay >= start || minuteOfDay <= end;
+
+    if (!inWindow) {
+      return null;
+    }
+
+    const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, start, 0, 0));
+    if (start > end && minuteOfDay <= end) {
+      startDate.setUTCDate(startDate.getUTCDate() - 1);
+    }
+    return startDate;
   }
 
   private readStaleThresholdMs() {
