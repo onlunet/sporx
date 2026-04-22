@@ -65,6 +65,11 @@ function createPrismaStub(options?: { failFirstTransactionWithP2034?: boolean; f
         };
         publishedByKey.set(key, created);
         return created;
+      }),
+      deleteMany: jest.fn().mockImplementation(async ({ where }: any) => {
+        const key = [where.matchId, where.market, where.lineKey, where.horizon].join("|");
+        const deleted = publishedByKey.delete(key);
+        return { count: deleted ? 1 : 0 };
       })
     }
   };
@@ -264,6 +269,22 @@ describe("PredictionRunPublisherService", () => {
     expect(firstRunCreate.data.explanationJson.adjustedConfidenceScore).toBe(firstRunCreate.data.confidence);
     const onlyPublished = [...stub.publishedByKey.values()][0];
     expect(onlyPublished.predictionRunId).toBe("run-2");
+
+    await service.publish({
+      matchId: "match-1",
+      matchStatus: MatchStatus.finished,
+      kickoffAt: new Date("2026-04-17T18:00:00.000Z"),
+      market: "match_outcome",
+      line: null,
+      modelVersionId: "model-1",
+      probability: 0.66,
+      confidence: 0.62,
+      riskFlags: [],
+      explanation: { summary: "post-match rerun" }
+    });
+
+    expect(stub.publishedByKey.size).toBe(1);
+    expect([...stub.publishedByKey.keys()].some((key) => key.endsWith("|POST_MATCH"))).toBe(false);
   });
 
   it("rerun after crash keeps published pointer idempotent by key", async () => {

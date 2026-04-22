@@ -192,7 +192,11 @@ const MARKET_REFINEMENT_CONFIG = {
     symmetryWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_SYMMETRY_WEIGHT", 0.035),
     cleanSheetWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_CLEAN_SHEET_WEIGHT", 0.05),
     maxProbabilityDelta: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_MAX_DELTA", 0.055),
-    maxConfidencePenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_MAX_CONFIDENCE_PENALTY", 0.04)
+    maxConfidencePenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_MAX_CONFIDENCE_PENALTY", 0.04),
+    empiricalBaseRate: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_BASE_RATE", 0.56),
+    empiricalPriorWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_PRIOR_WEIGHT", 0.55),
+    tempoPivot: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_TEMPO_PIVOT", 2.08),
+    tempoWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_TEMPO_WEIGHT", 0.16)
   },
   overUnder: {
     tempoWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_OU_TEMPO_WEIGHT", 0.035),
@@ -867,11 +871,18 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
   const volatilityScore = extractVolatilityScore(row, riskFlags, totalLambda);
   const oddsAgreement = extractOddsAgreement(row);
   const rawBttsYes = clampProbability((1 - Math.exp(-expectedScore.home)) * (1 - Math.exp(-expectedScore.away)));
-  const over25Proxy = totalGoalsOverProbability(totalLambda, 2.5);
   const outcomeImbalance = Math.abs(baseOutcome.home - baseOutcome.away);
   const balanceMultiplier = Math.max(0.75, 1 - Math.min(0.25, outcomeImbalance * 0.45));
-  const totalGoalsAdjustment = (over25Proxy - 0.5) * 0.28;
-  const bttsYes = clampProbability(rawBttsYes * balanceMultiplier + totalGoalsAdjustment);
+  const bttsConfig = MARKET_REFINEMENT_CONFIG.bothTeamsToScore;
+  const bothTeamsViability = clampProbability(Math.min(expectedScore.home, expectedScore.away) / 0.9);
+  const tempoViability = clampProbability((totalLambda - 1.65) / 0.75);
+  const empiricalPriorWeight = bttsConfig.empiricalPriorWeight * bothTeamsViability * tempoViability;
+  const empiricalPrior = clampProbability(bttsConfig.empiricalBaseRate);
+  const tempoLift = clamp((totalLambda - bttsConfig.tempoPivot) * bttsConfig.tempoWeight, -0.035, 0.065);
+  const structuralBttsYes = clampProbability(rawBttsYes * balanceMultiplier + tempoLift);
+  const bttsYes = clampProbability(
+    structuralBttsYes * (1 - empiricalPriorWeight) + empiricalPrior * empiricalPriorWeight
+  );
   const refinedBtts = refineBttsMarket(
     expectedScore.home,
     expectedScore.away,

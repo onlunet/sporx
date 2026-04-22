@@ -3,7 +3,11 @@ import { MatchStatus, Prisma, PublishDecisionStatus } from "@prisma/client";
 import { CalibrationService } from "../calibration/calibration.service";
 import { PrismaService } from "../../prisma/prisma.service";
 import { FeatureSnapshotService } from "../predictions/feature-snapshot.service";
-import { isLivePredictionHorizon, resolveFootballPredictionHorizon } from "../predictions/prediction-horizon.util";
+import {
+  FOOTBALL_POST_MATCH_HORIZON,
+  isLivePredictionHorizon,
+  resolveFootballPredictionHorizon
+} from "../predictions/prediction-horizon.util";
 import { ShadowEvaluationService } from "../predictions/shadow-evaluation.service";
 import { EnrichmentFlagsService } from "../predictions/enrichment-flags.service";
 import { LineupSnapshotService } from "../predictions/lineup-snapshot.service";
@@ -228,6 +232,7 @@ export class PredictionRunPublisherService {
       elapsedMinute: input.elapsedMinute,
       hasLineup: input.hasLineup
     });
+    const isPostMatchHorizon = horizon === FOOTBALL_POST_MATCH_HORIZON || input.matchStatus === MatchStatus.finished;
     const keepLastIfActive = isLivePredictionHorizon(horizon);
     const dedupKey = `match:${input.matchId}:market:${input.market}:line:${lineKey}:h:${horizon}`;
     const defaultCutoffAt =
@@ -719,7 +724,8 @@ export class PredictionRunPublisherService {
             });
 
             let publishedPredictionId: string | null = null;
-            if (selectionDecision.shouldPublishPublic) {
+            const shouldPublishPublic = selectionDecision.shouldPublishPublic && !isPostMatchHorizon;
+            if (shouldPublishPublic) {
               try {
                 const published = await tx.publishedPrediction.upsert({
                   where: {
@@ -783,7 +789,7 @@ export class PredictionRunPublisherService {
               edge,
               decisionStatus: selectionDecision.status,
               publishDecisionId: selectionDecision.decision.id,
-              shouldPublishPublic: selectionDecision.shouldPublishPublic,
+              shouldPublishPublic,
               selectionScore: selectionDecision.selectionScore,
               dedupKey,
               keepLastIfActive,

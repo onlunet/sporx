@@ -11,6 +11,7 @@ import {
 import { ExpandedPredictionItem, PredictionSourceType } from "./prediction-markets.util";
 import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
 import { PipelineRolloutService } from "./pipeline-rollout.service";
+import { FOOTBALL_POST_MATCH_HORIZON } from "./prediction-horizon.util";
 
 type ListPredictionsParams = {
   status?: string;
@@ -57,6 +58,7 @@ const FINAL_PUBLISH_DECISION_STATUSES: PublishDecisionStatus[] = [
   PublishDecisionStatus.APPROVED,
   PublishDecisionStatus.MANUALLY_FORCED
 ];
+const POST_MATCH_HORIZON_TOKENS = [FOOTBALL_POST_MATCH_HORIZON, FOOTBALL_POST_MATCH_HORIZON.toLowerCase()];
 
 const PREDICTION_TYPE_SET = new Set([
   "fullTimeResult",
@@ -1063,6 +1065,7 @@ export class PredictionsService {
     matchIds?: string[]
   ): Promise<PredictionRunFallbackRecord[]> {
     const baseWhere: Prisma.PredictionRunWhereInput = {
+      horizon: { notIn: POST_MATCH_HORIZON_TOKENS },
       match: {
         status: { in: effectiveStatuses },
         ...(sportCode ? { sport: { code: sportCode } } : {})
@@ -1106,7 +1109,7 @@ export class PredictionsService {
   private async fetchPredictionRunRowsByMatch(matchId: string): Promise<PredictionRunFallbackRecord[]> {
     const rows = await queryWithTimeout(
       this.prisma.predictionRun.findMany({
-        where: { matchId },
+        where: { matchId, horizon: { notIn: POST_MATCH_HORIZON_TOKENS } },
         orderBy: { createdAt: "desc" },
         include: PREDICTION_RUN_FALLBACK_INCLUDE,
         take: 120
@@ -1120,7 +1123,7 @@ export class PredictionsService {
   private async fetchPredictionRunHighConfidenceRows(): Promise<PredictionRunFallbackRecord[]> {
     const rows = await queryWithTimeout(
       this.prisma.predictionRun.findMany({
-        where: { confidence: { gte: 0.7 } },
+        where: { confidence: { gte: 0.7 }, horizon: { notIn: POST_MATCH_HORIZON_TOKENS } },
         orderBy: { createdAt: "desc" },
         include: PREDICTION_RUN_FALLBACK_INCLUDE,
         take: 120
@@ -1284,7 +1287,9 @@ export class PredictionsService {
       return 0;
     }
 
-    const eligibleRows = runRows.filter((row) => !this.isSyntheticPredictionRunRow(row));
+    const eligibleRows = runRows.filter(
+      (row) => !this.isSyntheticPredictionRunRow(row) && !POST_MATCH_HORIZON_TOKENS.includes(row.horizon)
+    );
     if (eligibleRows.length === 0) {
       return 0;
     }
@@ -1399,10 +1404,14 @@ export class PredictionsService {
     take: number,
     orderBy: Prisma.Enumerable<Prisma.PublishedPredictionOrderByWithRelationInput> = { publishedAt: "desc" }
   ): Promise<PublishedPredictionRecord[]> {
+    const publicWhere: Prisma.PublishedPredictionWhereInput = {
+      ...baseWhere,
+      horizon: { notIn: POST_MATCH_HORIZON_TOKENS }
+    };
     const query = (includeDecisionGate: boolean) =>
       queryWithTimeout(
         this.prisma.publishedPrediction.findMany({
-          where: this.buildPublishedWhere(baseWhere, includeDecisionGate),
+          where: this.buildPublishedWhere(publicWhere, includeDecisionGate),
           orderBy,
           include: PUBLISHED_PREDICTION_INCLUDE,
           take
@@ -1528,6 +1537,8 @@ export class PredictionsService {
     const line = parseLine(params?.line);
     const take = parseTake(params?.take, statuses !== undefined);
     const includeMarketAnalysis = params?.includeMarketAnalysis === true;
+    const allowLegacyFallbackForRequest =
+      this.allowLegacyPublicFallback && !requestedStatuses.includes(MatchStatus.finished);
     const statusKey = requestedStatuses.join("|");
     const typeKey = predictionType ?? "all";
     const sportKey = sportCode ?? "all";
@@ -1690,7 +1701,7 @@ export class PredictionsService {
       }
 
       normalizedRows = rows.map((row) => normalizePublishedRow(row));
-      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback) {
+      if (normalizedRows.length === 0 && allowLegacyFallbackForRequest) {
         const legacyRows = await this.fetchLegacyRows(queryStatuses, sportCode, take);
         if (legacyRows.length > 0 && !areLegacyRowsSyntheticOnly(legacyRows)) {
           this.logger.warn(
@@ -1716,7 +1727,7 @@ export class PredictionsService {
           }
         }
       }
-      if (normalizedRows.length === 0 && this.allowLegacyPublicFallback && this.allowSyntheticPublicFallback) {
+      if (normalizedRows.length === 0 && allowLegacyFallbackForRequest && this.allowSyntheticPublicFallback) {
         normalizedRows = this.buildSyntheticRowsFromMatches(relevantMatches, sportCode);
         if (normalizedRows.length > 0) {
           this.logger.warn(
@@ -1735,7 +1746,7 @@ export class PredictionsService {
           `Synthetic stale cache ignored for predictions list (status=${statusKey}, sport=${sportKey}, take=${take}).`
         );
       }
-      if (!this.allowLegacyPublicFallback) {
+      if (!allowLegacyFallbackForRequest) {
         return [];
       }
       const runRows = await this.fetchPredictionRunRows(queryStatuses, sportCode, take).catch(() => []);

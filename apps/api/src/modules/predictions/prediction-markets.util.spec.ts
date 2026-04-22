@@ -68,6 +68,18 @@ describe("expandPredictionMarkets market refinement", () => {
     expect(item?.marketRefinementDiagnostics?.probabilityAdjustment?.yesDelta).toBeLessThan(0);
   });
 
+  it("lets balanced medium-tempo matches select KG Var after empirical calibration", () => {
+    const item = expandPredictionMarkets(
+      buildRow({
+        expectedScore: { home: 1.16, away: 1.08 },
+        probabilities: { home: 0.39, draw: 0.29, away: 0.32 }
+      })
+    ).find((row) => row.marketKey === "both_teams_to_score");
+
+    expect(item).toBeDefined();
+    expect(item?.probabilities.yes).toBeGreaterThan(item?.probabilities.no ?? 1);
+  });
+
   it("penalizes correct-score confidence when entropy and volatility are high", () => {
     const item = expandPredictionMarkets(
       buildRow({
