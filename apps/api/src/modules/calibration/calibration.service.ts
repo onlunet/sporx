@@ -5,6 +5,10 @@ import { PrismaService } from "../../prisma/prisma.service";
 type CoverageInput = {
   hasOdds?: boolean;
   hasLineup?: boolean;
+  hasEvent?: boolean;
+  oddsCoverage?: number | null;
+  lineupCoverage?: number | null;
+  eventCoverage?: number | null;
   missingStatsRatio?: number | null;
 };
 
@@ -18,6 +22,7 @@ export type CalibratePredictionInput = {
   lookbackDays?: number;
   freshnessScore?: number | null;
   providerDisagreement?: number | null;
+  volatilityScore?: number | null;
   coverage?: CoverageInput;
 };
 
@@ -31,6 +36,15 @@ export type CalibratedPredictionOutput = {
     brierScore: number | null;
     logLoss: number | null;
     ece: number | null;
+  };
+  calibrationDiagnostics: {
+    calibrationSampleSize: number;
+    calibrationBucket: string;
+    calibrationMethod: string;
+    minSampleThreshold: number;
+    marketProfile: string;
+    correctionWeight: number;
+    conservativePenalty: number;
   };
   riskFlags: Array<{ code: string; severity: "low" | "medium" | "high"; message: string }>;
 };
@@ -48,6 +62,74 @@ export type CalibrationCurveInput = {
 type CalibrationSample = {
   predicted: number;
   actual: number;
+};
+
+type CalibrationMarketConfig = {
+  profile: string;
+  minSampleThreshold: number;
+  fullSampleTarget: number;
+  maxCorrectionWeight: number;
+  conservativePenalty: number;
+};
+
+const DEFAULT_MARKET_CONFIG: CalibrationMarketConfig = {
+  profile: "standard",
+  minSampleThreshold: 40,
+  fullSampleTarget: 220,
+  maxCorrectionWeight: 0.7,
+  conservativePenalty: 0
+};
+
+const MARKET_CONFIG: Record<string, CalibrationMarketConfig> = {
+  correct_score: {
+    profile: "sparse_exact_score",
+    minSampleThreshold: 180,
+    fullSampleTarget: 600,
+    maxCorrectionWeight: 0.32,
+    conservativePenalty: 0.11
+  },
+  correctscore: {
+    profile: "sparse_exact_score",
+    minSampleThreshold: 180,
+    fullSampleTarget: 600,
+    maxCorrectionWeight: 0.32,
+    conservativePenalty: 0.11
+  },
+  half_time_full_time: {
+    profile: "derived_combo",
+    minSampleThreshold: 120,
+    fullSampleTarget: 420,
+    maxCorrectionWeight: 0.42,
+    conservativePenalty: 0.06
+  },
+  half_time_fulltime: {
+    profile: "derived_combo",
+    minSampleThreshold: 120,
+    fullSampleTarget: 420,
+    maxCorrectionWeight: 0.42,
+    conservativePenalty: 0.06
+  },
+  htft: {
+    profile: "derived_combo",
+    minSampleThreshold: 120,
+    fullSampleTarget: 420,
+    maxCorrectionWeight: 0.42,
+    conservativePenalty: 0.06
+  },
+  first_half_result: {
+    profile: "early_window",
+    minSampleThreshold: 80,
+    fullSampleTarget: 300,
+    maxCorrectionWeight: 0.5,
+    conservativePenalty: 0.035
+  },
+  firsthalfresult: {
+    profile: "early_window",
+    minSampleThreshold: 80,
+    fullSampleTarget: 300,
+    maxCorrectionWeight: 0.5,
+    conservativePenalty: 0.035
+  }
 };
 
 @Injectable()
@@ -97,10 +179,26 @@ export class CalibrationService {
     return Number(line).toFixed(2);
   }
 
+  private normalizeMarket(market: string) {
+    return market.trim().toLowerCase();
+  }
+
+  private marketConfig(market: string) {
+    return MARKET_CONFIG[this.normalizeMarket(market)] ?? DEFAULT_MARKET_CONFIG;
+  }
+
+  private bucketForProbability(probability: number, bins = 10) {
+    const bucketCount = Math.max(4, Math.min(20, Math.floor(bins)));
+    const idx = Math.min(bucketCount - 1, Math.floor(this.clamp(probability, 0, 0.999999) * bucketCount));
+    const from = idx / bucketCount;
+    const to = (idx + 1) / bucketCount;
+    return `${from.toFixed(2)}-${to.toFixed(2)}`;
+  }
+
   private normalizeSelection(selection: string | null | undefined, market: string) {
     const token = (selection ?? "").trim().toLowerCase();
     if (token.length === 0) {
-      if (market.toLowerCase() === "match_outcome" || market.toLowerCase() === "match_result") {
+      if (this.normalizeMarket(market) === "match_outcome" || this.normalizeMarket(market) === "match_result") {
         return "home";
       }
       return "yes";
@@ -125,6 +223,10 @@ export class CalibrationService {
     }
     if (["n", "no"].includes(token)) {
       return "no";
+    }
+    const htft = token.replace(/[^hdax12]/g, "").toUpperCase();
+    if (["HH", "HD", "HA", "DH", "DD", "DA", "AH", "AD", "AA", "1X", "12", "X1", "X2", "21", "2X"].includes(htft)) {
+      return htft.replace(/1/g, "H").replace(/2/g, "A").replace(/X/g, "D").toLowerCase();
     }
     return token;
   }
@@ -160,7 +262,7 @@ export class CalibrationService {
       halfTimeAwayScore: number | null;
     }
   ) {
-    const marketToken = market.toLowerCase();
+    const marketToken = this.normalizeMarket(market);
     if (marketToken === "match_outcome" || marketToken === "match_result" || marketToken === "moneyline") {
       if (match.homeScore === null || match.awayScore === null) {
         return null;
@@ -197,6 +299,32 @@ export class CalibrationService {
             ? "away"
             : "draw";
       return outcome === normalizedSelection ? 1 : 0;
+    }
+
+    if (marketToken === "half_time_full_time" || marketToken === "half_time_fulltime" || marketToken === "htft") {
+      if (
+        match.homeScore === null ||
+        match.awayScore === null ||
+        match.halfTimeHomeScore === null ||
+        match.halfTimeAwayScore === null
+      ) {
+        return null;
+      }
+      const half =
+        match.halfTimeHomeScore > match.halfTimeAwayScore
+          ? "h"
+          : match.halfTimeHomeScore < match.halfTimeAwayScore
+            ? "a"
+            : "d";
+      const full = match.homeScore > match.awayScore ? "h" : match.homeScore < match.awayScore ? "a" : "d";
+      return `${half}${full}` === normalizedSelection ? 1 : 0;
+    }
+
+    if (marketToken === "correct_score" || marketToken === "correctscore") {
+      if (match.homeScore === null || match.awayScore === null) {
+        return null;
+      }
+      return `${match.homeScore}-${match.awayScore}` === normalizedSelection ? 1 : 0;
     }
 
     if (match.homeScore === null || match.awayScore === null) {
@@ -276,6 +404,7 @@ export class CalibrationService {
           awayScore: { not: null }
         }
       },
+      orderBy: { publishedAt: "asc" },
       include: {
         match: {
           select: {
@@ -331,6 +460,8 @@ export class CalibrationService {
 
   async calibratePrediction(input: CalibratePredictionInput): Promise<CalibratedPredictionOutput> {
     const normalizedRaw = this.clamp(input.rawProbability, 0.0001, 0.9999);
+    const marketConfig = this.marketConfig(input.market);
+    const calibrationBucket = this.bucketForProbability(normalizedRaw, 10);
     const samples = await this.loadSamples({
       market: input.market,
       horizon: input.horizon,
@@ -345,10 +476,16 @@ export class CalibrationService {
     const avgPredicted = sampleSize > 0 ? this.avg(samples.map((item) => item.predicted)) : normalizedRaw;
     const empiricalRate = sampleSize > 0 ? this.avg(samples.map((item) => item.actual)) : normalizedRaw;
     const correction = empiricalRate - avgPredicted;
-    const sampleWeight = this.clamp(sampleSize / 220, 0, 1);
-    const correctionWeight = 0.7 * sampleWeight;
+    const sampleWeight = this.clamp(sampleSize / marketConfig.fullSampleTarget, 0, 1);
+    const hasMinimumSample = sampleSize >= marketConfig.minSampleThreshold;
+    const correctionWeight = hasMinimumSample ? marketConfig.maxCorrectionWeight * sampleWeight : 0;
     const corrected = normalizedRaw + correction * correctionWeight;
-    const calibratedProbability = this.clamp(normalizedRaw * 0.2 + corrected * 0.8, 0.0001, 0.9999);
+    const conservativeBlend = hasMinimumSample ? 0.8 : 0.35;
+    const calibratedProbability = this.clamp(
+      normalizedRaw * (1 - conservativeBlend) + corrected * conservativeBlend,
+      0.0001,
+      0.9999
+    );
 
     const brierScore = this.computeBrier(samples);
     const logLoss = this.computeLogLoss(samples);
@@ -359,18 +496,32 @@ export class CalibrationService {
     const missingStatsRatio = this.clamp(input.coverage?.missingStatsRatio ?? 0.4, 0, 1);
     const hasOdds = input.coverage?.hasOdds ?? false;
     const hasLineup = input.coverage?.hasLineup ?? false;
+    const hasEvent = input.coverage?.hasEvent ?? false;
+    const oddsCoverage = this.clamp(input.coverage?.oddsCoverage ?? Number(hasOdds), 0, 1);
+    const lineupCoverage = this.clamp(input.coverage?.lineupCoverage ?? Number(hasLineup), 0, 1);
+    const eventCoverage = this.clamp(input.coverage?.eventCoverage ?? Number(hasEvent), 0, 1);
+    const volatilityScore = this.clamp(input.volatilityScore ?? 0, 0, 1);
 
     const edgeStrength = Math.abs(calibratedProbability - 0.5) * 2;
-    const coveragePenalty = (hasOdds ? 0 : 0.08) + (hasLineup ? 0 : 0.05) + missingStatsRatio * 0.18;
+    const coveragePenalty =
+      (1 - oddsCoverage) * 0.08 + (1 - lineupCoverage) * 0.05 + (1 - eventCoverage) * 0.03 + missingStatsRatio * 0.18;
     const disagreementPenalty = providerDisagreement * 0.24;
+    const volatilityPenalty = volatilityScore * 0.08;
+    const conservativePenalty = hasMinimumSample ? marketConfig.conservativePenalty : marketConfig.conservativePenalty + 0.04;
     const confidenceScore = this.clamp(
-      0.34 + edgeStrength * 0.44 + freshnessScore * 0.22 - coveragePenalty - disagreementPenalty,
+      0.34 +
+        edgeStrength * 0.44 +
+        freshnessScore * 0.22 -
+        coveragePenalty -
+        disagreementPenalty -
+        volatilityPenalty -
+        conservativePenalty,
       0.1,
       0.97
     );
 
     const riskFlags: Array<{ code: string; severity: "low" | "medium" | "high"; message: string }> = [];
-    if (sampleSize < 40) {
+    if (!hasMinimumSample) {
       riskFlags.push({
         code: "LOW_CALIBRATION_SAMPLE",
         severity: "medium",
@@ -391,6 +542,13 @@ export class CalibrationService {
         message: "Kadro doğrulaması eksik, analiz belirsizliği arttı."
       });
     }
+    if (!hasEvent) {
+      riskFlags.push({
+        code: "NO_EVENT_COVERAGE",
+        severity: "low",
+        message: "Mac ici olay kapsami sinirli, confidence skoru temkinli hesaplandi."
+      });
+    }
     if (missingStatsRatio > 0.45) {
       riskFlags.push({
         code: "HIGH_MISSING_STATS_RATIO",
@@ -405,6 +563,22 @@ export class CalibrationService {
         message: "Kaynaklar arası ayrışma yüksek, tahmin oynaklığı arttı."
       });
     }
+    if (volatilityScore > 0.18) {
+      riskFlags.push({
+        code: "MARKET_VOLATILITY",
+        severity: "medium",
+        message: "Piyasa oynakligi yuksek, confidence skoru dusuruldu."
+      });
+    }
+
+    const calibrationMethod =
+      sampleSize === 0
+        ? "raw_passthrough_no_published_samples"
+        : hasMinimumSample
+          ? marketConfig.profile === "standard"
+            ? "published_time_ordered_empirical"
+            : "market_conservative_time_ordered_empirical"
+          : "sample_limited_shrinkage";
 
     return {
       calibratedProbability: this.round(calibratedProbability, 6),
@@ -416,6 +590,15 @@ export class CalibrationService {
         brierScore,
         logLoss,
         ece
+      },
+      calibrationDiagnostics: {
+        calibrationSampleSize: sampleSize,
+        calibrationBucket,
+        calibrationMethod,
+        minSampleThreshold: marketConfig.minSampleThreshold,
+        marketProfile: marketConfig.profile,
+        correctionWeight: this.round(correctionWeight, 6),
+        conservativePenalty: this.round(conservativePenalty, 6)
       },
       riskFlags
     };

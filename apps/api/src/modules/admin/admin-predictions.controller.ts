@@ -24,6 +24,9 @@ type TrendDirection = "up" | "down" | "flat";
 type ParsedPrediction = {
   predictionType: PredictionTypeKey;
   line: number | null;
+  sourceType: "published";
+  modelVersion: string | null;
+  horizon: string | null;
   predictedLabel: string | null;
   probabilities: Record<string, number>;
   confidence: number;
@@ -74,6 +77,13 @@ export class AdminPredictionsController {
   private round(value: number, digits = 6) {
     const factor = 10 ** digits;
     return Math.round(value * factor) / factor;
+  }
+
+  private formatModelVersion(input?: { modelName: string; version: string } | null) {
+    if (!input) {
+      return null;
+    }
+    return `${input.modelName}@${input.version}`;
   }
 
   private avg(values: number[]) {
@@ -182,6 +192,9 @@ export class AdminPredictionsController {
   private parseRunPrediction(run: {
     market: string;
     line: number | null;
+    horizon?: string | null;
+    modelVersionId?: string | null;
+    modelVersion?: { modelName: string; version: string } | null;
     probability: number;
     confidence: number;
     explanationJson: Prisma.JsonValue;
@@ -231,6 +244,9 @@ export class AdminPredictionsController {
     return {
       predictionType: this.toPredictionType(run.market),
       line: run.line ?? null,
+      sourceType: "published",
+      modelVersion: this.formatModelVersion(run.modelVersion) ?? run.modelVersionId ?? null,
+      horizon: run.horizon ?? null,
       predictedLabel,
       probabilities,
       confidence: this.clamp(run.confidence, 0, 1),
@@ -369,6 +385,8 @@ export class AdminPredictionsController {
             matchId: true,
             market: true,
             line: true,
+            modelVersionId: true,
+            modelVersion: { select: { modelName: true, version: true } },
             horizon: true,
             confidence: true,
             riskFlagsJson: true,
@@ -408,6 +426,10 @@ export class AdminPredictionsController {
         return {
           id: row.predictionRun.id,
           matchId: row.predictionRun.matchId,
+          sourceType: "published" as const,
+          modelVersion:
+            this.formatModelVersion(row.predictionRun.modelVersion) ?? row.predictionRun.modelVersionId ?? null,
+          horizon: row.predictionRun.horizon,
           confidenceScore: this.round(this.clamp(row.predictionRun.confidence, 0, 1), 6),
           summary,
           riskFlags,
@@ -455,6 +477,9 @@ export class AdminPredictionsController {
           select: {
             market: true,
             line: true,
+            horizon: true,
+            modelVersionId: true,
+            modelVersion: { select: { modelName: true, version: true } },
             probability: true,
             confidence: true,
             explanationJson: true,
@@ -503,6 +528,10 @@ export class AdminPredictionsController {
         .map((item) => item.brierScore)
         .filter((item): item is number => item !== null);
       const confidenceValues = items.map((item) => item.confidence);
+      const horizons = Array.from(new Set(items.map((item) => item.horizon).filter((item): item is string => Boolean(item))));
+      const modelVersions = Array.from(
+        new Set(items.map((item) => item.modelVersion).filter((item): item is string => Boolean(item)))
+      );
       const accuracy =
         accuracyValues.length === 0 ? null : this.round(accuracyValues.filter(Boolean).length / accuracyValues.length);
       const avgConfidenceScore = this.round(this.avg(confidenceValues));
@@ -519,6 +548,9 @@ export class AdminPredictionsController {
       return {
         predictionType,
         line: lineKey === "na" ? null : Number(lineKey),
+        sourceType: "published",
+        horizon: horizons.length === 1 ? horizons[0] : horizons.length > 1 ? "mixed" : null,
+        modelVersion: modelVersions.length === 1 ? modelVersions[0] : modelVersions.length > 1 ? "mixed" : null,
         sampleSize,
         accuracy,
         logLoss,

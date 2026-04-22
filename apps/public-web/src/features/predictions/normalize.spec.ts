@@ -48,6 +48,30 @@ describe("prediction normalize", () => {
     expect(item?.commentary?.expertComment).toBe("Uzman");
   });
 
+  it("keeps prediction source attribution fields", () => {
+    const item = normalizePredictionItem({
+      matchId: "00000000-0000-0000-0000-000000000001",
+      predictionType: "fullTimeResult",
+      sourceType: "prediction_run_fallback",
+      modelVersion: "run-meta-v2",
+      horizon: "PRE6",
+      cutoffAt: "2026-04-18T10:45:00.000Z",
+      featureCoverage: { lineup: 0.7 },
+      confidenceDiagnostics: { adjustedConfidence: 0.58 },
+      calibrationDiagnostics: { calibrationSampleSize: 80, calibrationBucket: "0.50-0.60" },
+      marketRefinementDiagnostics: { method: "entropy_volatility_penalty" }
+    });
+
+    expect(item?.sourceType).toBe("prediction_run_fallback");
+    expect(item?.modelVersion).toBe("run-meta-v2");
+    expect(item?.horizon).toBe("PRE6");
+    expect(item?.cutoffAt).toBe("2026-04-18T10:45:00.000Z");
+    expect(item?.featureCoverage).toEqual({ lineup: 0.7 });
+    expect(item?.confidenceDiagnostics).toEqual({ adjustedConfidence: 0.58 });
+    expect(item?.calibrationDiagnostics).toEqual({ calibrationSampleSize: 80, calibrationBucket: "0.50-0.60" });
+    expect(item?.marketRefinementDiagnostics).toEqual({ method: "entropy_volatility_penalty" });
+  });
+
   it("filters predictions by type", () => {
     const rows: MatchPredictionItem[] = [sample("fullTimeResult"), sample("bothTeamsToScore")];
     const filtered = filterPredictionsByType(rows, "bothTeamsToScore");

@@ -4,6 +4,9 @@ export type PredictionTypeStatus = "strong" | "stable" | "watch" | "weak";
 export type PredictionTypePerformanceItem = {
   predictionType: string;
   line: number | null;
+  sourceType?: "published" | "legacy" | "prediction_run_fallback" | "synthetic";
+  modelVersion?: string | null;
+  horizon?: string | null;
   sampleSize: number;
   accuracy: number | null;
   logLoss: number | null;
@@ -226,6 +229,15 @@ function parseApiByTypeRow(raw: unknown): PredictionTypePerformanceItem | null {
   return {
     predictionType,
     line: asNumber(record.line),
+    sourceType:
+      record.sourceType === "published" ||
+      record.sourceType === "legacy" ||
+      record.sourceType === "prediction_run_fallback" ||
+      record.sourceType === "synthetic"
+        ? record.sourceType
+        : undefined,
+    modelVersion: typeof record.modelVersion === "string" ? record.modelVersion : null,
+    horizon: typeof record.horizon === "string" ? record.horizon : null,
     sampleSize,
     accuracy,
     brierScore,
@@ -275,6 +287,9 @@ export function buildPredictionTypeRows(params: {
   const row: PredictionTypePerformanceItem = {
     predictionType: DEFAULT_PREDICTION_TYPE,
     line: null,
+    sourceType: undefined,
+    modelVersion: null,
+    horizon: null,
     sampleSize,
     accuracy,
     brierScore,
@@ -305,6 +320,9 @@ export function buildLineRows(rows: PredictionTypePerformanceItem[]): Prediction
   return [1.5, 2.5, 3.5].map((line) => ({
     predictionType: "totalGoalsOverUnder",
     line,
+    sourceType: undefined,
+    modelVersion: null,
+    horizon: null,
     sampleSize: 0,
     accuracy: null,
     brierScore: null,
@@ -512,4 +530,3 @@ export function buildTrendPoints(rows: PerformanceTimeseriesRow[]): PredictionTy
       };
     });
 }
-

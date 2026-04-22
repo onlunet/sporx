@@ -100,9 +100,19 @@ export type PredictionRecommendation = {
   reason?: string | null;
 };
 
+export type PredictionSourceType = "published" | "legacy" | "prediction_run_fallback" | "synthetic";
+
 export type MatchPredictionItem = {
   matchId: string;
   modelVersionId?: string | null;
+  sourceType?: PredictionSourceType;
+  modelVersion?: string | null;
+  horizon?: string | null;
+  cutoffAt?: string | null;
+  featureCoverage?: unknown;
+  confidenceDiagnostics?: unknown;
+  calibrationDiagnostics?: unknown;
+  marketRefinementDiagnostics?: unknown;
   leagueId?: string;
   leagueName?: string;
   leagueCode?: string;

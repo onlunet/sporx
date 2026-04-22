@@ -119,6 +119,13 @@ function typeLabel(value: string) {
   return map[value] ?? value;
 }
 
+function sourceLabel(row: PredictionTypePerformanceItem) {
+  const source = row.sourceType ?? row.source ?? "derived";
+  const horizon = row.horizon ? ` / ${row.horizon}` : "";
+  const model = row.modelVersion ? ` / ${row.modelVersion}` : "";
+  return `${source}${horizon}${model}`;
+}
+
 function varianceLabel(value: string) {
   const map: Record<string, string> = {
     LOW_CONFIDENCE: "Dusuk Guven",
@@ -255,6 +262,7 @@ function PredictionTypePerformanceTable({ rows }: { rows: PredictionTypePerforma
         <thead className="bg-slate-950/70">
           <tr>
             <th className="px-3 py-2 text-left text-slate-300">Prediction Type</th>
+            <th className="px-3 py-2 text-left text-slate-300">Source</th>
             <th className="px-3 py-2 text-left text-slate-300">Sample</th>
             <th className="px-3 py-2 text-left text-slate-300">Accuracy</th>
             <th className="px-3 py-2 text-left text-slate-300">LogLoss</th>
@@ -272,6 +280,7 @@ function PredictionTypePerformanceTable({ rows }: { rows: PredictionTypePerforma
                 {typeLabel(row.predictionType)}
                 {row.line !== null ? <span className="ml-2 text-xs text-slate-400">line {row.line.toFixed(1)}</span> : null}
               </td>
+              <td className="px-3 py-2 text-xs text-slate-300">{sourceLabel(row)}</td>
               <td className="px-3 py-2 text-slate-100">{row.sampleSize}</td>
               <td className="px-3 py-2 text-slate-100">{formatMetric(row.accuracy)}</td>
               <td className="px-3 py-2 text-slate-100">{formatMetric(row.logLoss)}</td>

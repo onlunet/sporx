@@ -94,6 +94,71 @@ describe("AbstainPolicyService", () => {
     expect(reasons.some((item) => item.code === "MISSING_LINEUP_REQUIRED")).toBe(true);
   });
 
+  it("tightens thresholds for low coverage and weak calibration samples", () => {
+    const reasons = service.evaluate({
+      candidate: {
+        ...baseCandidate,
+        confidence: 0.59,
+        lineupCoverage: 0.2,
+        coverageFlags: {
+          ...baseCandidate.coverageFlags,
+          odds_coverage: 0.22,
+          lineup_coverage: 0.2,
+          calibration_sample_size: 18,
+          calibration_method: "sample_limited_shrinkage"
+        }
+      },
+      selectionScore: 0.59,
+      profile: balancedProfile
+    });
+
+    expect(reasons.map((item) => item.code)).toEqual(
+      expect.arrayContaining(["LOW_LINEUP_COVERAGE", "LOW_ODDS_COVERAGE", "WEAK_CALIBRATION_SAMPLE"])
+    );
+    expect(reasons.find((item) => item.code === "LOW_CONFIDENCE")?.details).toEqual(
+      expect.objectContaining({
+        effectiveThreshold: expect.any(Number),
+        signal: 0.59,
+        marketRiskProfile: "standard"
+      })
+    );
+  });
+
+  it("uses more conservative thresholds for derived high-risk markets", () => {
+    const reasons = service.evaluate({
+      candidate: {
+        ...baseCandidate,
+        market: "correct_score",
+        confidence: 0.58,
+        providerDisagreement: 0.22,
+        coverageFlags: {
+          ...baseCandidate.coverageFlags,
+          missing_stats_ratio: 0.5,
+          calibration_sample_size: 55,
+          calibration_method: "sample_limited_shrinkage"
+        }
+      },
+      selectionScore: 0.59,
+      profile: balancedProfile
+    });
+
+    expect(reasons.map((item) => item.code)).toEqual(
+      expect.arrayContaining([
+        "LOW_CONFIDENCE",
+        "HIGH_PROVIDER_DISAGREEMENT",
+        "LOW_HISTORICAL_SUPPORT",
+        "WEAK_CALIBRATION_SAMPLE"
+      ])
+    );
+    expect(reasons.find((item) => item.code === "WEAK_CALIBRATION_SAMPLE")?.details).toEqual(
+      expect.objectContaining({
+        effectiveThreshold: 80,
+        signal: 55,
+        marketRiskProfile: "conservative_derived"
+      })
+    );
+  });
+
   it("aggressive profile publishes more than conservative for same candidate set", () => {
     const candidates = [
       { ...baseCandidate, confidence: 0.58, volatilityScore: 0.24, providerDisagreement: 0.18 },

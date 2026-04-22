@@ -144,6 +144,11 @@ export class PublishDecisionService {
       selectionScore: scoring.score,
       profile: input.profileConfig
     });
+    const policyDiagnostics = this.abstainPolicyService.diagnostics({
+      candidate: candidateSnapshot,
+      selectionScore: scoring.score,
+      profile: input.profileConfig
+    });
 
     const manualOverride = await this.selectionConfigService.resolveManualOverride({
       matchId: input.candidate.matchId,
@@ -246,7 +251,8 @@ export class PublishDecisionService {
                 reason: manualOverride.reason
               }
             : null,
-          shadowPassthrough: input.settings.shadowMode
+          shadowPassthrough: input.settings.shadowMode,
+          publishPolicyDiagnostics: policyDiagnostics
         } as Prisma.InputJsonValue,
         isPublicPublished: shouldPublishPublic,
         publishedAt: shouldPublishPublic ? new Date() : null
@@ -286,7 +292,8 @@ export class PublishDecisionService {
                 reason: manualOverride.reason
               }
             : null,
-          shadowPassthrough: input.settings.shadowMode
+          shadowPassthrough: input.settings.shadowMode,
+          publishPolicyDiagnostics: policyDiagnostics
         } as Prisma.InputJsonValue,
         isPublicPublished: shouldPublishPublic,
         publishedAt: shouldPublishPublic ? new Date() : null
@@ -360,6 +367,7 @@ export class PublishDecisionService {
         decisionMetrics: {
           selectionScore: scoring.score,
           scoreBreakdown: scoring.breakdown,
+          publishPolicyDiagnostics: policyDiagnostics,
           reasons,
           shouldPublishPublic
         } as Prisma.InputJsonValue

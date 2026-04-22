@@ -4,6 +4,7 @@ import { normalizePublicMatchStatus } from "../matches/public-match-status.util"
 type UnknownRecord = Record<string, unknown>;
 
 type Severity = "low" | "medium" | "high" | "critical" | "unknown";
+export type PredictionSourceType = "published" | "legacy" | "prediction_run_fallback" | "synthetic";
 
 export type ApiRiskFlag = {
   code: string;
@@ -11,9 +12,30 @@ export type ApiRiskFlag = {
   message: string;
 };
 
+export type MarketRefinementDiagnostics = {
+  version: "market_refinement_v1";
+  applied: boolean;
+  marketKey: string;
+  marketFamily: string;
+  method: string;
+  rawConfidence: number;
+  adjustedConfidence: number;
+  probabilityAdjustment?: Record<string, number>;
+  signals: Record<string, number | string | boolean | null>;
+  weights: Record<string, number>;
+};
+
 export type ExpandedPredictionItem = {
   matchId: string;
   modelVersionId?: string | null;
+  sourceType?: PredictionSourceType;
+  modelVersion?: string | null;
+  horizon?: string | null;
+  cutoffAt?: string | null;
+  featureCoverage?: unknown;
+  confidenceDiagnostics?: unknown;
+  calibrationDiagnostics?: unknown;
+  marketRefinementDiagnostics?: MarketRefinementDiagnostics;
   leagueId?: string;
   leagueName?: string;
   leagueCode?: string;
@@ -67,6 +89,13 @@ export type ExpandedPredictionItem = {
 export type PredictionRowInput = {
   matchId: string;
   modelVersionId?: string | null;
+  sourceType?: PredictionSourceType;
+  modelVersion?: string | null;
+  horizon?: string | null;
+  cutoffAt?: Date | string | null;
+  featureCoverage?: unknown;
+  confidenceDiagnostics?: unknown;
+  calibrationDiagnostics?: unknown;
   probabilities: unknown;
   calibratedProbabilities: unknown;
   rawProbabilities: unknown;
@@ -124,9 +153,60 @@ function clampProbability(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
+function clamp(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
 function round4(value: number) {
   return Number(value.toFixed(4));
 }
+
+function envNumber(key: string, fallback: number) {
+  const parsed = Number(process.env[key]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function envBool(key: string, fallback: boolean) {
+  const raw = process.env[key];
+  if (raw === undefined) {
+    return fallback;
+  }
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
+const MARKET_REFINEMENT_CONFIG = {
+  enabled: envBool("FOOTBALL_MARKET_REFINEMENT_ENABLED", true),
+  correctScore: {
+    entropyPenaltyWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_CORRECT_SCORE_ENTROPY_WEIGHT", 0.045),
+    volatilityPenaltyWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_CORRECT_SCORE_VOLATILITY_WEIGHT", 0.025),
+    maxPenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_CORRECT_SCORE_MAX_PENALTY", 0.07)
+  },
+  halfTimeFullTime: {
+    instabilityPenaltyWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_HTFT_INSTABILITY_WEIGHT", 0.055),
+    maxPenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_HTFT_MAX_PENALTY", 0.065)
+  },
+  bothTeamsToScore: {
+    symmetryWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_SYMMETRY_WEIGHT", 0.035),
+    cleanSheetWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_CLEAN_SHEET_WEIGHT", 0.05),
+    maxProbabilityDelta: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_MAX_DELTA", 0.055),
+    maxConfidencePenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_BTTS_MAX_CONFIDENCE_PENALTY", 0.04)
+  },
+  overUnder: {
+    tempoWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_OU_TEMPO_WEIGHT", 0.035),
+    oddsAgreementWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_OU_ODDS_AGREEMENT_WEIGHT", 0.025),
+    maxProbabilityDelta: envNumber("FOOTBALL_MARKET_REFINEMENT_OU_MAX_DELTA", 0.05),
+    confidenceAgreementWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_OU_CONFIDENCE_AGREEMENT_WEIGHT", 0.045)
+  },
+  halfMarkets: {
+    paceWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_HALF_PACE_WEIGHT", 0.035),
+    firstHalfDrawWeight: envNumber("FOOTBALL_MARKET_REFINEMENT_FIRST_HALF_DRAW_WEIGHT", 0.025),
+    maxProbabilityDelta: envNumber("FOOTBALL_MARKET_REFINEMENT_HALF_MAX_DELTA", 0.045),
+    maxConfidencePenalty: envNumber("FOOTBALL_MARKET_REFINEMENT_HALF_MAX_CONFIDENCE_PENALTY", 0.04)
+  }
+};
 
 function normalizeOutcomeProbabilities(raw: unknown) {
   const record = asRecord(raw);
@@ -349,6 +429,422 @@ function createHalfTimeFullTimeProbabilities(
   return Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, round4(value / sum)]));
 }
 
+function normalizedEntropy(values: number[]) {
+  const safeValues = values.map(clampProbability);
+  const sum = safeValues.reduce((acc, item) => acc + item, 0);
+  if (safeValues.length <= 1 || sum <= 0) {
+    return 0;
+  }
+  const entropy = safeValues.reduce((acc, item) => {
+    const probability = item / sum;
+    return probability > 0 ? acc - probability * Math.log(probability) : acc;
+  }, 0);
+  return clampProbability(entropy / Math.log(safeValues.length));
+}
+
+function topProbabilityMargin(values: number[]) {
+  const sorted = values.map(clampProbability).sort((left, right) => right - left);
+  return clampProbability((sorted[0] ?? 0) - (sorted[1] ?? 0));
+}
+
+function topKey(probabilities: Record<string, number>) {
+  return Object.entries(probabilities).sort((left, right) => right[1] - left[1])[0]?.[0] ?? null;
+}
+
+function normalizeProbabilityRecord(probabilities: Record<string, number>) {
+  const safeEntries = Object.entries(probabilities).map(([key, value]) => [key, clampProbability(value)] as const);
+  const sum = safeEntries.reduce((acc, [, value]) => acc + value, 0);
+  if (sum <= 0) {
+    return probabilities;
+  }
+  return Object.fromEntries(safeEntries.map(([key, value]) => [key, round4(value / sum)]));
+}
+
+function agreementLevelToScore(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === "high" || normalized === "strong") {
+    return 0.8;
+  }
+  if (normalized === "medium" || normalized === "moderate") {
+    return 0.55;
+  }
+  if (normalized === "low" || normalized === "weak") {
+    return 0.3;
+  }
+  return undefined;
+}
+
+function extractNestedNumber(records: Array<UnknownRecord | null>, keys: string[]) {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const key of keys) {
+      const value = asNumber(record[key]);
+      if (value !== undefined) {
+        return clampProbability(value);
+      }
+    }
+  }
+  return undefined;
+}
+
+function extractVolatilityScore(row: PredictionRowInput, riskFlags: ApiRiskFlag[], totalLambda: number) {
+  const expectedScoreRecord = asRecord(row.expectedScore);
+  const confidenceRecord = asRecord(row.confidenceDiagnostics);
+  const calibrationRecord = asRecord(row.calibrationDiagnostics);
+  const explicit = extractNestedNumber([expectedScoreRecord, confidenceRecord, calibrationRecord], [
+    "volatility",
+    "volatilityScore",
+    "lambdaVolatility",
+    "marketVolatility"
+  ]);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const riskFlagVolatility = riskFlags.some((flag) =>
+    flag.code.includes("VOLATILITY") || flag.code.includes("VARIANCE") || flag.code.includes("UNSTABLE")
+  )
+    ? 0.72
+    : 0;
+  const goalEnvironmentVolatility = clampProbability((totalLambda - 1.8) / 2.6);
+  return Math.max(riskFlagVolatility, goalEnvironmentVolatility);
+}
+
+function extractOddsAgreement(row: PredictionRowInput) {
+  const expectedScoreRecord = asRecord(row.expectedScore);
+  const confidenceRecord = asRecord(row.confidenceDiagnostics);
+  const calibrationRecord = asRecord(row.calibrationDiagnostics);
+  const explicit = extractNestedNumber([expectedScoreRecord, confidenceRecord, calibrationRecord], [
+    "marketCoverageScore",
+    "marketAgreementScore",
+    "oddsAgreement",
+    "providerAgreement",
+    "consensusScore"
+  ]);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return agreementLevelToScore(expectedScoreRecord?.marketAgreementLevel) ?? 0.5;
+}
+
+function buildMarketRefinementDiagnostics(params: {
+  marketKey: string;
+  marketFamily: string;
+  method: string;
+  rawConfidence: number;
+  adjustedConfidence: number;
+  probabilityAdjustment?: Record<string, number>;
+  signals: Record<string, number | string | boolean | null>;
+  weights: Record<string, number>;
+}): MarketRefinementDiagnostics {
+  return {
+    version: "market_refinement_v1",
+    applied: MARKET_REFINEMENT_CONFIG.enabled,
+    marketKey: params.marketKey,
+    marketFamily: params.marketFamily,
+    method: params.method,
+    rawConfidence: round4(params.rawConfidence),
+    adjustedConfidence: round4(params.adjustedConfidence),
+    probabilityAdjustment: params.probabilityAdjustment,
+    signals: params.signals,
+    weights: params.weights
+  };
+}
+
+function disabledRefinement(marketKey: string, marketFamily: string, rawConfidence: number): MarketRefinementDiagnostics {
+  return buildMarketRefinementDiagnostics({
+    marketKey,
+    marketFamily,
+    method: "disabled",
+    rawConfidence,
+    adjustedConfidence: rawConfidence,
+    signals: {},
+    weights: {}
+  });
+}
+
+function refineCorrectScoreMarket(
+  correctScore: Array<{ home: number; away: number; probability: number }>,
+  totalLambda: number,
+  volatilityScore: number,
+  rawConfidence: number
+) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return { confidenceScore: rawConfidence, diagnostics: disabledRefinement("correct_score", "correct_score", rawConfidence) };
+  }
+  const probabilities = correctScore.map((item) => item.probability);
+  const entropy = normalizedEntropy(probabilities);
+  const margin = topProbabilityMargin(probabilities);
+  const lambdaVolatility = clampProbability((totalLambda - 1.8) / 2.6);
+  const volatility = Math.max(volatilityScore, lambdaVolatility, 1 - margin);
+  const config = MARKET_REFINEMENT_CONFIG.correctScore;
+  const penalty = Math.min(
+    config.maxPenalty,
+    entropy * config.entropyPenaltyWeight + volatility * config.volatilityPenaltyWeight
+  );
+  const adjustedConfidence = round4(Math.max(0.3, rawConfidence - penalty));
+  return {
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey: "correct_score",
+      marketFamily: "correct_score",
+      method: "entropy_volatility_penalty",
+      rawConfidence,
+      adjustedConfidence,
+      signals: {
+        entropy: round4(entropy),
+        volatility: round4(volatility),
+        topProbabilityMargin: round4(margin),
+        totalLambda: round4(totalLambda)
+      },
+      weights: {
+        entropyPenaltyWeight: config.entropyPenaltyWeight,
+        volatilityPenaltyWeight: config.volatilityPenaltyWeight,
+        maxPenalty: config.maxPenalty
+      }
+    })
+  };
+}
+
+function refineHalfTimeFullTimeMarket(
+  firstHalf: { home: number; draw: number; away: number },
+  fullTime: { home: number; draw: number; away: number },
+  rawConfidence: number
+) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return { confidenceScore: rawConfidence, diagnostics: disabledRefinement("half_time_full_time", "half_time_full_time", rawConfidence) };
+  }
+  const firstHalfEntropy = normalizedEntropy([firstHalf.home, firstHalf.draw, firstHalf.away]);
+  const fullTimeEntropy = normalizedEntropy([fullTime.home, fullTime.draw, fullTime.away]);
+  const leaderMismatch = topKey(firstHalf) !== topKey(fullTime) ? 1 : 0;
+  const instability = clampProbability(firstHalfEntropy * 0.45 + fullTimeEntropy * 0.35 + leaderMismatch * 0.2);
+  const config = MARKET_REFINEMENT_CONFIG.halfTimeFullTime;
+  const penalty = Math.min(config.maxPenalty, instability * config.instabilityPenaltyWeight);
+  const adjustedConfidence = round4(Math.max(0.3, rawConfidence - penalty));
+  return {
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey: "half_time_full_time",
+      marketFamily: "half_time_full_time",
+      method: "instability_penalty",
+      rawConfidence,
+      adjustedConfidence,
+      signals: {
+        firstHalfEntropy: round4(firstHalfEntropy),
+        fullTimeEntropy: round4(fullTimeEntropy),
+        leaderMismatch: leaderMismatch === 1,
+        instability: round4(instability)
+      },
+      weights: {
+        instabilityPenaltyWeight: config.instabilityPenaltyWeight,
+        maxPenalty: config.maxPenalty
+      }
+    })
+  };
+}
+
+function refineBttsMarket(homeLambda: number, awayLambda: number, rawYes: number, rawConfidence: number) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return {
+      yes: rawYes,
+      no: clampProbability(1 - rawYes),
+      confidenceScore: rawConfidence,
+      diagnostics: disabledRefinement("both_teams_to_score", "both_teams_to_score", rawConfidence)
+    };
+  }
+  const totalLambda = homeLambda + awayLambda;
+  const symmetry = clampProbability(1 - Math.abs(homeLambda - awayLambda) / Math.max(totalLambda, 1));
+  const cleanSheetSensitivity = clampProbability((Math.exp(-homeLambda) + Math.exp(-awayLambda)) / 2);
+  const ambiguity = 1 - Math.abs(rawYes - 0.5) * 2;
+  const config = MARKET_REFINEMENT_CONFIG.bothTeamsToScore;
+  const rawDelta =
+    (symmetry - 0.5) * config.symmetryWeight - cleanSheetSensitivity * config.cleanSheetWeight;
+  const delta = clamp(rawDelta, -config.maxProbabilityDelta, config.maxProbabilityDelta);
+  const yes = clampProbability(rawYes + delta);
+  const probabilities = normalizeProbabilityRecord({ yes, no: 1 - yes });
+  const confidencePenalty = Math.min(
+    config.maxConfidencePenalty,
+    cleanSheetSensitivity * 0.025 + ambiguity * 0.015
+  );
+  const adjustedConfidence = round4(Math.max(0.35, rawConfidence - confidencePenalty));
+  return {
+    yes: probabilities.yes,
+    no: probabilities.no,
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey: "both_teams_to_score",
+      marketFamily: "both_teams_to_score",
+      method: "symmetry_clean_sheet_adjustment",
+      rawConfidence,
+      adjustedConfidence,
+      probabilityAdjustment: { yesDelta: round4(probabilities.yes - rawYes) },
+      signals: {
+        symmetry: round4(symmetry),
+        cleanSheetSensitivity: round4(cleanSheetSensitivity),
+        ambiguity: round4(ambiguity)
+      },
+      weights: {
+        symmetryWeight: config.symmetryWeight,
+        cleanSheetWeight: config.cleanSheetWeight,
+        maxProbabilityDelta: config.maxProbabilityDelta,
+        maxConfidencePenalty: config.maxConfidencePenalty
+      }
+    })
+  };
+}
+
+function refineOverUnderMarket(
+  marketKey: string,
+  line: number,
+  totalLambda: number,
+  rawOver: number,
+  rawConfidence: number,
+  oddsAgreement: number
+) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return {
+      over: rawOver,
+      under: clampProbability(1 - rawOver),
+      confidenceScore: rawConfidence,
+      diagnostics: disabledRefinement(marketKey, "total_goals_over_under", rawConfidence)
+    };
+  }
+  const tempoScore = clampProbability((totalLambda - 1.8) / 2);
+  const lineDistance = clampProbability(Math.abs(totalLambda - line) / 1.5);
+  const config = MARKET_REFINEMENT_CONFIG.overUnder;
+  const rawDelta =
+    (tempoScore - 0.5) * config.tempoWeight + (oddsAgreement - 0.5) * config.oddsAgreementWeight;
+  const delta = clamp(rawDelta, -config.maxProbabilityDelta, config.maxProbabilityDelta);
+  const probabilities = normalizeProbabilityRecord({ over: rawOver + delta, under: 1 - rawOver - delta });
+  const confidenceAdjustment = (oddsAgreement - 0.5) * config.confidenceAgreementWeight + lineDistance * 0.018;
+  const adjustedConfidence = round4(Math.max(0.35, clampProbability(rawConfidence + confidenceAdjustment)));
+  return {
+    over: probabilities.over,
+    under: probabilities.under,
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey,
+      marketFamily: "total_goals_over_under",
+      method: "tempo_odds_agreement_adjustment",
+      rawConfidence,
+      adjustedConfidence,
+      probabilityAdjustment: { overDelta: round4(probabilities.over - rawOver) },
+      signals: {
+        tempoScore: round4(tempoScore),
+        oddsAgreement: round4(oddsAgreement),
+        lineDistance: round4(lineDistance),
+        totalLambda: round4(totalLambda),
+        line
+      },
+      weights: {
+        tempoWeight: config.tempoWeight,
+        oddsAgreementWeight: config.oddsAgreementWeight,
+        maxProbabilityDelta: config.maxProbabilityDelta,
+        confidenceAgreementWeight: config.confidenceAgreementWeight
+      }
+    })
+  };
+}
+
+function refineFirstHalfResultMarket(
+  probabilities: { home: number; draw: number; away: number },
+  firstHalfLambdaTotal: number,
+  rawConfidence: number
+) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return {
+      probabilities,
+      confidenceScore: rawConfidence,
+      diagnostics: disabledRefinement("first_half_outcome", "first_half", rawConfidence)
+    };
+  }
+  const paceScore = clampProbability(firstHalfLambdaTotal / 1.2);
+  const entropy = normalizedEntropy([probabilities.home, probabilities.draw, probabilities.away]);
+  const config = MARKET_REFINEMENT_CONFIG.halfMarkets;
+  const drawDelta = clamp((0.5 - paceScore) * config.firstHalfDrawWeight, -config.maxProbabilityDelta, config.maxProbabilityDelta);
+  const nonDrawShare = Math.max(0.0001, probabilities.home + probabilities.away);
+  const adjusted = normalizeProbabilityRecord({
+    home: probabilities.home - drawDelta * (probabilities.home / nonDrawShare),
+    draw: probabilities.draw + drawDelta,
+    away: probabilities.away - drawDelta * (probabilities.away / nonDrawShare)
+  }) as { home: number; draw: number; away: number };
+  const confidencePenalty = Math.min(config.maxConfidencePenalty, entropy * 0.018 + Math.abs(0.5 - paceScore) * 0.012);
+  const adjustedConfidence = round4(Math.max(0.32, rawConfidence - confidencePenalty));
+  return {
+    probabilities: adjusted,
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey: "first_half_outcome",
+      marketFamily: "first_half",
+      method: "half_specific_pace_adjustment",
+      rawConfidence,
+      adjustedConfidence,
+      probabilityAdjustment: { drawDelta: round4(adjusted.draw - probabilities.draw) },
+      signals: {
+        paceScore: round4(paceScore),
+        entropy: round4(entropy),
+        firstHalfLambdaTotal: round4(firstHalfLambdaTotal)
+      },
+      weights: {
+        firstHalfDrawWeight: config.firstHalfDrawWeight,
+        maxProbabilityDelta: config.maxProbabilityDelta,
+        maxConfidencePenalty: config.maxConfidencePenalty
+      }
+    })
+  };
+}
+
+function refineHalfGoalsMarket(
+  marketKey: string,
+  marketFamily: "first_half" | "second_half",
+  halfLambdaTotal: number,
+  baselineLambda: number,
+  rawOver: number,
+  rawConfidence: number
+) {
+  if (!MARKET_REFINEMENT_CONFIG.enabled) {
+    return {
+      over: rawOver,
+      under: clampProbability(1 - rawOver),
+      confidenceScore: rawConfidence,
+      diagnostics: disabledRefinement(marketKey, marketFamily, rawConfidence)
+    };
+  }
+  const paceScore = clampProbability(halfLambdaTotal / baselineLambda);
+  const config = MARKET_REFINEMENT_CONFIG.halfMarkets;
+  const delta = clamp((paceScore - 0.5) * config.paceWeight, -config.maxProbabilityDelta, config.maxProbabilityDelta);
+  const probabilities = normalizeProbabilityRecord({ over: rawOver + delta, under: 1 - rawOver - delta });
+  const confidencePenalty = Math.min(config.maxConfidencePenalty, Math.abs(0.5 - paceScore) * 0.014);
+  const adjustedConfidence = round4(Math.max(0.33, rawConfidence - confidencePenalty));
+  return {
+    over: probabilities.over,
+    under: probabilities.under,
+    confidenceScore: adjustedConfidence,
+    diagnostics: buildMarketRefinementDiagnostics({
+      marketKey,
+      marketFamily,
+      method: "half_specific_pace_adjustment",
+      rawConfidence,
+      adjustedConfidence,
+      probabilityAdjustment: { overDelta: round4(probabilities.over - rawOver) },
+      signals: {
+        paceScore: round4(paceScore),
+        halfLambdaTotal: round4(halfLambdaTotal),
+        baselineLambda
+      },
+      weights: {
+        paceWeight: config.paceWeight,
+        maxProbabilityDelta: config.maxProbabilityDelta,
+        maxConfidencePenalty: config.maxConfidencePenalty
+      }
+    })
+  };
+}
+
 export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredictionItem[] {
   const baseOutcome =
     normalizeOutcomeProbabilities(row.probabilities) ??
@@ -366,15 +862,22 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
   const secondHalfLambdaHome = Math.max(0.1, expectedScore.home - firstHalfLambdaHome);
   const secondHalfLambdaAway = Math.max(0.1, expectedScore.away - firstHalfLambdaAway);
   const firstHalfOutcome = outcomeFromLambdas(firstHalfLambdaHome, firstHalfLambdaAway);
+  const riskFlags = normalizeRiskFlags(row.riskFlags);
+  const confidence = clampProbability(row.confidenceScore);
+  const volatilityScore = extractVolatilityScore(row, riskFlags, totalLambda);
+  const oddsAgreement = extractOddsAgreement(row);
   const rawBttsYes = clampProbability((1 - Math.exp(-expectedScore.home)) * (1 - Math.exp(-expectedScore.away)));
   const over25Proxy = totalGoalsOverProbability(totalLambda, 2.5);
   const outcomeImbalance = Math.abs(baseOutcome.home - baseOutcome.away);
   const balanceMultiplier = Math.max(0.75, 1 - Math.min(0.25, outcomeImbalance * 0.45));
   const totalGoalsAdjustment = (over25Proxy - 0.5) * 0.28;
   const bttsYes = clampProbability(rawBttsYes * balanceMultiplier + totalGoalsAdjustment);
-  const bttsNo = clampProbability(1 - bttsYes);
-  const riskFlags = normalizeRiskFlags(row.riskFlags);
-  const confidence = clampProbability(row.confidenceScore);
+  const refinedBtts = refineBttsMarket(
+    expectedScore.home,
+    expectedScore.away,
+    bttsYes,
+    round4(Math.max(0.35, confidence - 0.02))
+  );
 
   const homeTeam = row.match?.homeTeam?.name ?? "Ev Sahibi";
   const awayTeam = row.match?.awayTeam?.name ?? "Deplasman";
@@ -411,6 +914,18 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
   const baseItem: Omit<ExpandedPredictionItem, "predictionType" | "marketKey" | "probabilities"> = {
     matchId: row.matchId,
     modelVersionId: row.modelVersionId ?? null,
+    sourceType: row.sourceType,
+    modelVersion: row.modelVersion ?? row.modelVersionId ?? null,
+    horizon: row.horizon ?? null,
+    cutoffAt:
+      row.cutoffAt instanceof Date
+        ? row.cutoffAt.toISOString()
+        : typeof row.cutoffAt === "string"
+          ? row.cutoffAt
+          : null,
+    featureCoverage: row.featureCoverage ?? null,
+    confidenceDiagnostics: row.confidenceDiagnostics ?? null,
+    calibrationDiagnostics: row.calibrationDiagnostics ?? null,
     expectedScore: normalizePair(expectedScore.home, expectedScore.away),
     commentary: sharedCommentary,
     supportingSignals,
@@ -437,7 +952,14 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
   const lines = [1.5, 2.5, 3.5];
   const overUnderItems: ExpandedPredictionItem[] = lines.map((line) => {
     const over = totalGoalsOverProbability(totalLambda, line);
-    const under = clampProbability(1 - over);
+    const refined = refineOverUnderMarket(
+      `over_under_${line}`,
+      line,
+      totalLambda,
+      over,
+      round4(Math.max(0.35, confidence - 0.03)),
+      oddsAgreement
+    );
     return {
       ...baseItem,
       predictionType: "totalGoalsOverUnder",
@@ -445,10 +967,11 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       selectionLabel: `MS ${line.toFixed(1)} Alt/Üst`,
       line,
       probabilities: {
-        over: round4(over),
-        under: round4(under)
+        over: refined.over,
+        under: refined.under
       },
-      confidenceScore: round4(Math.max(0.35, confidence - 0.03))
+      confidenceScore: refined.confidenceScore,
+      marketRefinementDiagnostics: refined.diagnostics
     };
   });
 
@@ -457,6 +980,38 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
 
   const matrix = createHalfTimeFullTimeProbabilities(firstHalfOutcome, baseOutcome);
   const correctScore = correctScoreDistribution(expectedScore.home, expectedScore.away);
+  const refinedFirstHalfResult = refineFirstHalfResultMarket(
+    firstHalfOutcome,
+    firstHalfLambdaHome + firstHalfLambdaAway,
+    round4(Math.max(0.32, confidence - 0.05))
+  );
+  const refinedHalfTimeFullTime = refineHalfTimeFullTimeMarket(
+    refinedFirstHalfResult.probabilities,
+    baseOutcome,
+    round4(Math.max(0.3, confidence - 0.08))
+  );
+  const refinedCorrectScore = refineCorrectScoreMarket(
+    correctScore,
+    totalLambda,
+    volatilityScore,
+    round4(Math.max(0.3, confidence - 0.12))
+  );
+  const refinedFirstHalfGoals = refineHalfGoalsMarket(
+    "first_half_goals",
+    "first_half",
+    firstHalfLambdaHome + firstHalfLambdaAway,
+    1.1,
+    firstHalfOver,
+    round4(Math.max(0.33, confidence - 0.06))
+  );
+  const refinedSecondHalfGoals = refineHalfGoalsMarket(
+    "second_half_goals",
+    "second_half",
+    secondHalfLambdaHome + secondHalfLambdaAway,
+    1.3,
+    secondHalfOver,
+    round4(Math.max(0.33, confidence - 0.06))
+  );
   const goalRangeProbabilities = {
     low: round4(1 - totalGoalsOverProbability(totalLambda, 1.5)),
     medium: round4(totalGoalsOverProbability(totalLambda, 1.5) - totalGoalsOverProbability(totalLambda, 3.5)),
@@ -474,27 +1029,30 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       ...baseItem,
       predictionType: "firstHalfResult",
       marketKey: "first_half_outcome",
-      probabilities: firstHalfOutcome,
-      confidenceScore: round4(Math.max(0.32, confidence - 0.05))
+      probabilities: refinedFirstHalfResult.probabilities,
+      confidenceScore: refinedFirstHalfResult.confidenceScore,
+      marketRefinementDiagnostics: refinedFirstHalfResult.diagnostics
     },
     {
       ...baseItem,
       predictionType: "halfTimeFullTime",
       marketKey: "half_time_full_time",
       probabilities: matrix,
-      confidenceScore: round4(Math.max(0.3, confidence - 0.08))
+      confidenceScore: refinedHalfTimeFullTime.confidenceScore,
+      marketRefinementDiagnostics: refinedHalfTimeFullTime.diagnostics
     },
     {
       ...baseItem,
       predictionType: "bothTeamsToScore",
       marketKey: "both_teams_to_score",
       probabilities: {
-        yes: round4(bttsYes),
-        no: round4(bttsNo),
-        bttsYes: round4(bttsYes),
-        bttsNo: round4(bttsNo)
+        yes: refinedBtts.yes,
+        no: refinedBtts.no,
+        bttsYes: refinedBtts.yes,
+        bttsNo: refinedBtts.no
       },
-      confidenceScore: round4(Math.max(0.35, confidence - 0.02))
+      confidenceScore: refinedBtts.confidenceScore,
+      marketRefinementDiagnostics: refinedBtts.diagnostics
     },
     ...overUnderItems,
     {
@@ -505,7 +1063,8 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
         top: correctScore[0]?.probability ?? 0
       },
       scorelineDistribution: correctScore,
-      confidenceScore: round4(Math.max(0.3, confidence - 0.12))
+      confidenceScore: refinedCorrectScore.confidenceScore,
+      marketRefinementDiagnostics: refinedCorrectScore.diagnostics
     },
     {
       ...baseItem,
@@ -521,10 +1080,11 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       selectionLabel: "1Y 0.5 Alt/Üst",
       line: 0.5,
       probabilities: {
-        over: round4(firstHalfOver),
-        under: round4(1 - firstHalfOver)
+        over: refinedFirstHalfGoals.over,
+        under: refinedFirstHalfGoals.under
       },
-      confidenceScore: round4(Math.max(0.33, confidence - 0.06))
+      confidenceScore: refinedFirstHalfGoals.confidenceScore,
+      marketRefinementDiagnostics: refinedFirstHalfGoals.diagnostics
     },
     {
       ...baseItem,
@@ -533,10 +1093,11 @@ export function expandPredictionMarkets(row: PredictionRowInput): ExpandedPredic
       selectionLabel: "2Y 0.5 Alt/Üst",
       line: 0.5,
       probabilities: {
-        over: round4(secondHalfOver),
-        under: round4(1 - secondHalfOver)
+        over: refinedSecondHalfGoals.over,
+        under: refinedSecondHalfGoals.under
       },
-      confidenceScore: round4(Math.max(0.33, confidence - 0.06))
+      confidenceScore: refinedSecondHalfGoals.confidenceScore,
+      marketRefinementDiagnostics: refinedSecondHalfGoals.diagnostics
     }
   ];
 }

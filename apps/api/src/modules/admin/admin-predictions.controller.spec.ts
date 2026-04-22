@@ -13,6 +13,8 @@ describe("AdminPredictionsController", () => {
               market: "match_outcome",
               line: null,
               horizon: "PRE6",
+              modelVersionId: "model-1",
+              modelVersion: { modelName: "football-core", version: "v1" },
               confidence: 0.42,
               riskFlagsJson: [{ code: "LOW_CONFIDENCE", severity: "MEDIUM" }],
               explanationJson: { summary: "low confidence" },
@@ -36,8 +38,58 @@ describe("AdminPredictionsController", () => {
       expect.objectContaining({
         id: "run-1",
         matchId: "match-1",
+        sourceType: "published",
+        modelVersion: "football-core@v1",
+        horizon: "PRE6",
         confidenceScore: 0.42,
         summary: "low confidence"
+      })
+    );
+  });
+
+  it("by-type exposes published source attribution without reading legacy predictions", async () => {
+    const prisma = {
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            match: {
+              homeScore: 2,
+              awayScore: 1,
+              halfTimeHomeScore: 1,
+              halfTimeAwayScore: 0
+            },
+            predictionRun: {
+              market: "match_outcome",
+              line: null,
+              horizon: "PRE6",
+              modelVersionId: "model-1",
+              modelVersion: { modelName: "football-core", version: "v1" },
+              probability: 0.62,
+              confidence: 0.58,
+              explanationJson: {
+                selectedSide: "home",
+                calibratedProbabilities: { home: 0.62, draw: 0.22, away: 0.16 }
+              },
+              createdAt: new Date("2026-04-18T10:00:00.000Z")
+            }
+          }
+        ])
+      },
+      prediction: {
+        findMany: jest.fn()
+      }
+    } as any;
+
+    const controller = new AdminPredictionsController(prisma, {} as any, {} as any);
+    const rows = await controller.byType("10", "30");
+
+    expect(prisma.publishedPrediction.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        sourceType: "published",
+        modelVersion: "football-core@v1",
+        horizon: "PRE6"
       })
     );
   });

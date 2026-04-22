@@ -563,6 +563,20 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
   return {
     matchId,
     modelVersionId: asString(record.modelVersionId) ?? null,
+    sourceType:
+      record.sourceType === "published" ||
+      record.sourceType === "legacy" ||
+      record.sourceType === "prediction_run_fallback" ||
+      record.sourceType === "synthetic"
+        ? record.sourceType
+        : undefined,
+    modelVersion: asString(record.modelVersion) ?? null,
+    horizon: asString(record.horizon) ?? null,
+    cutoffAt: asString(record.cutoffAt) ?? null,
+    featureCoverage: record.featureCoverage,
+    confidenceDiagnostics: record.confidenceDiagnostics,
+    calibrationDiagnostics: record.calibrationDiagnostics,
+    marketRefinementDiagnostics: record.marketRefinementDiagnostics,
     leagueId,
     leagueName,
     leagueCode,

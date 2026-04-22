@@ -55,16 +55,27 @@ function parseSelectionLabel(selectionLabel?: string) {
   if (!normalized) {
     return null;
   }
-  if (normalized.includes("over") || normalized.includes("ust")) {
+  const hasOver = normalized.includes("over") || normalized.includes("ust");
+  const hasUnder = normalized.includes("under") || normalized.includes("alt");
+  if (hasOver && hasUnder) {
+    return null;
+  }
+  if (hasOver) {
     return "Üst";
   }
-  if (normalized.includes("under") || normalized.includes("alt")) {
+  if (hasUnder) {
     return "Alt";
   }
-  if (normalized.includes("kg var") || normalized === "var" || normalized.includes("yes")) {
+
+  const hasYes = normalized.includes("kg var") || normalized === "var" || normalized.includes("yes");
+  const hasNo = normalized.includes("kg yok") || normalized === "yok" || normalized.includes("no");
+  if (hasYes && hasNo) {
+    return null;
+  }
+  if (hasYes) {
     return "Var";
   }
-  if (normalized.includes("kg yok") || normalized === "yok" || normalized.includes("no")) {
+  if (hasNo) {
     return "Yok";
   }
   if (normalized === "1" || normalized.includes("home") || normalized.includes("ev")) {

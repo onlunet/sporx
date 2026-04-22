@@ -16,6 +16,18 @@ function createPublishedRow(runId: string, summary = "test summary") {
     publishedAt: new Date("2026-04-17T10:00:00.000Z"),
     predictionRun: {
       modelVersionId: "model-1",
+      modelVersion: { modelName: "football-core", version: "v1" },
+      featureSnapshot: { cutoffAt: new Date("2026-04-17T08:00:00.000Z"), featureSetVersion: "fs-v1" },
+      metaModelRuns: [
+        {
+          cutoffAt: new Date("2026-04-17T08:30:00.000Z"),
+          featureCoverageJson: { lineup: 0.8, odds: 0.9 },
+          modelVersion: "meta-v1",
+          isFallback: false,
+          fallbackReason: null,
+          createdAt: new Date("2026-04-17T09:58:00.000Z")
+        }
+      ],
       probability: 0.62,
       confidence: 0.58,
       riskFlagsJson: [],
@@ -128,6 +140,18 @@ function createPredictionRunRow() {
     lineKey: "na",
     horizon: "pre_match",
     modelVersionId: "run-model-1",
+    modelVersion: { modelName: "run-core", version: "v2" },
+    featureSnapshot: { cutoffAt: new Date("2026-04-18T10:30:00.000Z"), featureSetVersion: "fs-v2" },
+    metaModelRuns: [
+      {
+        cutoffAt: new Date("2026-04-18T10:45:00.000Z"),
+        featureCoverageJson: { lineup: 0.7 },
+        modelVersion: "run-meta-v2",
+        isFallback: false,
+        fallbackReason: null,
+        createdAt: new Date("2026-04-18T10:59:00.000Z")
+      }
+    ],
     probability: 0.63,
     confidence: 0.64,
     riskFlagsJson: [],
@@ -239,6 +263,15 @@ describe("PredictionsService", () => {
     expect(fullTimeRows).toHaveLength(1);
     expect(prisma.prediction.findMany).not.toHaveBeenCalled();
     expect(rollout.resolveSource).not.toHaveBeenCalled();
+    expect(fullTimeRows[0]).toEqual(
+      expect.objectContaining({
+        sourceType: "published",
+        modelVersion: "meta-v1",
+        horizon: "pre_match",
+        cutoffAt: "2026-04-17T08:30:00.000Z",
+        featureCoverage: { lineup: 0.8, odds: 0.9 }
+      })
+    );
   });
 
   it("list endpoint reads only published source when rollout selects published", async () => {
@@ -403,6 +436,8 @@ describe("PredictionsService", () => {
     expectNoQuarterScoreSelect(prisma.prediction.findMany.mock.calls[0][0].include.match.select);
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Legacy A");
+    expect((items[0] as any)?.sourceType).toBe("legacy");
+    expect((items[0] as any)?.horizon).toBeNull();
   });
 
   it("list endpoint falls back to prediction runs when published and legacy are empty", async () => {
@@ -445,6 +480,10 @@ describe("PredictionsService", () => {
     expectNoQuarterScoreSelect(prisma.predictionRun.findMany.mock.calls[0][0].include.match.select);
     expect(items.length).toBeGreaterThan(0);
     expect((items[0] as any)?.homeTeam).toBe("Run A");
+    expect((items[0] as any)?.sourceType).toBe("prediction_run_fallback");
+    expect((items[0] as any)?.modelVersion).toBe("run-meta-v2");
+    expect((items[0] as any)?.horizon).toBe("pre_match");
+    expect((items[0] as any)?.cutoffAt).toBe("2026-04-18T10:45:00.000Z");
   });
 
   it("list endpoint self-heals published rows from prediction runs when published source is empty", async () => {
@@ -593,6 +632,7 @@ describe("PredictionsService", () => {
 
       expect(items.length).toBeGreaterThan(0);
       expect((items[0] as any)?.homeTeam).toContain("Ev Takim");
+      expect((items[0] as any)?.sourceType).toBe("synthetic");
     } finally {
       if (previousNodeEnv === undefined) {
         delete process.env.NODE_ENV;

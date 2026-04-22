@@ -8,7 +8,7 @@ import {
   matchesPublicStatusFilter,
   normalizePublicMatchStatus
 } from "../matches/public-match-status.util";
-import { ExpandedPredictionItem } from "./prediction-markets.util";
+import { ExpandedPredictionItem, PredictionSourceType } from "./prediction-markets.util";
 import { PredictionSportStrategyRegistry } from "./sport-strategies/prediction-sport-strategy.registry";
 import { PipelineRolloutService } from "./pipeline-rollout.service";
 
@@ -308,6 +308,16 @@ type PublishedPredictionRecord = {
   publishedAt: Date;
   predictionRun: {
     modelVersionId: string | null;
+    modelVersion?: { modelName: string; version: string } | null;
+    featureSnapshot?: { cutoffAt: Date; featureSetVersion: string } | null;
+    metaModelRuns?: Array<{
+      cutoffAt: Date;
+      featureCoverageJson: unknown;
+      modelVersion: string;
+      isFallback: boolean;
+      fallbackReason: string | null;
+      createdAt: Date;
+    }>;
     probability: number;
     confidence: number;
     riskFlagsJson: unknown;
@@ -373,6 +383,13 @@ type LegacyPredictionRecord = {
 type NormalizedPredictionRow = {
   matchId: string;
   modelVersionId: string | null;
+  sourceType: PredictionSourceType;
+  modelVersion: string | null;
+  horizon: string | null;
+  cutoffAt: Date | null;
+  featureCoverage: unknown;
+  confidenceDiagnostics: unknown;
+  calibrationDiagnostics: unknown;
   probabilities: unknown;
   calibratedProbabilities: unknown;
   rawProbabilities: unknown;
@@ -393,6 +410,16 @@ type PredictionRunFallbackRecord = {
   lineKey: string;
   horizon: string;
   modelVersionId: string | null;
+  modelVersion?: { modelName: string; version: string } | null;
+  featureSnapshot?: { cutoffAt: Date; featureSetVersion: string } | null;
+  metaModelRuns?: Array<{
+    cutoffAt: Date;
+    featureCoverageJson: unknown;
+    modelVersion: string;
+    isFallback: boolean;
+    fallbackReason: string | null;
+    createdAt: Date;
+  }>;
   probability: number;
   confidence: number;
   riskFlagsJson: unknown;
@@ -477,6 +504,20 @@ const PUBLISHED_PREDICTION_INCLUDE = {
   predictionRun: {
     select: {
       modelVersionId: true,
+      modelVersion: { select: { modelName: true, version: true } },
+      featureSnapshot: { select: { cutoffAt: true, featureSetVersion: true } },
+      metaModelRuns: {
+        select: {
+          cutoffAt: true,
+          featureCoverageJson: true,
+          modelVersion: true,
+          isFallback: true,
+          fallbackReason: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: "desc" },
+        take: 1
+      },
       probability: true,
       confidence: true,
       riskFlagsJson: true,
@@ -496,10 +537,76 @@ const LEGACY_PREDICTION_INCLUDE = {
 } as const;
 
 const PREDICTION_RUN_FALLBACK_INCLUDE = {
+  modelVersion: { select: { modelName: true, version: true } },
+  featureSnapshot: { select: { cutoffAt: true, featureSetVersion: true } },
+  metaModelRuns: {
+    select: {
+      cutoffAt: true,
+      featureCoverageJson: true,
+      modelVersion: true,
+      isFallback: true,
+      fallbackReason: true,
+      createdAt: true
+    },
+    orderBy: { createdAt: "desc" },
+    take: 1
+  },
   match: {
     select: PREDICTION_MATCH_SELECT
   }
 } as const;
+
+function formatModelVersion(input?: { modelName: string; version: string } | null) {
+  if (!input) {
+    return null;
+  }
+  const modelName = input.modelName.trim();
+  const version = input.version.trim();
+  if (!modelName && !version) {
+    return null;
+  }
+  if (!modelName) {
+    return version;
+  }
+  if (!version) {
+    return modelName;
+  }
+  return `${modelName}@${version}`;
+}
+
+function latestMetaModelRun(
+  rows?: Array<{
+    cutoffAt: Date;
+    featureCoverageJson: unknown;
+    modelVersion: string;
+    isFallback: boolean;
+    fallbackReason: string | null;
+    createdAt: Date;
+  }>
+) {
+  return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+}
+
+function attributionFromRun(run: {
+  modelVersionId: string | null;
+  modelVersion?: { modelName: string; version: string } | null;
+  featureSnapshot?: { cutoffAt: Date; featureSetVersion: string } | null;
+  metaModelRuns?: Array<{
+    cutoffAt: Date;
+    featureCoverageJson: unknown;
+    modelVersion: string;
+    isFallback: boolean;
+    fallbackReason: string | null;
+    createdAt: Date;
+  }>;
+}) {
+  const meta = latestMetaModelRun(run.metaModelRuns);
+  return {
+    modelVersion: meta?.modelVersion ?? formatModelVersion(run.modelVersion) ?? run.modelVersionId ?? null,
+    cutoffAt: meta?.cutoffAt ?? run.featureSnapshot?.cutoffAt ?? null,
+    featureCoverage: meta?.featureCoverageJson ?? null
+  };
+}
 
 function normalizeOutcomeFromSide(side: "home" | "draw" | "away", probability: number) {
   const clamped = Math.max(0.0001, Math.min(0.9999, Number(probability.toFixed(6))));
@@ -541,6 +648,7 @@ function fallbackProbabilitiesByMarket(
 }
 
 function normalizePublishedRow(row: PublishedPredictionRecord) {
+  const attribution = attributionFromRun(row.predictionRun);
   const explanation = asRecord(row.predictionRun.explanationJson);
   const probabilitiesFromExplanation = explanation ? explanation.probabilities : null;
   const calibratedFromExplanation = explanation ? explanation.calibratedProbabilities : null;
@@ -569,6 +677,13 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
   return {
     matchId: row.matchId,
     modelVersionId: row.predictionRun.modelVersionId,
+    sourceType: "published" as const,
+    modelVersion: attribution.modelVersion,
+    horizon: row.horizon,
+    cutoffAt: attribution.cutoffAt,
+    featureCoverage: attribution.featureCoverage,
+    confidenceDiagnostics: explanation?.confidenceDiagnostics ?? null,
+    calibrationDiagnostics: explanation?.calibrationDiagnostics ?? null,
     probabilities,
     calibratedProbabilities,
     rawProbabilities,
@@ -633,6 +748,13 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
   return {
     matchId: row.matchId,
     modelVersionId: row.modelVersionId,
+    sourceType: "legacy" as const,
+    modelVersion: row.modelVersionId,
+    horizon: null,
+    cutoffAt: null,
+    featureCoverage: null,
+    confidenceDiagnostics: null,
+    calibrationDiagnostics: null,
     probabilities: row.probabilities,
     calibratedProbabilities: row.calibratedProbabilities,
     rawProbabilities: row.rawProbabilities,
@@ -650,6 +772,7 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
 }
 
 function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
+  const attribution = attributionFromRun(row);
   const explanation = asRecord(row.explanationJson);
   const probabilitiesFromExplanation = explanation ? explanation.probabilities : null;
   const calibratedFromExplanation = explanation ? explanation.calibratedProbabilities : null;
@@ -673,6 +796,13 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
   return {
     matchId: row.matchId,
     modelVersionId: row.modelVersionId,
+    sourceType: "prediction_run_fallback" as const,
+    modelVersion: attribution.modelVersion,
+    horizon: row.horizon,
+    cutoffAt: attribution.cutoffAt,
+    featureCoverage: attribution.featureCoverage,
+    confidenceDiagnostics: explanation?.confidenceDiagnostics ?? null,
+    calibrationDiagnostics: explanation?.calibrationDiagnostics ?? null,
     probabilities,
     calibratedProbabilities,
     rawProbabilities,
@@ -692,6 +822,13 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
 function buildFallbackExpandedItem(input: {
   matchId: string;
   modelVersionId: string | null;
+  sourceType?: PredictionSourceType;
+  modelVersion?: string | null;
+  horizon?: string | null;
+  cutoffAt?: Date | null;
+  featureCoverage?: unknown;
+  confidenceDiagnostics?: unknown;
+  calibrationDiagnostics?: unknown;
   probabilities: unknown;
   calibratedProbabilities: unknown;
   rawProbabilities: unknown;
@@ -721,6 +858,13 @@ function buildFallbackExpandedItem(input: {
   const item: ExpandedPredictionItem = {
     matchId: input.matchId,
     modelVersionId: input.modelVersionId,
+    sourceType: input.sourceType,
+    modelVersion: input.modelVersion ?? input.modelVersionId,
+    horizon: input.horizon ?? null,
+    cutoffAt: input.cutoffAt ? input.cutoffAt.toISOString() : null,
+    featureCoverage: input.featureCoverage ?? null,
+    confidenceDiagnostics: input.confidenceDiagnostics ?? null,
+    calibrationDiagnostics: input.calibrationDiagnostics ?? null,
     leagueId: input.leagueId,
     leagueName: input.leagueName,
     leagueCode: input.leagueCode ?? undefined,
@@ -1033,6 +1177,13 @@ export class PredictionsService {
       return {
         matchId: match.id,
         modelVersionId: null,
+        sourceType: "synthetic" as const,
+        modelVersion: null,
+        horizon: null,
+        cutoffAt: null,
+        featureCoverage: null,
+        confidenceDiagnostics: null,
+        calibrationDiagnostics: null,
         probabilities: safeSportCode === "football" ? { home: normalizedHome, draw: normalizedDraw, away: normalizedAway } : { home: normalizedHome, away: normalizedAway },
         calibratedProbabilities:
           safeSportCode === "football"
@@ -1210,6 +1361,39 @@ export class PredictionsService {
     });
   }
 
+  private attachSourceAttribution(item: ExpandedPredictionItem, source: NormalizedPredictionRow): ExpandedPredictionItem {
+    return {
+      ...item,
+      sourceType: source.sourceType,
+      modelVersion: source.modelVersion ?? source.modelVersionId,
+      horizon: source.horizon,
+      cutoffAt: source.cutoffAt ? source.cutoffAt.toISOString() : null,
+      featureCoverage: source.featureCoverage ?? null,
+      confidenceDiagnostics: source.confidenceDiagnostics ?? null,
+      calibrationDiagnostics: source.calibrationDiagnostics ?? null
+    };
+  }
+
+  private logSourceMix(context: string, rows: NormalizedPredictionRow[]) {
+    if (rows.length === 0) {
+      return;
+    }
+    const counts: Record<PredictionSourceType, number> = {
+      published: 0,
+      legacy: 0,
+      prediction_run_fallback: 0,
+      synthetic: 0
+    };
+    for (const row of rows) {
+      counts[row.sourceType] += 1;
+    }
+    if (counts.legacy > 0 || counts.prediction_run_fallback > 0 || counts.synthetic > 0) {
+      this.logger.warn(
+        `Prediction source mix ${context}: published=${counts.published}, legacy=${counts.legacy}, prediction_run_fallback=${counts.prediction_run_fallback}, synthetic=${counts.synthetic}.`
+      );
+    }
+  }
+
   private async findPublishedRows(
     baseWhere: Prisma.PublishedPredictionWhereInput,
     take: number,
@@ -1261,6 +1445,13 @@ export class PredictionsService {
         return this.predictionStrategyRegistry.forSport(sportCode).expand({
           matchId: item.matchId,
           modelVersionId: item.modelVersionId,
+          sourceType: item.sourceType,
+          modelVersion: item.modelVersion,
+          horizon: item.horizon,
+          cutoffAt: item.cutoffAt,
+          featureCoverage: item.featureCoverage,
+          confidenceDiagnostics: item.confidenceDiagnostics,
+          calibrationDiagnostics: item.calibrationDiagnostics,
           probabilities: item.probabilities,
           calibratedProbabilities: item.calibratedProbabilities,
           rawProbabilities: item.rawProbabilities,
@@ -1289,12 +1480,19 @@ export class PredictionsService {
             q4HomeScore: typeof matchRecord?.q4HomeScore === "number" ? matchRecord.q4HomeScore : null,
             q4AwayScore: typeof matchRecord?.q4AwayScore === "number" ? matchRecord.q4AwayScore : null
           }
-        });
+        }).map((expanded) => this.attachSourceAttribution(expanded, item));
       } catch {
         return [
           buildFallbackExpandedItem({
             matchId: item.matchId,
             modelVersionId: item.modelVersionId,
+            sourceType: item.sourceType,
+            modelVersion: item.modelVersion,
+            horizon: item.horizon,
+            cutoffAt: item.cutoffAt,
+            featureCoverage: item.featureCoverage,
+            confidenceDiagnostics: item.confidenceDiagnostics,
+            calibrationDiagnostics: item.calibrationDiagnostics,
             probabilities: item.probabilities,
             calibratedProbabilities: item.calibratedProbabilities,
             rawProbabilities: item.rawProbabilities,
@@ -1336,7 +1534,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v17:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v18:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -1587,6 +1785,7 @@ export class PredictionsService {
         }
       }
     }
+    this.logSourceMix(`list status=${statusKey} sport=${sportKey} take=${take}`, normalizedRows);
     const expanded = this.expandRows(normalizedRows);
 
     const payload = predictionType
@@ -1676,6 +1875,7 @@ export class PredictionsService {
       return [];
     }
 
+    this.logSourceMix(`match=${matchId}`, normalizedRows);
     const expanded = this.expandRows(normalizedRows);
 
     const filteredByType = predictionType
@@ -1739,7 +1939,9 @@ export class PredictionsService {
     }
 
     if (rows.length > 0) {
-      return rows.map((row) => normalizePublishedRow(row));
+      const normalizedRows = rows.map((row) => normalizePublishedRow(row));
+      this.logSourceMix("high-confidence", normalizedRows);
+      return normalizedRows;
     }
 
     if (!this.allowLegacyPublicFallback) {
@@ -1748,12 +1950,16 @@ export class PredictionsService {
 
     const legacyRows = await this.fetchLegacyHighConfidenceRows();
     if (legacyRows.length > 0) {
-      return legacyRows.map((row) => normalizeLegacyRow(row));
+      const normalizedRows = legacyRows.map((row) => normalizeLegacyRow(row));
+      this.logSourceMix("high-confidence", normalizedRows);
+      return normalizedRows;
     }
 
     const runRows = await this.fetchPredictionRunHighConfidenceRows();
     if (runRows.length > 0 && !arePredictionRunRowsSyntheticOnly(runRows)) {
-      return runRows.map((row) => normalizePredictionRunFallbackRow(row));
+      const normalizedRows = runRows.map((row) => normalizePredictionRunFallbackRow(row));
+      this.logSourceMix("high-confidence", normalizedRows);
+      return normalizedRows;
     }
     return [];
   }

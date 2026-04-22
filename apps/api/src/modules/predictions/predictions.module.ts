@@ -29,6 +29,7 @@ import { LineupSnapshotService } from "./lineup-snapshot.service";
 import { EventEnrichmentService } from "./event-enrichment.service";
 import { MarketConsensusSnapshotService } from "./market-consensus-snapshot.service";
 import { MetaModelRefinementService } from "./meta-model-refinement.service";
+import { ConfidenceRefinementService } from "./confidence-refinement.service";
 import { SelectionEngineConfigService } from "./selection-engine-config.service";
 import { CandidateBuilderService } from "./candidate-builder.service";
 import { SelectionScoreService } from "./selection-score.service";
@@ -79,6 +80,7 @@ import { ModelLifecycleOrchestrationService } from "./model-lifecycle-orchestrat
     EventEnrichmentService,
     MarketConsensusSnapshotService,
     MetaModelRefinementService,
+    ConfidenceRefinementService,
     SelectionEngineConfigService,
     CandidateBuilderService,
     SelectionScoreService,
@@ -113,6 +115,7 @@ import { ModelLifecycleOrchestrationService } from "./model-lifecycle-orchestrat
     EventEnrichmentService,
     MarketConsensusSnapshotService,
     MetaModelRefinementService,
+    ConfidenceRefinementService,
     SelectionEngineConfigService,
     CandidateBuilderService,
     SelectionScoreService,

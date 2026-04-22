@@ -13,6 +13,15 @@ export const matchSummarySchema = z.object({
 
 export const predictionSchema = z.object({
   matchId: z.string().uuid(),
+  sourceType: z.enum(["published", "legacy", "prediction_run_fallback", "synthetic"]).optional(),
+  modelVersion: z.string().nullable().optional(),
+  modelVersionId: z.string().nullable().optional(),
+  horizon: z.string().nullable().optional(),
+  cutoffAt: z.string().nullable().optional(),
+  featureCoverage: z.unknown().optional(),
+  confidenceDiagnostics: z.unknown().optional(),
+  calibrationDiagnostics: z.unknown().optional(),
+  marketRefinementDiagnostics: z.unknown().optional(),
   probabilities: z.object({ home: z.number(), draw: z.number(), away: z.number() }),
   confidenceScore: z.number(),
   summary: z.string(),

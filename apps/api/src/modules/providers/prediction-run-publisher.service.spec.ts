@@ -251,6 +251,17 @@ describe("PredictionRunPublisherService", () => {
     expect(stub.prisma.$transaction).toHaveBeenCalledTimes(3);
     expect(stub.runs.length).toBe(2);
     expect(stub.publishedByKey.size).toBe(1);
+    const firstRunCreate = stub.tx.predictionRun.create.mock.calls[0][0];
+    expect(firstRunCreate.data.explanationJson.confidenceDiagnostics).toEqual(
+      expect.objectContaining({
+        market: "match_outcome",
+        rawConfidence: 0.58,
+        calibrationConfidence: 0.58,
+        adjustedConfidence: firstRunCreate.data.confidence
+      })
+    );
+    expect(firstRunCreate.data.explanationJson.rawConfidenceScore).toBe(0.58);
+    expect(firstRunCreate.data.explanationJson.adjustedConfidenceScore).toBe(firstRunCreate.data.confidence);
     const onlyPublished = [...stub.publishedByKey.values()][0];
     expect(onlyPublished.predictionRunId).toBe("run-2");
   });

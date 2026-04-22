@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { MatchStatus, Prisma, PublishDecisionStatus } from "@prisma/client";
 import { CalibrationService } from "../calibration/calibration.service";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -14,6 +14,7 @@ import { CandidateBuilderService } from "../predictions/candidate-builder.servic
 import { PublishDecisionService } from "../predictions/publish-decision.service";
 import { SelectionEngineConfigService } from "../predictions/selection-engine-config.service";
 import { BankrollOrchestrationService } from "../bankroll/bankroll-orchestration.service";
+import { ConfidenceRefinementService } from "../predictions/confidence-refinement.service";
 
 export type PublishPredictionRunInput = {
   matchId: string;
@@ -55,7 +56,9 @@ export class PredictionRunPublisherService {
     private readonly candidateBuilderService: CandidateBuilderService,
     private readonly publishDecisionService: PublishDecisionService,
     private readonly selectionEngineConfigService: SelectionEngineConfigService,
-    private readonly bankrollOrchestrationService: BankrollOrchestrationService
+    private readonly bankrollOrchestrationService: BankrollOrchestrationService,
+    @Optional()
+    private readonly confidenceRefinementService: ConfidenceRefinementService = new ConfidenceRefinementService()
   ) {}
 
   private isMissingPublishedPredictionsTableError(error: unknown) {
@@ -398,6 +401,13 @@ export class PredictionRunPublisherService {
     const eventCoverage =
       this.asNumber((coverageFlags as Record<string, unknown>).event_coverage) ??
       this.asNumber(eventCoverageRecord?.stats_coverage_ratio);
+    const oddsCoverage =
+      this.asNumber((coverageFlags as Record<string, unknown>).odds_coverage) ??
+      this.asNumber((coverageFlags as Record<string, unknown>).market_coverage_score) ??
+      (typeof (coverageFlags as Record<string, unknown>).has_odds === "boolean"
+        ? Number((coverageFlags as Record<string, unknown>).has_odds)
+        : null);
+    const missingStatsRatio = this.asNumber((coverageFlags as Record<string, unknown>).missing_stats_ratio);
     const volatilityScore =
       this.asNumber(consensusSummary?.avg_drift_magnitude) ??
       this.asNumber(consensusSummary?.avg_bookmaker_spread) ??
@@ -464,19 +474,21 @@ export class PredictionRunPublisherService {
       rawProbability: preCalibrationProbability,
       freshnessScore,
       providerDisagreement,
+      volatilityScore,
       coverage: coverageFlags
         ? {
             hasOdds: Boolean((coverageFlags as Record<string, unknown>).has_odds),
             hasLineup: Boolean((coverageFlags as Record<string, unknown>).has_lineup),
-            missingStatsRatio: this.asNumber((coverageFlags as Record<string, unknown>).missing_stats_ratio)
+            hasEvent: Boolean((coverageFlags as Record<string, unknown>).has_event_data),
+            oddsCoverage,
+            lineupCoverage,
+            eventCoverage,
+            missingStatsRatio
           }
         : undefined
     });
 
     const probability = this.normalizeProbability(calibrated.calibratedProbability);
-    const confidence = this.normalizeConfidence(
-      (input.confidence + calibrated.confidenceScore + refinement.riskAdjustedConfidence) / 3
-    );
     const riskFlags = this.normalizeRiskFlags([
       ...baseRiskFlags,
       ...calibrated.riskFlags,
@@ -490,6 +502,35 @@ export class PredictionRunPublisherService {
           ]
         : [])
     ]);
+    const confidenceRefinement = this.confidenceRefinementService.refine({
+      market: input.market,
+      rawConfidence: this.normalizeConfidence(input.confidence),
+      calibrationConfidence: calibrated.confidenceScore,
+      metaModelConfidence: refinement.riskAdjustedConfidence,
+      calibrationSampleSize: calibrated.calibration.sampleSize,
+      calibrationEce: calibrated.calibration.ece,
+      lineupCoverage,
+      oddsCoverage,
+      eventCoverage,
+      freshnessScore,
+      volatilityScore,
+      providerDisagreement,
+      missingStatsRatio,
+      riskFlags
+    });
+    const confidence = this.normalizeConfidence(confidenceRefinement.confidence);
+    const calibrationDiagnostics = this.asRecord(calibrated.calibrationDiagnostics);
+    const policyCoverageFlags = {
+      ...coverageFlags,
+      odds_coverage: oddsCoverage ?? null,
+      lineup_coverage: lineupCoverage ?? null,
+      event_coverage: eventCoverage ?? null,
+      missing_stats_ratio: missingStatsRatio ?? null,
+      calibration_sample_size: calibrated.calibration.sampleSize,
+      calibration_bucket: calibrationDiagnostics?.calibrationBucket ?? null,
+      calibration_method: calibrationDiagnostics?.calibrationMethod ?? null,
+      calibration_market_profile: calibrationDiagnostics?.marketProfile ?? null
+    } as Record<string, unknown>;
 
     const startedAt = Date.now();
     try {
@@ -559,8 +600,13 @@ export class PredictionRunPublisherService {
                   keepLastIfActive,
                   horizon,
                   featureCutoffAt: featureCutoffAt.toISOString(),
+                  rawConfidenceScore: this.normalizeConfidence(input.confidence),
                   calibration: calibrated.calibration,
+                  calibrationDiagnostics: calibrated.calibrationDiagnostics,
                   calibrationConfidenceScore: calibrated.confidenceScore,
+                  metaModelConfidenceScore: refinement.riskAdjustedConfidence,
+                  adjustedConfidenceScore: confidence,
+                  confidenceDiagnostics: confidenceRefinement.diagnostics,
                   enrichment: {
                     lineupSnapshotId: lineupSnapshotRef?.id ?? null,
                     eventAggregateSnapshotId: eventSnapshotRef?.id ?? null,
@@ -630,7 +676,7 @@ export class PredictionRunPublisherService {
               fairOdds,
               edge,
               freshnessScore,
-              coverageFlags,
+              coverageFlags: policyCoverageFlags,
               volatilityScore,
               providerDisagreement,
               lineupCoverage,

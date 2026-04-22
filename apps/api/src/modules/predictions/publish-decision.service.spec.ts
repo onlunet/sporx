@@ -76,6 +76,39 @@ const baseInput = {
   policyVersionLabel: "v1_deterministic_selector"
 };
 
+const policyDiagnostics = {
+  version: "publish_policy_refinement_v1",
+  enabled: true,
+  marketRiskProfile: "standard",
+  effectiveThresholds: {
+    minConfidence: 0.56,
+    minPublishScore: 0.58,
+    minOddsCoverage: 0.45,
+    minLineupCoverage: 0.45,
+    minEventCoverage: 0.3,
+    maxProviderDisagreement: 0.25,
+    maxVolatility: 0.34,
+    maxMissingStatsRatio: 0.55,
+    minCalibrationSampleSize: 40,
+    minFreshnessScore: 0.4
+  },
+  signals: {
+    confidence: 0.61,
+    selectionScore: 0.7,
+    oddsCoverage: 1,
+    lineupCoverage: 0.7,
+    eventCoverage: 0.6,
+    providerDisagreement: 0.08,
+    volatilityScore: 0.12,
+    missingStatsRatio: 0.2,
+    calibrationSampleSize: null,
+    calibrationMethod: null
+  },
+  appliedAdjustments: {
+    riskyMarket: false
+  }
+};
+
 describe("PublishDecisionService", () => {
   it("produces deterministic decisions for identical inputs", async () => {
     const service = new PublishDecisionService(
@@ -86,7 +119,8 @@ describe("PublishDecisionService", () => {
         })
       } as any,
       {
-        evaluate: jest.fn().mockReturnValue([])
+        evaluate: jest.fn().mockReturnValue([]),
+        diagnostics: jest.fn().mockReturnValue(policyDiagnostics)
       } as any,
       {
         resolve: jest.fn().mockResolvedValue({
@@ -128,6 +162,32 @@ describe("PublishDecisionService", () => {
     expect(first.selectionScore).toBe(second.selectionScore);
     expect(first.reasons).toEqual(second.reasons);
     expect(first.shouldPublishPublic).toBe(second.shouldPublishPublic);
+    expect(tx.publishDecision.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          detailsJson: expect.objectContaining({
+            publishPolicyDiagnostics: expect.objectContaining({
+              version: "publish_policy_refinement_v1",
+              effectiveThresholds: expect.objectContaining({
+                minConfidence: expect.any(Number),
+                minPublishScore: expect.any(Number)
+              })
+            })
+          })
+        })
+      })
+    );
+    expect(tx.policyEvaluationSnapshot.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          decisionMetrics: expect.objectContaining({
+            publishPolicyDiagnostics: expect.objectContaining({
+              version: "publish_policy_refinement_v1"
+            })
+          })
+        })
+      })
+    );
   });
 
   it("shadow mode keeps public output unchanged even when selector abstains", async () => {
@@ -145,7 +205,8 @@ describe("PublishDecisionService", () => {
             message: "Low confidence",
             severity: "high"
           }
-        ])
+        ]),
+        diagnostics: jest.fn().mockReturnValue(policyDiagnostics)
       } as any,
       {
         resolve: jest.fn().mockResolvedValue({
@@ -186,7 +247,8 @@ describe("PublishDecisionService", () => {
         })
       } as any,
       {
-        evaluate: jest.fn().mockReturnValue([])
+        evaluate: jest.fn().mockReturnValue([]),
+        diagnostics: jest.fn().mockReturnValue(policyDiagnostics)
       } as any,
       {
         resolve: jest.fn().mockResolvedValue({
