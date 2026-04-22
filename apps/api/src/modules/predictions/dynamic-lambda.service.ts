@@ -29,6 +29,9 @@ export type DynamicLambdaResult = {
 
 @Injectable()
 export class DynamicLambdaService {
+  private readonly homeGoalBaseline = 1.28;
+  private readonly awayGoalBaseline = 1.18;
+
   private clamp(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value));
   }
@@ -46,8 +49,8 @@ export class DynamicLambdaService {
     const homeDefense = this.clamp(this.asFinite(input.homeDefense, 1), 0.45, 2.6);
     const awayDefense = this.clamp(this.asFinite(input.awayDefense, 1), 0.45, 2.6);
 
-    const baseHome = this.clamp(homeAttack * awayDefense, 0.2, 3.4);
-    const baseAway = this.clamp(awayAttack * homeDefense, 0.2, 3.4);
+    const baseHome = this.clamp(homeAttack * awayDefense * this.homeGoalBaseline, 0.2, 3.4);
+    const baseAway = this.clamp(awayAttack * homeDefense * this.awayGoalBaseline, 0.2, 3.4);
 
     const eloHome = this.asFinite(input.eloHome, 1500);
     const eloAway = this.asFinite(input.eloAway, 1500);

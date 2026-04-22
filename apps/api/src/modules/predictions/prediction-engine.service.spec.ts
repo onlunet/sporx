@@ -27,4 +27,10 @@ describe("PredictionEngineService", () => {
     const calibrated = service.calibrate(probs, 1.1);
     expect(calibrated.home).not.toBe(probs.home);
   });
+
+  it("uses a realistic football goal baseline for balanced teams", () => {
+    const expected = service.poissonExpectedScore(0.9, 0.9, 1.16, 1.16);
+    expect(expected.home + expected.away).toBeGreaterThan(2.45);
+    expect(expected.home).toBeGreaterThan(expected.away);
+  });
 });

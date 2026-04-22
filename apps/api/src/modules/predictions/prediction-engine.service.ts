@@ -10,6 +10,8 @@ export class PredictionEngineService {
   private readonly kHomeAdvantage = 18;
   private readonly minDraw = 0.18;
   private readonly maxDraw = 0.3;
+  private readonly homeGoalBaseline = 1.28;
+  private readonly awayGoalBaseline = 1.18;
 
   computeEloProbabilities(input: EloInput) {
     const adjustedHome = input.homeElo + this.kHomeAdvantage;
@@ -28,8 +30,8 @@ export class PredictionEngineService {
   }
 
   poissonExpectedScore(homeAttack: number, awayAttack: number, homeDefense: number, awayDefense: number) {
-    const homeLambda = Math.max(0.2, homeAttack * awayDefense);
-    const awayLambda = Math.max(0.2, awayAttack * homeDefense);
+    const homeLambda = Math.max(0.2, homeAttack * awayDefense * this.homeGoalBaseline);
+    const awayLambda = Math.max(0.2, awayAttack * homeDefense * this.awayGoalBaseline);
 
     return {
       home: Number(homeLambda.toFixed(3)),
