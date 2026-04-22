@@ -2183,11 +2183,13 @@ export class ProviderIngestionService {
 
   private prioritizeTheSportsDbTurkeyLeague(leagueIds: string[]) {
     const turkeyLeagueId = "4339";
+    const turkeyCupId = "4960";
     const deduped = this.uniqueStringList(leagueIds);
-    if (!deduped.includes(turkeyLeagueId)) {
-      return [turkeyLeagueId, ...deduped];
-    }
-    return [turkeyLeagueId, ...deduped.filter((item) => item !== turkeyLeagueId)];
+    return [
+      turkeyLeagueId,
+      turkeyCupId,
+      ...deduped.filter((item) => item !== turkeyLeagueId && item !== turkeyCupId)
+    ];
   }
 
   private theSportsDbSoccerLeagueIds(settings: { soccerLeagueId?: string; soccerLeagueIds?: string[] }) {

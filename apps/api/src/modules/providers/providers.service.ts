@@ -101,7 +101,7 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     defaultConfigs: {
       apiKey: "123",
       soccerLeagueId: "4339",
-      soccerLeagueIds: "4339,4328",
+      soccerLeagueIds: "4339,4960,4328",
       basketballLeagueId: "4387",
       dailyLimit: "240",
       matchDetailsMaxMatches: "20",

@@ -193,6 +193,7 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
 
     expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueIds: ["4328", "4339", "4335"] })).toEqual([
       "4339",
+      "4960",
       "4328",
       "4335"
     ]);
@@ -201,8 +202,8 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
   it("keeps legacy soccerLeagueId config backward compatible", () => {
     const { service } = createService();
 
-    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4328" })).toEqual(["4339", "4328"]);
-    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4339" })).toEqual(["4339"]);
+    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4328" })).toEqual(["4339", "4960", "4328"]);
+    expect((service as any).theSportsDbSoccerLeagueIds({ soccerLeagueId: "4339" })).toEqual(["4339", "4960"]);
   });
 
   it("maps TheSportsDB football statuses robustly", () => {
@@ -384,9 +385,20 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
       "4339",
       undefined
     );
+    expect((service as any).theSportsDbConnector.fetchPastSoccerEvents).toHaveBeenCalledWith(
+      "test-key",
+      "4960",
+      undefined
+    );
     expect((service as any).theSportsDbConnector.fetchSoccerSeasonEvents).toHaveBeenCalledWith(
       "test-key",
       "4339",
+      "2025-2026",
+      undefined
+    );
+    expect((service as any).theSportsDbConnector.fetchSoccerSeasonEvents).toHaveBeenCalledWith(
+      "test-key",
+      "4960",
       "2025-2026",
       undefined
     );
@@ -403,12 +415,12 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
     expect(result.details).toEqual(
       expect.objectContaining({
         mode: "syncResults",
-        plannedCalls: 2,
-        attemptedCalls: 2,
-        successfulCalls: 2,
-        recordsRead: 1,
-        recordsWritten: 1,
-        halfTimeScoresWritten: 1
+        plannedCalls: 4,
+        attemptedCalls: 4,
+        successfulCalls: 4,
+        recordsRead: 2,
+        recordsWritten: 2,
+        halfTimeScoresWritten: 2
       })
     );
     expect((result.details.perLeague as any[])[0]).toEqual(
@@ -449,10 +461,10 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
     expect(result.details).toEqual(
       expect.objectContaining({
         mode: "syncResults",
-        plannedCalls: 2,
+        plannedCalls: 4,
         attemptedCalls: 1,
         successfulCalls: 1,
-        skippedDueQuota: 1
+        skippedDueQuota: 3
       })
     );
     expect((result.details.perLeague as any[])[0]).toEqual(
@@ -461,6 +473,14 @@ describe("ProviderIngestionService TheSportsDB helpers", () => {
         attemptedCalls: 1,
         successfulCalls: 1,
         skippedDueQuota: 1
+      })
+    );
+    expect((result.details.perLeague as any[])[1]).toEqual(
+      expect.objectContaining({
+        leagueId: "4960",
+        attemptedCalls: 0,
+        successfulCalls: 0,
+        skippedDueQuota: 2
       })
     );
   });
