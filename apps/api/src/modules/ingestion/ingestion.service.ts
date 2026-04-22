@@ -7,6 +7,7 @@ import { ProviderIngestionService } from "../providers/provider-ingestion.servic
 @Injectable()
 export class IngestionService {
   private readonly logger = new Logger(IngestionService.name);
+  private readonly queuedInlineFallbackDelayMs = this.readQueuedInlineFallbackDelayMs();
   private readonly acceptedJobTypes = new Set([
     "syncFixtures",
     "syncFixturesHotPulse",
@@ -91,6 +92,22 @@ export class IngestionService {
     return created.id;
   }
 
+  private readQueuedInlineFallbackDelayMs() {
+    const raw = process.env.INGESTION_QUEUED_INLINE_FALLBACK_DELAY_MS;
+    if (!raw) {
+      return 60_000;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 60_000;
+    }
+    return Math.min(10 * 60_000, Math.trunc(parsed));
+  }
+
+  private shouldScheduleQueuedInlineFallback(jobType: string) {
+    return jobType === "generatePredictions" && this.queuedInlineFallbackDelayMs > 0;
+  }
+
   async run(jobType: string) {
     const normalizedJobType = this.normalizeJobType(jobType);
     if (!normalizedJobType) {
@@ -122,6 +139,12 @@ export class IngestionService {
 
       try {
         await this.queue.enqueuePipeline(normalizedJobType, { runId: run.id, jobType: normalizedJobType });
+        if (
+          this.shouldScheduleQueuedInlineFallback(normalizedJobType) &&
+          typeof this.queue.runInlineFallbackAfter === "function"
+        ) {
+          this.queue.runInlineFallbackAfter(run.id, normalizedJobType, this.queuedInlineFallbackDelayMs);
+        }
       } catch (error) {
         this.logger.warn(
           `Queue enqueue failed for run ${run.id}; continuing with inline fallback: ${

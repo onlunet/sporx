@@ -1,9 +1,9 @@
 import { IngestionService } from "./ingestion.service";
 
 describe("IngestionService", () => {
-  const makeRun = () => ({
+  const makeRun = (jobType = "syncFixtures") => ({
     id: "run-1",
-    jobType: "syncFixtures",
+    jobType,
     status: "queued",
     startedAt: null,
     finishedAt: null,
@@ -15,7 +15,8 @@ describe("IngestionService", () => {
   it("enqueues pipeline without inline fallback when queue is healthy", async () => {
     const queue = {
       enqueuePipeline: jest.fn().mockResolvedValue(undefined),
-      runInlineFallback: jest.fn()
+      runInlineFallback: jest.fn(),
+      runInlineFallbackAfter: jest.fn()
     };
     const prisma = {
       ingestionJob: {
@@ -35,6 +36,34 @@ describe("IngestionService", () => {
       jobType: "syncFixtures"
     });
     expect(queue.runInlineFallback).not.toHaveBeenCalled();
+    expect(queue.runInlineFallbackAfter).not.toHaveBeenCalled();
+  });
+
+  it("schedules delayed inline fallback for generatePredictions when queue accepts the run", async () => {
+    const queue = {
+      enqueuePipeline: jest.fn().mockResolvedValue(undefined),
+      runInlineFallback: jest.fn(),
+      runInlineFallbackAfter: jest.fn()
+    };
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job-1" }),
+        create: jest.fn()
+      },
+      ingestionJobRun: {
+        create: jest.fn().mockResolvedValue(makeRun("generatePredictions"))
+      }
+    };
+    const service = new IngestionService(prisma as any, queue as any, {} as any);
+
+    await service.run("generatePredictions");
+
+    expect(queue.enqueuePipeline).toHaveBeenCalledWith("generatePredictions", {
+      runId: "run-1",
+      jobType: "generatePredictions"
+    });
+    expect(queue.runInlineFallback).not.toHaveBeenCalled();
+    expect(queue.runInlineFallbackAfter).toHaveBeenCalledWith("run-1", "generatePredictions", 60000);
   });
 
   it("keeps inline fallback when enqueue fails", async () => {

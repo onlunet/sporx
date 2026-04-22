@@ -320,6 +320,18 @@ export class IngestionQueueService implements OnModuleDestroy {
     });
   }
 
+  runInlineFallbackAfter(runId: string, jobType: string, delayMs: number) {
+    const normalizedDelayMs = Number.isFinite(delayMs) ? Math.max(0, Math.trunc(delayMs)) : 0;
+    setTimeout(() => {
+      this.processRun(runId, jobType).catch((error) => {
+        this.logger.error(
+          `Delayed inline fallback failed for ${runId}`,
+          error instanceof Error ? error.stack : undefined
+        );
+      });
+    }, normalizedDelayMs);
+  }
+
   async onModuleDestroy() {
     if (this.worker) {
       const worker = this.worker;
