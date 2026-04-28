@@ -545,7 +545,7 @@ describe("PredictionsService", () => {
     const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
 
     expect(prisma.publishedPrediction.findMany).toHaveBeenCalled();
-    expect(prisma.prediction.findMany).toHaveBeenCalled();
+    expect(prisma.prediction.findMany).not.toHaveBeenCalled();
     expect(prisma.predictionRun.findMany).toHaveBeenCalled();
     expectNoQuarterScoreSelect(prisma.predictionRun.findMany.mock.calls[0][0].include.match.select);
     expect(items.length).toBeGreaterThan(0);
@@ -903,6 +903,73 @@ describe("PredictionsService", () => {
 
     const matchIds = Array.from(new Set(items.map((item) => (item as any).matchId)));
     expect(matchIds).toEqual(["match-completed"]);
+    expect(items.every((item) => (item as any).matchStatus === MatchStatus.finished)).toBe(true);
+  });
+
+  it("list endpoint falls back to prediction runs for finished feed when published rows are empty", async () => {
+    const finishedRun = {
+      ...createPredictionRunRow(),
+      matchId: "match-finished-run-1",
+      match: {
+        ...createPredictionRunRow().match,
+        status: MatchStatus.finished,
+        matchDateTimeUTC: new Date("2026-04-19T18:00:00.000Z"),
+        homeScore: 2,
+        awayScore: 1
+      }
+    };
+
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "match-finished-run-1",
+            matchDateTimeUTC: finishedRun.match.matchDateTimeUTC,
+            status: MatchStatus.finished,
+            homeScore: 2,
+            awayScore: 1,
+            halfTimeHomeScore: 1,
+            halfTimeAwayScore: 0,
+            homeTeam: { name: "Run A" },
+            awayTeam: { name: "Run B" },
+            league: { id: "league-run", name: "Run League", code: "RL" },
+            sport: { code: "football" }
+          }
+        ])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      predictionRun: {
+        findMany: jest.fn().mockResolvedValue([finishedRun])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "finished", sport: "football", take: 10 });
+
+    expect(prisma.predictionRun.findMany).toHaveBeenCalled();
+    expect(items.length).toBeGreaterThan(0);
+    expect((items[0] as any)?.matchId).toBe("match-finished-run-1");
+    expect((items[0] as any)?.sourceType).toBe("prediction_run_fallback");
     expect(items.every((item) => (item as any).matchStatus === MatchStatus.finished)).toBe(true);
   });
 
