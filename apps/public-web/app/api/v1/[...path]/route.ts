@@ -3,38 +3,69 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const RESTRICTED_PUBLIC_PROXY_ROOT_SEGMENTS = new Set(["admin", "security", "compliance", "internal"]);
+const UPSTREAM_TIMEOUT_MS = 4_000;
 
 function trimTrailingSlash(value: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
-function buildUpstreamCandidates() {
+function addUrlVariant(target: Set<string>, raw?: string) {
+  if (!raw) {
+    return;
+  }
+
+  const normalized = trimTrailingSlash(raw.trim());
+  if (normalized.length === 0) {
+    return;
+  }
+
+  if (normalized.startsWith("http://")) {
+    target.add(normalized);
+    target.add(`https://${normalized.slice("http://".length)}`);
+    return;
+  }
+
+  if (normalized.startsWith("https://")) {
+    target.add(normalized);
+    target.add(`http://${normalized.slice("https://".length)}`);
+    return;
+  }
+
+  target.add(normalized);
+}
+
+function extractSslipIp(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/(\d+\.\d+\.\d+\.\d+)\.sslip\.io/i);
+  return match ? match[1] : null;
+}
+
+function buildUpstreamCandidates(request?: NextRequest) {
   const rawCandidates = [
     process.env.INTERNAL_API_URL,
     process.env.API_URL,
     process.env.NEXT_PUBLIC_API_URL,
+    process.env.PUBLIC_WEB_URL,
     "http://localhost:4000"
   ];
 
   const unique = new Set<string>();
   for (const raw of rawCandidates) {
-    if (!raw) {
-      continue;
+    addUrlVariant(unique, raw);
+
+    const sslipIp = extractSslipIp(raw);
+    if (sslipIp) {
+      addUrlVariant(unique, `http://${sslipIp}:8000`);
+      addUrlVariant(unique, `https://${sslipIp}:8000`);
     }
-    const normalized = trimTrailingSlash(raw.trim());
-    if (normalized.length > 0) {
-      if (normalized.startsWith("http://")) {
-        unique.add(`https://${normalized.slice("http://".length)}`);
-        unique.add(normalized);
-        continue;
-      }
-      if (normalized.startsWith("https://")) {
-        unique.add(normalized);
-        unique.add(`http://${normalized.slice("https://".length)}`);
-        continue;
-      }
-      unique.add(normalized);
-    }
+  }
+
+  const requestSslipIp = extractSslipIp(request?.headers.get("host"));
+  if (requestSslipIp) {
+    addUrlVariant(unique, `http://${requestSslipIp}:8000`);
+    addUrlVariant(unique, `https://${requestSslipIp}:8000`);
   }
 
   return Array.from(unique);
@@ -96,7 +127,7 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
 
   const incomingPathname = `/api/v1/${pathParts.join("/")}`;
   const incomingSearch = request.nextUrl.search ?? "";
-  const upstreamCandidates = buildUpstreamCandidates();
+  const upstreamCandidates = buildUpstreamCandidates(request);
 
   const proxyHeaders = new Headers(request.headers);
   proxyHeaders.delete("host");
@@ -118,13 +149,16 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
   for (let index = 0; index < upstreamCandidates.length; index += 1) {
     const baseUrl = upstreamCandidates[index] as string;
     const targetUrl = buildTargetUrl(baseUrl, incomingPathname, incomingSearch);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
     try {
       const upstreamResponse = await fetch(targetUrl, {
         method: request.method,
         headers: proxyHeaders,
         body,
         cache: "no-store",
-        redirect: "manual"
+        redirect: "manual",
+        signal: controller.signal
       });
 
       const payload = await upstreamResponse.text();
@@ -156,6 +190,8 @@ async function proxyRequest(request: NextRequest, pathParts: string[]) {
       });
     } catch (error) {
       lastError = error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

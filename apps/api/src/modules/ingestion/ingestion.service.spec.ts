@@ -138,4 +138,41 @@ describe("IngestionService", () => {
 
     await expect(service.listRuns()).resolves.toEqual([]);
   });
+
+  it("extends halftime backfill with detail enrichment run", async () => {
+    const queue = {
+      enqueuePipeline: jest.fn().mockResolvedValue(undefined),
+      runInlineFallback: jest.fn(),
+      runInlineFallbackAfter: jest.fn()
+    };
+    const prisma = {
+      ingestionJob: {
+        findFirst: jest.fn().mockResolvedValue({ id: "job-1" }),
+        create: jest.fn()
+      },
+      ingestionJobRun: {
+        create: jest
+          .fn()
+          .mockResolvedValueOnce(makeRun("syncResults"))
+          .mockResolvedValueOnce(makeRun("enrichMatchDetails"))
+      }
+    };
+    const providerIngestionService = {
+      rewindFootballResultsCheckpoints: jest.fn().mockResolvedValue({ rewound: 42 })
+    };
+
+    const service = new IngestionService(prisma as any, queue as any, providerIngestionService as any);
+    const result = await service.runHalfTimeBackfill(30);
+
+    expect(providerIngestionService.rewindFootballResultsCheckpoints).toHaveBeenCalledWith(30);
+    expect(queue.enqueuePipeline).toHaveBeenNthCalledWith(1, "syncResults", {
+      runId: "run-1",
+      jobType: "syncResults"
+    });
+    expect(queue.enqueuePipeline).toHaveBeenNthCalledWith(2, "enrichMatchDetails", {
+      runId: "run-1",
+      jobType: "enrichMatchDetails"
+    });
+    expect(result).toHaveProperty("detailEnrichment");
+  });
 });

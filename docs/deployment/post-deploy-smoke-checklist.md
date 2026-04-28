@@ -22,6 +22,8 @@ powershell -ExecutionPolicy Bypass -File scripts/ops/smoke-live.ps1 `
 - Admin root, health, login ve kritik route durum kodlari
 - Public panel ve futbol/basketbol tahminler route durum kodlari
 - API health endpoint
+- API health sadece `200` degil, JSON payload olarak `status: "ok"` ve `service: "api"` donmeli
+- Public proxy uzerinden `/api/v1/matches` ve `/api/v1/predictions` timeout/404 vermemeli
 - Public predictions envelope (`success`) ve veri sayisi
 - Takim isimlerinin bos olup olmadigi
 - "gecici tahmin" fallback gorunurlugu (uyari olarak)

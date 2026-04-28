@@ -219,8 +219,10 @@ export class IngestionService {
   async runHalfTimeBackfill(daysBack?: number) {
     const rewind = await this.providerIngestionService.rewindFootballResultsCheckpoints(daysBack ?? 180);
     const run = await this.run("syncResults");
+    const detailEnrichment = await this.run("enrichMatchDetails");
     return {
       ...run,
+      detailEnrichment,
       backfill: rewind
     };
   }

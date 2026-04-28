@@ -163,6 +163,7 @@ function shortModelId(modelId: string): string {
 
 type CompletedPredictionsAnalyticsProps = {
   sport?: SportScope;
+  initialItems?: MatchPredictionItem[];
 };
 
 function toPercent(value: number, digits = 1) {
@@ -172,8 +173,8 @@ function toPercent(value: number, digits = 1) {
   return value.toFixed(digits);
 }
 
-export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAnalyticsProps = {}) {
-  const finishedQuery = usePredictionsByType("all", "finished", 180, sport);
+export function CompletedPredictionsAnalytics({ sport, initialItems }: CompletedPredictionsAnalyticsProps = {}) {
+  const finishedQuery = usePredictionsByType("all", "finished", 180, sport, undefined, initialItems);
 
   const playedItems = useMemo(() => {
     const sortRows = (rows: MatchPredictionItem[]) =>
@@ -589,6 +590,11 @@ export function CompletedPredictionsAnalytics({ sport }: CompletedPredictionsAna
 
       <section className="rounded-2xl border border-white/10 bg-surface/50 p-4">
         <h2 className="text-lg font-semibold text-white">Sonuçlanan Tahmin Listesi</h2>
+        {playedItems.length === 0 ? (
+          <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-100">
+            API su an sonuclanmis tahmin dondurmuyor. Mac sonu backfill ve reconcile tamamlandiginda bu tablo otomatik dolacak.
+          </div>
+        ) : null}
         <div className="mt-3 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>

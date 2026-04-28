@@ -31,4 +31,9 @@ export class PredictionsController {
   highConfidence() {
     return this.predictionsService.highConfidence();
   }
+
+  @Get("coupons")
+  coupons() {
+    return this.predictionsService.listFootballCoupons();
+  }
 }

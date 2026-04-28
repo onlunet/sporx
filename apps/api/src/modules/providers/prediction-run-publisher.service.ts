@@ -569,11 +569,12 @@ export class PredictionRunPublisherService {
                   ...(line === null ? { line: null } : { line })
                 },
                 orderBy: { collectedAt: "desc" },
-                select: { id: true, normalizedProb: true }
+                select: { id: true, normalizedProb: true, decimalOdds: true }
               })
             ]);
 
             const marketProbability = oddsSnapshot?.normalizedProb ?? null;
+            const offeredOdds = oddsSnapshot?.decimalOdds ?? null;
             const edge = marketProbability !== null ? Number((probability - marketProbability).toFixed(6)) : null;
             const fairOdds = Number((1 / probability).toFixed(6));
             const normalizedSelection = (calibrationSelection ?? "default").trim().toLowerCase();
@@ -785,6 +786,7 @@ export class PredictionRunPublisherService {
               metaModelRunId,
               publishedPredictionId,
               fairOdds,
+              offeredOdds,
               marketProbability,
               edge,
               decisionStatus: selectionDecision.status,
@@ -827,7 +829,7 @@ export class PredictionRunPublisherService {
             publishDecisionStatus: (result.decisionStatus as PublishDecisionStatus) ?? PublishDecisionStatus.ABSTAINED,
             calibratedProbability: probability,
             fairOdds: result.fairOdds ?? null,
-            offeredOdds: result.marketProbability ?? null,
+            offeredOdds: result.offeredOdds ?? null,
             edge: result.edge ?? null,
             confidence,
             publishScore: refinement.publishScore,

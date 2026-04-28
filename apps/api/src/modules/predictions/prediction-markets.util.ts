@@ -71,6 +71,18 @@ export type ExpandedPredictionItem = {
   supportingSignals: Array<{ key: string; label: string; detail?: string; value?: string }>;
   contradictionSignals: Array<{ key: string; label: string; detail?: string; value?: string }>;
   riskFlags: ApiRiskFlag[];
+  fairOdds?: number | null;
+  offeredOdds?: number | null;
+  edge?: number | null;
+  bookmaker?: string | null;
+  oddsProvider?: string | null;
+  marketProbability?: number | null;
+  selectionScore?: number | null;
+  publishScore?: number | null;
+  volatilityScore?: number | null;
+  providerDisagreement?: number | null;
+  strategyProfile?: string | null;
+  riskTier?: string | null;
   confidenceScore: number;
   summary: string;
   avoidReason: string | null;

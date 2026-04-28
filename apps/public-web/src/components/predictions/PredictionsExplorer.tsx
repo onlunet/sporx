@@ -5,9 +5,12 @@ import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   MatchPredictionItem,
+  PredictionCoupon,
+  PredictionCouponResponse,
   PredictionType,
   predictionTypeLabel,
   predictionSelectionLabel,
+  usePredictionCoupons,
   usePredictionsByType,
   bestScorelineSummary,
   isCompletedMatchStatus,
@@ -271,6 +274,107 @@ function marketDirectionLabel(direction?: string) {
   return "yatay";
 }
 
+function formatOdds(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  return value.toFixed(2);
+}
+
+function formatEdge(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  const pct = Math.abs(value) * 100;
+  return `${value >= 0 ? "+" : "-"}%${pct.toFixed(1)}`;
+}
+
+function riskTierLabel(value?: string | null) {
+  if (value === "elite") {
+    return "En Güvenli";
+  }
+  if (value === "low") {
+    return "Düşük Risk";
+  }
+  if (value === "balanced") {
+    return "Dengeli";
+  }
+  if (value === "assertive") {
+    return "Agresif";
+  }
+  if (value === "high") {
+    return "Yüksek Risk";
+  }
+  return "Belirsiz";
+}
+
+function riskTierClass(value?: string | null) {
+  if (value === "elite") {
+    return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
+  }
+  if (value === "low") {
+    return "border-cyan-400/30 bg-cyan-400/10 text-cyan-100";
+  }
+  if (value === "balanced") {
+    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+  }
+  if (value === "assertive") {
+    return "border-orange-400/30 bg-orange-400/10 text-orange-100";
+  }
+  return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+}
+
+function CouponCard({ coupon }: { coupon: PredictionCoupon }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500">{coupon.label}</p>
+          <h3 className="mt-1 text-lg font-display font-semibold text-white">{coupon.riskLabel ?? riskTierLabel(coupon.riskLevel)}</h3>
+          {coupon.description ? <p className="mt-1 text-sm text-slate-400">{coupon.description}</p> : null}
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${riskTierClass(coupon.riskLevel)}`}>
+          {coupon.riskLabel ?? riskTierLabel(coupon.riskLevel)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs text-slate-300 md:grid-cols-3">
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+          <span className="text-slate-500">Toplam Oran</span>
+          <p className="mt-1 text-lg font-semibold text-white">{formatOdds(coupon.combinedOdds)}</p>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+          <span className="text-slate-500">Ort. Güven</span>
+          <p className="mt-1 text-lg font-semibold text-white">{asPct(coupon.averageConfidence)}</p>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+          <span className="text-slate-500">Ort. Edge</span>
+          <p className="mt-1 text-lg font-semibold text-white">{formatEdge(coupon.averageEdge)}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {coupon.legs.map((leg, index) => (
+          <div key={`${coupon.key}-${leg.matchId}-${index}`} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-sm text-slate-200">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-medium text-white">{leg.homeTeam} - {leg.awayTeam}</p>
+                <p className="text-xs text-slate-400">
+                  {leg.selectionLabel} | {predictionTypeLabel(leg.predictionType)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-semibold text-neon-amber">{formatOdds(leg.offeredOdds)}</p>
+                <p className="text-[11px] text-slate-500">{leg.bookmaker ?? leg.oddsProvider ?? "Odds"}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; index: number; sport?: SportScope }) {
   const topScore = bestScorelineSummary(item);
   const probs = probabilitySummary(item, sport);
@@ -406,6 +510,23 @@ function PredictionCard({ item, index, sport }: { item: MatchPredictionItem; ind
             </div>
           ) : null}
 
+          {(item.offeredOdds || item.fairOdds || item.edge || item.riskTier) ? (
+            <div className="mb-3 grid gap-2 rounded-lg border border-neon-amber/15 bg-neon-amber/5 p-3 text-xs text-slate-200 md:grid-cols-4">
+              <span>
+                Oran: <span className="text-slate-100">{formatOdds(item.offeredOdds)}</span>
+              </span>
+              <span>
+                Adil Oran: <span className="text-slate-100">{formatOdds(item.fairOdds)}</span>
+              </span>
+              <span>
+                Edge: <span className="text-slate-100">{formatEdge(item.edge)}</span>
+              </span>
+              <span>
+                Risk: <span className="text-slate-100">{riskTierLabel(item.riskTier)}</span>
+              </span>
+            </div>
+          ) : null}
+
           {item.marketAnalysis ? (
             <div className="mb-3 rounded-lg border border-neon-purple/20 bg-neon-purple/5 p-3 text-xs text-slate-200">
               <p className="font-medium text-neon-purple">Piyasa Karşılaştırması</p>
@@ -484,18 +605,35 @@ type PredictionsExplorerProps = {
   sport?: SportScope;
   title?: string;
   description?: string;
+  initialItems?: MatchPredictionItem[];
+  initialCoupons?: PredictionCouponResponse;
 };
 
-export function PredictionsExplorer({ scope = "upcoming", sport, title, description }: PredictionsExplorerProps) {
+export function PredictionsExplorer({
+  scope = "upcoming",
+  sport,
+  title,
+  description,
+  initialItems,
+  initialCoupons
+}: PredictionsExplorerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterOption>("all");
   const [homeTeamQuery, setHomeTeamQuery] = useState("");
   const [awayTeamQuery, setAwayTeamQuery] = useState("");
   const [selectedMatchId, setSelectedMatchId] = useState("");
   const filters = useMemo(() => getFilters(sport), [sport]);
   const completedLink = sport === "basketball" ? "/basketbol/sonuclar" : "/futbol/sonuclar";
-  const requestedStatus = scope === "completed" ? "finished" : "scheduled,live";
+  const requestedStatus = scope === "completed" ? "finished" : sport === "football" ? undefined : "scheduled,live";
   const requestedTake = scope === "completed" ? 260 : 120;
-  const query = usePredictionsByType(activeFilter, requestedStatus, requestedTake, sport);
+  const query = usePredictionsByType(
+    activeFilter,
+    requestedStatus,
+    requestedTake,
+    sport,
+    undefined,
+    activeFilter === "all" ? initialItems : undefined
+  );
+  const couponQuery = usePredictionCoupons(sport === "football" && scope === "upcoming", initialCoupons);
   const sourceItems = query.data;
   const items = useMemo(() => {
     const sorted = sortPredictions(sourceItems ?? [], scope);
@@ -673,6 +811,28 @@ export function PredictionsExplorer({ scope = "upcoming", sport, title, descript
           )}
         </div>
       </div>
+
+      {sport === "football" && scope === "upcoming" && (couponQuery.data?.coupons?.length ?? 0) > 0 ? (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-neon-amber">5 Kupon Paketi</p>
+              <h2 className="mt-1 text-2xl font-display font-semibold text-white">Güven seviyesine göre kuponlar</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                En güvenliden yüksek riskliye doğru 5 farklı kupon. Her kupon 5 maç içerir ve canlı oranla üretilir.
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-right text-xs text-slate-400">
+              <p>Havuzdaki maç</p>
+              <p className="mt-1 text-lg font-semibold text-white">{couponQuery.data?.candidateCount ?? 0}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {couponQuery.data?.coupons.map((coupon) => <CouponCard key={coupon.key} coupon={coupon} />)}
+          </div>
+        </section>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {filters.map((filter) => {

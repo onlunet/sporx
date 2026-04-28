@@ -61,6 +61,20 @@ function asPct(value?: number | null) {
   return `%${Math.round(value * 100)}`;
 }
 
+function formatOdds(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  return value.toFixed(2);
+}
+
+function formatEdge(value?: number | null) {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "-";
+  }
+  return `${value >= 0 ? "+" : "-"}%${(Math.abs(value) * 100).toFixed(1)}`;
+}
+
 export function MatchPredictionExperience({ matchId, initialPrediction, sport = "football" }: MatchPredictionExperienceProps) {
   const initial = initialPrediction ? [initialPrediction] : undefined;
   const predictionsQuery = useMatchPredictions(matchId, initial);
@@ -145,6 +159,17 @@ export function MatchPredictionExperience({ matchId, initialPrediction, sport = 
               <PredictionConfidenceBadge prediction={generalPrediction} />
             </div>
             {generalSelectionLabel ? <p className="text-xs text-neon-amber">Tahmin: {generalSelectionLabel}</p> : null}
+
+            {(generalPrediction?.offeredOdds || generalPrediction?.fairOdds || generalPrediction?.edge || generalPrediction?.riskTier) ? (
+              <div className="rounded-md border border-neon-amber/30 bg-neon-amber/10 p-2 text-xs text-slate-200">
+                <div className="grid gap-1 md:grid-cols-2">
+                  <span>Bahis oranı: {formatOdds(generalPrediction?.offeredOdds)}</span>
+                  <span>Adil oran: {formatOdds(generalPrediction?.fairOdds)}</span>
+                  <span>Edge: {formatEdge(generalPrediction?.edge)}</span>
+                  <span>Risk: {generalPrediction?.riskTier ?? "-"}</span>
+                </div>
+              </div>
+            ) : null}
 
             <div className={`grid grid-cols-1 gap-3 ${showOvertime || sport === "football" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
               <ProbabilityRow label={sport === "basketball" ? "Ev Kazanır" : "Ev Sahibi"} value={generalPrediction?.probabilities?.home} />

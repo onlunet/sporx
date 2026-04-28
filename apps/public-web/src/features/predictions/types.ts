@@ -139,6 +139,18 @@ export type MatchPredictionItem = {
   movementSummary?: PredictionMovementSummary;
   recommendation?: PredictionRecommendation;
   riskFlags?: RiskFlag[];
+  fairOdds?: number | null;
+  offeredOdds?: number | null;
+  edge?: number | null;
+  bookmaker?: string | null;
+  oddsProvider?: string | null;
+  marketProbability?: number | null;
+  selectionScore?: number | null;
+  publishScore?: number | null;
+  volatilityScore?: number | null;
+  providerDisagreement?: number | null;
+  strategyProfile?: string | null;
+  riskTier?: string | null;
   confidenceScore?: number;
   summary?: string;
   avoidReason?: string | null;
@@ -152,6 +164,44 @@ export type MatchPredictionItem = {
   homeTeam?: string;
   awayTeam?: string;
   matchDateTimeUTC?: string;
+};
+
+export type PredictionCouponLeg = {
+  matchId: string;
+  leagueName?: string | null;
+  homeTeam?: string | null;
+  awayTeam?: string | null;
+  matchDateTimeUTC?: string | null;
+  predictionType: PredictionType;
+  selectionLabel?: string | null;
+  confidenceScore?: number | null;
+  fairOdds?: number | null;
+  offeredOdds?: number | null;
+  edge?: number | null;
+  bookmaker?: string | null;
+  oddsProvider?: string | null;
+  marketProbability?: number | null;
+  riskTier?: string | null;
+  qualityScore?: number | null;
+};
+
+export type PredictionCoupon = {
+  key: string;
+  label: string;
+  riskLevel: string;
+  riskLabel?: string;
+  description?: string;
+  combinedOdds?: number | null;
+  averageConfidence?: number | null;
+  averageEdge?: number | null;
+  legs: PredictionCouponLeg[];
+};
+
+export type PredictionCouponResponse = {
+  generatedAt?: string;
+  sport?: string;
+  candidateCount?: number;
+  coupons: PredictionCoupon[];
 };
 
 export type MatchPredictionGroup = Partial<Record<PredictionType, MatchPredictionItem[]>>;

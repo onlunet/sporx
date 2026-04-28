@@ -28,6 +28,15 @@ type ListByMatchParams = {
   includeMarketAnalysis?: boolean;
 };
 
+type CouponProfile = {
+  key: string;
+  label: string;
+  description: string;
+  minConfidence: number;
+  maxOfferedOdds: number;
+  sortMode: "safety" | "balanced" | "value" | "risk";
+};
+
 type MatchStubRecord = {
   id: string;
   matchDateTimeUTC: Date;
@@ -321,11 +330,31 @@ type PublishedPredictionRecord = {
       createdAt: Date;
     }>;
     probability: number;
+    fairOdds: number | null;
+    edge: number | null;
     confidence: number;
     riskFlagsJson: unknown;
     explanationJson: unknown;
+    oddsSnapshot?: {
+      decimalOdds: number;
+      normalizedProb: number;
+      bookmaker: string;
+      provider: string | null;
+      selection: string;
+    } | null;
     createdAt: Date;
   };
+  publishDecision?: {
+    status: PublishDecisionStatus;
+    selectionScore: number;
+    confidence: number;
+    publishScore: number;
+    fairOdds: number | null;
+    edge: number | null;
+    volatilityScore: number | null;
+    providerDisagreement: number | null;
+    strategyProfile: string;
+  } | null;
   match: {
     sport: { code: string } | null;
     status: MatchStatus;
@@ -358,6 +387,18 @@ type LegacyPredictionRecord = {
   confidenceScore: number;
   summary: string;
   riskFlags: unknown;
+  fairOdds?: number | null;
+  offeredOdds?: number | null;
+  edge?: number | null;
+  bookmaker?: string | null;
+  oddsProvider?: string | null;
+  marketProbability?: number | null;
+  selectionScore?: number | null;
+  publishScore?: number | null;
+  volatilityScore?: number | null;
+  providerDisagreement?: number | null;
+  strategyProfile?: string | null;
+  riskTier?: string | null;
   avoidReason: string | null;
   updatedAt: Date;
   match: {
@@ -399,6 +440,18 @@ type NormalizedPredictionRow = {
   confidenceScore: number;
   summary: string;
   riskFlags: unknown;
+  fairOdds: number | null;
+  offeredOdds: number | null;
+  edge: number | null;
+  bookmaker: string | null;
+  oddsProvider: string | null;
+  marketProbability: number | null;
+  selectionScore: number | null;
+  publishScore: number | null;
+  volatilityScore: number | null;
+  providerDisagreement: number | null;
+  strategyProfile: string | null;
+  riskTier: string | null;
   avoidReason: string | null;
   updatedAt: Date;
   match: LegacyPredictionRecord["match"];
@@ -521,10 +574,34 @@ const PUBLISHED_PREDICTION_INCLUDE = {
         take: 1
       },
       probability: true,
+      fairOdds: true,
+      edge: true,
       confidence: true,
       riskFlagsJson: true,
       explanationJson: true,
+      oddsSnapshot: {
+        select: {
+          decimalOdds: true,
+          normalizedProb: true,
+          bookmaker: true,
+          provider: true,
+          selection: true
+        }
+      },
       createdAt: true
+    }
+  },
+  publishDecision: {
+    select: {
+      status: true,
+      selectionScore: true,
+      confidence: true,
+      publishScore: true,
+      fairOdds: true,
+      edge: true,
+      volatilityScore: true,
+      providerDisagreement: true,
+      strategyProfile: true
     }
   },
   match: {
@@ -675,6 +752,17 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
       ? summaryFromExplanation
       : `${row.match.homeTeam.name} - ${row.match.awayTeam.name}: published ${row.market} tahmini.`;
   const summarySafe = normalizeFallbackSummary(summary, row.match, calibratedProbabilities ?? probabilities);
+  const fairOdds = row.predictionRun.fairOdds ?? row.publishDecision?.fairOdds ?? null;
+  const offeredOdds = row.predictionRun.oddsSnapshot?.decimalOdds ?? null;
+  const edge = row.predictionRun.edge ?? row.publishDecision?.edge ?? null;
+  const bookmaker = row.predictionRun.oddsSnapshot?.bookmaker ?? null;
+  const oddsProvider = row.predictionRun.oddsSnapshot?.provider ?? null;
+  const marketProbability = row.predictionRun.oddsSnapshot?.normalizedProb ?? null;
+  const selectionScore = row.publishDecision?.selectionScore ?? null;
+  const publishScore = row.publishDecision?.publishScore ?? null;
+  const volatilityScore = row.publishDecision?.volatilityScore ?? null;
+  const providerDisagreement = row.publishDecision?.providerDisagreement ?? null;
+  const strategyProfile = row.publishDecision?.strategyProfile ?? null;
 
   return {
     matchId: row.matchId,
@@ -693,6 +781,25 @@ function normalizePublishedRow(row: PublishedPredictionRecord) {
     confidenceScore: row.predictionRun.confidence,
     summary: summarySafe,
     riskFlags: row.predictionRun.riskFlagsJson,
+    fairOdds,
+    offeredOdds,
+    edge,
+    bookmaker,
+    oddsProvider,
+    marketProbability,
+    selectionScore,
+    publishScore,
+    volatilityScore,
+    providerDisagreement,
+    strategyProfile,
+    riskTier: deriveRiskTier({
+      confidence: row.predictionRun.confidence,
+      selectionScore,
+      volatilityScore,
+      providerDisagreement,
+      edge,
+      riskFlags: row.predictionRun.riskFlagsJson
+    }),
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.publishedAt ?? row.predictionRun.createdAt,
     match: {
@@ -764,6 +871,25 @@ function normalizeLegacyRow(row: LegacyPredictionRecord) {
     confidenceScore: row.confidenceScore,
     summary: normalizeFallbackSummary(row.summary, row.match, probabilitySource),
     riskFlags: row.riskFlags,
+    fairOdds: null,
+    offeredOdds: null,
+    edge: null,
+    bookmaker: null,
+    oddsProvider: null,
+    marketProbability: null,
+    selectionScore: null,
+    publishScore: null,
+    volatilityScore: null,
+    providerDisagreement: null,
+    strategyProfile: null,
+    riskTier: deriveRiskTier({
+      confidence: row.confidenceScore,
+      selectionScore: null,
+      volatilityScore: null,
+      providerDisagreement: null,
+      edge: null,
+      riskFlags: row.riskFlags
+    }),
     avoidReason: row.avoidReason,
     updatedAt: row.updatedAt,
     match: {
@@ -812,6 +938,25 @@ function normalizePredictionRunFallbackRow(row: PredictionRunFallbackRecord) {
     confidenceScore: row.confidence,
     summary: summarySafe,
     riskFlags: row.riskFlagsJson,
+    fairOdds: null,
+    offeredOdds: null,
+    edge: null,
+    bookmaker: null,
+    oddsProvider: null,
+    marketProbability: null,
+    selectionScore: null,
+    publishScore: null,
+    volatilityScore: null,
+    providerDisagreement: null,
+    strategyProfile: null,
+    riskTier: deriveRiskTier({
+      confidence: row.confidence,
+      selectionScore: null,
+      volatilityScore: null,
+      providerDisagreement: null,
+      edge: null,
+      riskFlags: row.riskFlagsJson
+    }),
     avoidReason: avoidReasonFromExplanation,
     updatedAt: row.createdAt,
     match: {
@@ -838,6 +983,18 @@ function buildFallbackExpandedItem(input: {
   confidenceScore: number;
   summary: string;
   riskFlags: unknown;
+  fairOdds?: number | null;
+  offeredOdds?: number | null;
+  edge?: number | null;
+  bookmaker?: string | null;
+  oddsProvider?: string | null;
+  marketProbability?: number | null;
+  selectionScore?: number | null;
+  publishScore?: number | null;
+  volatilityScore?: number | null;
+  providerDisagreement?: number | null;
+  strategyProfile?: string | null;
+  riskTier?: string | null;
   avoidReason: string | null;
   updatedAt: Date;
   homeTeam: string;
@@ -877,6 +1034,27 @@ function buildFallbackExpandedItem(input: {
     supportingSignals: [],
     contradictionSignals: [],
     riskFlags: normalizeRiskFlags(input.riskFlags),
+    fairOdds: input.fairOdds ?? null,
+    offeredOdds: input.offeredOdds ?? null,
+    edge: input.edge ?? null,
+    bookmaker: input.bookmaker ?? null,
+    oddsProvider: input.oddsProvider ?? null,
+    marketProbability: input.marketProbability ?? null,
+    selectionScore: input.selectionScore ?? null,
+    publishScore: input.publishScore ?? null,
+    volatilityScore: input.volatilityScore ?? null,
+    providerDisagreement: input.providerDisagreement ?? null,
+    strategyProfile: input.strategyProfile ?? null,
+    riskTier:
+      input.riskTier ??
+      deriveRiskTier({
+        confidence: input.confidenceScore,
+        selectionScore: input.selectionScore ?? null,
+        volatilityScore: input.volatilityScore ?? null,
+        providerDisagreement: input.providerDisagreement ?? null,
+        edge: input.edge ?? null,
+        riskFlags: input.riskFlags
+      }),
     confidenceScore: Number.isFinite(input.confidenceScore) ? input.confidenceScore : 0.45,
     summary: input.summary || `${input.homeTeam} - ${input.awayTeam} maci icin fallback tahmin uretildi.`,
     avoidReason: input.avoidReason,
@@ -899,6 +1077,107 @@ function buildFallbackExpandedItem(input: {
   };
   return item;
 }
+
+function clampUnit(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function riskFlagPenalty(riskFlags: unknown) {
+  return normalizeRiskFlags(riskFlags).reduce((total, flag) => {
+    if (flag.severity === "critical") {
+      return total + 0.22;
+    }
+    if (flag.severity === "high") {
+      return total + 0.12;
+    }
+    if (flag.severity === "medium") {
+      return total + 0.06;
+    }
+    if (flag.severity === "low") {
+      return total + 0.03;
+    }
+    return total + 0.02;
+  }, 0);
+}
+
+function deriveRiskTier(input: {
+  confidence: number | null | undefined;
+  selectionScore: number | null | undefined;
+  volatilityScore: number | null | undefined;
+  providerDisagreement: number | null | undefined;
+  edge: number | null | undefined;
+  riskFlags: unknown;
+}) {
+  const confidence = clampUnit(input.confidence ?? 0);
+  const selectionScore = clampUnit(input.selectionScore ?? confidence);
+  const volatility = clampUnit(input.volatilityScore ?? 0);
+  const disagreement = clampUnit(input.providerDisagreement ?? 0);
+  const edgeBoost = clampUnit(((input.edge ?? 0) + 0.08) / 0.2);
+  const penalty = clampUnit(
+    volatility * 0.38 + disagreement * 0.28 + riskFlagPenalty(input.riskFlags) - edgeBoost * 0.08
+  );
+  const reliability = clampUnit(confidence * 0.58 + selectionScore * 0.32 + edgeBoost * 0.1 - penalty * 0.35);
+
+  if (reliability >= 0.8 && penalty <= 0.18) {
+    return "elite";
+  }
+  if (reliability >= 0.68 && penalty <= 0.28) {
+    return "low";
+  }
+  if (reliability >= 0.56 && penalty <= 0.4) {
+    return "balanced";
+  }
+  if (reliability >= 0.46) {
+    return "assertive";
+  }
+  return "high";
+}
+
+const COUPON_PROFILES: CouponProfile[] = [
+  {
+    key: "elite",
+    label: "Kupon 1",
+    description: "En yüksek güven, düşük oran, kontrollü seçim seti.",
+    minConfidence: 0.7,
+    maxOfferedOdds: 1.95,
+    sortMode: "safety"
+  },
+  {
+    key: "low",
+    label: "Kupon 2",
+    description: "Düşük riskli ama oranı biraz daha canlı seçimler.",
+    minConfidence: 0.66,
+    maxOfferedOdds: 2.2,
+    sortMode: "safety"
+  },
+  {
+    key: "balanced",
+    label: "Kupon 3",
+    description: "Güven ve değer dengesini koruyan ana kupon.",
+    minConfidence: 0.6,
+    maxOfferedOdds: 2.55,
+    sortMode: "balanced"
+  },
+  {
+    key: "assertive",
+    label: "Kupon 4",
+    description: "Daha yüksek edge arayan agresif kombinasyon.",
+    minConfidence: 0.55,
+    maxOfferedOdds: 3.2,
+    sortMode: "value"
+  },
+  {
+    key: "high",
+    label: "Kupon 5",
+    description: "Yüksek risk, yüksek getiri potansiyelli seçim sepeti.",
+    minConfidence: 0.5,
+    maxOfferedOdds: 8,
+    sortMode: "risk"
+  }
+];
 
 async function queryWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return await Promise.race<T>([
@@ -1203,6 +1482,25 @@ export class PredictionsService {
         confidenceScore: confidence,
         summary,
         riskFlags,
+        fairOdds: null,
+        offeredOdds: null,
+        edge: null,
+        bookmaker: null,
+        oddsProvider: null,
+        marketProbability: null,
+        selectionScore: null,
+        publishScore: null,
+        volatilityScore: null,
+        providerDisagreement: null,
+        strategyProfile: null,
+        riskTier: deriveRiskTier({
+          confidence,
+          selectionScore: null,
+          volatilityScore: null,
+          providerDisagreement: null,
+          edge: null,
+          riskFlags
+        }),
         avoidReason: null,
         updatedAt: new Date(),
         match: {
@@ -1375,7 +1673,19 @@ export class PredictionsService {
       cutoffAt: source.cutoffAt ? source.cutoffAt.toISOString() : null,
       featureCoverage: source.featureCoverage ?? null,
       confidenceDiagnostics: source.confidenceDiagnostics ?? null,
-      calibrationDiagnostics: source.calibrationDiagnostics ?? null
+      calibrationDiagnostics: source.calibrationDiagnostics ?? null,
+      fairOdds: source.fairOdds,
+      offeredOdds: source.offeredOdds,
+      edge: source.edge,
+      bookmaker: source.bookmaker,
+      oddsProvider: source.oddsProvider,
+      marketProbability: source.marketProbability,
+      selectionScore: source.selectionScore,
+      publishScore: source.publishScore,
+      volatilityScore: source.volatilityScore,
+      providerDisagreement: source.providerDisagreement,
+      strategyProfile: source.strategyProfile,
+      riskTier: source.riskTier
     };
   }
 
@@ -1509,6 +1819,18 @@ export class PredictionsService {
             confidenceScore: item.confidenceScore,
             summary: item.summary,
             riskFlags: item.riskFlags,
+            fairOdds: item.fairOdds,
+            offeredOdds: item.offeredOdds,
+            edge: item.edge,
+            bookmaker: item.bookmaker,
+            oddsProvider: item.oddsProvider,
+            marketProbability: item.marketProbability,
+            selectionScore: item.selectionScore,
+            publishScore: item.publishScore,
+            volatilityScore: item.volatilityScore,
+            providerDisagreement: item.providerDisagreement,
+            strategyProfile: item.strategyProfile,
+            riskTier: item.riskTier,
             avoidReason: item.avoidReason,
             updatedAt: safeUpdatedAt,
             homeTeam: homeTeamName,
@@ -1545,7 +1867,7 @@ export class PredictionsService {
     const lineKey = line === undefined ? "all" : String(line);
     const takeKey = String(take);
     const analysisKey = includeMarketAnalysis ? "market" : "nomarket";
-    const cacheKey = `predictions:list:v18:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
+    const cacheKey = `predictions:list:v19:public:${sportKey}:${statusKey}:${typeKey}:${lineKey}:${takeKey}:${analysisKey}`;
     const stableCacheKey = `${cacheKey}:stable`;
     const cached = await this.cache.get<unknown[]>(cacheKey);
     if (cached) {
@@ -1911,6 +2233,202 @@ export class PredictionsService {
     const deduped = Array.from(uniqueByMarket.values());
     const enriched = await this.oddsService.attachMarketAnalysis(deduped, includeMarketAnalysis, line).catch(() => deduped);
     return this.sanitizeExpandedSummaries(enriched);
+  }
+
+  private predictionQualityScore(item: ExpandedPredictionItem) {
+    const confidence = clampUnit(item.confidenceScore ?? 0);
+    const selectionScore = clampUnit(item.selectionScore ?? confidence);
+    const publishScore = clampUnit(item.publishScore ?? selectionScore);
+    const edgeScore = clampUnit(((item.edge ?? 0) + 0.05) / 0.18);
+    const oddsScore = clampUnit(((item.offeredOdds ?? 1) - 1.2) / 2.8);
+    const volatilityPenalty = clampUnit(item.volatilityScore ?? 0);
+    const disagreementPenalty = clampUnit(item.providerDisagreement ?? 0);
+    const riskPenalty = clampUnit(riskFlagPenalty(item.riskFlags));
+
+    return Number(
+      (
+        confidence * 0.4 +
+        selectionScore * 0.24 +
+        publishScore * 0.12 +
+        edgeScore * 0.16 +
+        oddsScore * 0.08 -
+        volatilityPenalty * 0.1 -
+        disagreementPenalty * 0.08 -
+        riskPenalty * 0.08
+      ).toFixed(4)
+    );
+  }
+
+  private sortCouponPool(
+    items: ExpandedPredictionItem[],
+    profile: CouponProfile
+  ) {
+    const scoreFor = (item: ExpandedPredictionItem) => this.predictionQualityScore(item);
+    return items.slice().sort((left, right) => {
+      const scoreDiff = scoreFor(right) - scoreFor(left);
+      if (profile.sortMode === "safety") {
+        if (Math.abs(scoreDiff) > 0.0001) {
+          return scoreDiff;
+        }
+        return (left.offeredOdds ?? Number.POSITIVE_INFINITY) - (right.offeredOdds ?? Number.POSITIVE_INFINITY);
+      }
+      if (profile.sortMode === "balanced") {
+        if (Math.abs(scoreDiff) > 0.0001) {
+          return scoreDiff;
+        }
+        return (right.edge ?? -1) - (left.edge ?? -1);
+      }
+      if (profile.sortMode === "value") {
+        const edgeDiff = (right.edge ?? -1) - (left.edge ?? -1);
+        if (Math.abs(edgeDiff) > 0.0001) {
+          return edgeDiff;
+        }
+        if (Math.abs(scoreDiff) > 0.0001) {
+          return scoreDiff;
+        }
+        return (right.offeredOdds ?? -1) - (left.offeredOdds ?? -1);
+      }
+      const offeredOddsDiff = (right.offeredOdds ?? -1) - (left.offeredOdds ?? -1);
+      if (Math.abs(offeredOddsDiff) > 0.0001) {
+        return offeredOddsDiff;
+      }
+      return scoreDiff;
+    });
+  }
+
+  private selectCouponLegs(
+    candidates: ExpandedPredictionItem[],
+    profile: CouponProfile
+  ) {
+    const eligible = candidates.filter(
+      (item) => {
+        const hasHighRiskFlag =
+          (item.riskFlags ?? []).some((flag) => flag.severity === "high" || flag.severity === "critical");
+        if (profile.sortMode === "safety" && hasHighRiskFlag) {
+          return false;
+        }
+        return (
+          (item.confidenceScore ?? 0) >= profile.minConfidence &&
+          (item.offeredOdds ?? Number.POSITIVE_INFINITY) <= profile.maxOfferedOdds
+        );
+      }
+    );
+    const ordered = this.sortCouponPool(eligible.length >= 5 ? eligible : candidates, profile);
+    const selected: ExpandedPredictionItem[] = [];
+    const seenMatches = new Set<string>();
+
+    for (const item of ordered) {
+      if (seenMatches.has(item.matchId)) {
+        continue;
+      }
+      seenMatches.add(item.matchId);
+      selected.push(item);
+      if (selected.length === 5) {
+        break;
+      }
+    }
+
+    return selected;
+  }
+
+  async listFootballCoupons() {
+    const now = Date.now();
+    const couponLookaheadMs = 36 * 60 * 60 * 1000;
+    const source = (await this.list({
+      sport: "football",
+      status: "scheduled",
+      take: 260,
+      includeMarketAnalysis: true
+    })) as ExpandedPredictionItem[];
+
+    const matchScoped = new Map<string, ExpandedPredictionItem>();
+    for (const item of source) {
+      if (!item.matchId || !item.selectionLabel || !item.homeTeam || !item.awayTeam) {
+        continue;
+      }
+      const kickoffTs = item.matchDateTimeUTC ? Date.parse(item.matchDateTimeUTC) : Number.NaN;
+      if (!Number.isFinite(kickoffTs) || kickoffTs < now || kickoffTs > now + couponLookaheadMs) {
+        continue;
+      }
+      if ((item.offeredOdds ?? 0) <= 1) {
+        continue;
+      }
+      if ((item.offeredOdds ?? 0) > 5.5) {
+        continue;
+      }
+      if ((item.confidenceScore ?? 0) < 0.54) {
+        continue;
+      }
+      if (item.avoidReason) {
+        continue;
+      }
+      const existing = matchScoped.get(item.matchId);
+      if (!existing || this.predictionQualityScore(item) > this.predictionQualityScore(existing)) {
+        matchScoped.set(item.matchId, item);
+      }
+    }
+
+    const candidates = Array.from(matchScoped.values());
+    const coupons = COUPON_PROFILES.map((profile) => {
+      const legs = this.selectCouponLegs(candidates, profile);
+      const combinedOdds =
+        legs.length > 0
+          ? Number(legs.reduce((product, leg) => product * Math.max(1, leg.offeredOdds ?? 1), 1).toFixed(2))
+          : null;
+      const averageConfidence =
+        legs.length > 0
+          ? Number((legs.reduce((sum, leg) => sum + (leg.confidenceScore ?? 0), 0) / legs.length).toFixed(4))
+          : null;
+      const averageEdge =
+        legs.length > 0
+          ? Number((legs.reduce((sum, leg) => sum + (leg.edge ?? 0), 0) / legs.length).toFixed(4))
+          : null;
+
+      return {
+        key: profile.key,
+        label: profile.label,
+        riskLevel: profile.key,
+        riskLabel:
+          profile.key === "elite"
+            ? "En Güvenli"
+            : profile.key === "low"
+              ? "Düşük Risk"
+              : profile.key === "balanced"
+                ? "Dengeli"
+                : profile.key === "assertive"
+                  ? "Agresif"
+                  : "Yüksek Risk",
+        description: profile.description,
+        combinedOdds,
+        averageConfidence,
+        averageEdge,
+        legs: legs.map((leg) => ({
+          matchId: leg.matchId,
+          leagueName: leg.leagueName ?? null,
+          homeTeam: leg.homeTeam ?? null,
+          awayTeam: leg.awayTeam ?? null,
+          matchDateTimeUTC: leg.matchDateTimeUTC ?? null,
+          predictionType: leg.predictionType,
+          selectionLabel: leg.selectionLabel ?? null,
+          confidenceScore: leg.confidenceScore ?? null,
+          fairOdds: leg.fairOdds ?? null,
+          offeredOdds: leg.offeredOdds ?? null,
+          edge: leg.edge ?? null,
+          bookmaker: leg.bookmaker ?? null,
+          oddsProvider: leg.oddsProvider ?? null,
+          marketProbability: leg.marketProbability ?? null,
+          riskTier: leg.riskTier ?? null,
+          qualityScore: this.predictionQualityScore(leg)
+        }))
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      sport: "football",
+      candidateCount: candidates.length,
+      coupons
+    };
   }
 
   async highConfidence() {

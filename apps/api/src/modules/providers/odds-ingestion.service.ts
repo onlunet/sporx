@@ -28,6 +28,10 @@ type ProviderRuntimeSettings = {
   oddsBookmakers?: string;
   oddsLeague?: string;
   oddsLimit?: number;
+  freeTierMode?: boolean;
+  shortlistOnly?: boolean;
+  oddsShortlistLimit?: number;
+  oddsLookaheadHours?: number;
 };
 
 type MatchCandidate = {
@@ -278,6 +282,94 @@ export class OddsIngestionService {
     return mappingByProviderKey;
   }
 
+  private async loadShortlistScopedMatchIds(limit: number, lookaheadHours: number, includeLive: boolean) {
+    const now = new Date();
+    const lookaheadBoundary = new Date(now.getTime() + lookaheadHours * 60 * 60 * 1000);
+    const published = await this.prisma.publishedPrediction.findMany({
+      where: {
+        match: {
+          sport: { code: "football" },
+          OR: [
+            ...(includeLive ? [{ status: "live" as const }] : []),
+            {
+              status: "scheduled" as const,
+              matchDateTimeUTC: {
+                gte: now,
+                lte: lookaheadBoundary
+              }
+            }
+          ]
+        }
+      },
+      select: {
+        matchId: true,
+        publishedAt: true,
+        predictionRun: {
+          select: {
+            confidence: true,
+            publishScore: true,
+            edge: true
+          }
+        },
+        match: {
+          select: {
+            status: true,
+            matchDateTimeUTC: true
+          }
+        }
+      },
+      orderBy: { publishedAt: "desc" },
+      take: Math.max(limit * 4, 40)
+    });
+
+    const byMatch = new Map<
+      string,
+      {
+        matchId: string;
+        confidence: number;
+        publishScore: number;
+        edge: number;
+        kickoffAt: Date;
+      }
+    >();
+
+    for (const row of published) {
+      const confidence = row.predictionRun.confidence ?? 0;
+      const publishScore = row.predictionRun.publishScore ?? confidence;
+      const edge = row.predictionRun.edge ?? 0;
+      const existing = byMatch.get(row.matchId);
+      const candidate = {
+        matchId: row.matchId,
+        confidence,
+        publishScore,
+        edge,
+        kickoffAt: row.match.matchDateTimeUTC
+      };
+      if (!existing) {
+        byMatch.set(row.matchId, candidate);
+        continue;
+      }
+      const existingScore = existing.confidence * 0.6 + existing.publishScore * 0.25 + existing.edge * 0.15;
+      const candidateScore = candidate.confidence * 0.6 + candidate.publishScore * 0.25 + candidate.edge * 0.15;
+      if (candidateScore > existingScore) {
+        byMatch.set(row.matchId, candidate);
+      }
+    }
+
+    return Array.from(byMatch.values())
+      .sort((left, right) => {
+        const scoreDiff =
+          right.confidence * 0.6 + right.publishScore * 0.25 + right.edge * 0.15 -
+          (left.confidence * 0.6 + left.publishScore * 0.25 + left.edge * 0.15);
+        if (Math.abs(scoreDiff) > 0.0001) {
+          return scoreDiff;
+        }
+        return left.kickoffAt.getTime() - right.kickoffAt.getTime();
+      })
+      .slice(0, limit)
+      .map((row) => row.matchId);
+  }
+
   private toIsoUtc(date: Date) {
     return new Date(date.getTime() - date.getMilliseconds()).toISOString();
   }
@@ -298,11 +390,17 @@ export class OddsIngestionService {
 
     const sport = settings.oddsSport?.trim() || "football";
     const bookmakers = settings.oddsBookmakers?.trim() || "Bet365,Unibet,SingBet";
-    const limit = Math.max(1, Math.min(settings.oddsLimit ?? 60, 100));
+    const shortlistLimit = Math.max(5, Math.min(settings.oddsShortlistLimit ?? 18, 30));
+    const lookaheadHours = Math.max(6, Math.min(settings.oddsLookaheadHours ?? 36, 72));
+    const shortlistOnly = settings.freeTierMode !== false && settings.shortlistOnly !== false && sport === "football";
+    const scopeMatchIds = shortlistOnly
+      ? await this.loadShortlistScopedMatchIds(shortlistLimit, lookaheadHours, jobType === "syncOddsLive")
+      : [];
+    const limit = Math.max(1, Math.min(settings.oddsLimit ?? (shortlistOnly ? shortlistLimit : 60), 100));
     const hourlyLimit = Math.max(1, settings.hourlyLimit ?? 100);
     const now = new Date();
     const sixHoursLater = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-    const fortyEightHoursLater = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    const fortyEightHoursLater = new Date(now.getTime() + lookaheadHours * 60 * 60 * 1000);
 
     const preflightQuota = await this.hourlyQuotaGate(provider.key, 1, hourlyLimit);
     if (!preflightQuota.allowed) {
@@ -315,6 +413,19 @@ export class OddsIngestionService {
           hourlyLimit,
           usedLastHour: preflightQuota.used,
           remaining: preflightQuota.remaining
+        }
+      };
+    }
+
+    if (shortlistOnly && scopeMatchIds.length === 0) {
+      return {
+        recordsRead: 0,
+        recordsWritten: 0,
+        errors: 0,
+        details: {
+          message: "Free-tier odds shortlist bulunamadi; odds sync atlandi.",
+          shortlistOnly,
+          shortlistLimit
         }
       };
     }
@@ -350,7 +461,19 @@ export class OddsIngestionService {
     }
 
     const mapping = await this.matchEventsToMatches(provider.id, sport, events);
-    const matchedEventIds = events.filter((event) => mapping.has(event.id)).map((event) => event.id);
+    const scopedMatchIds = new Set(scopeMatchIds);
+    const matchedEventIds = events
+      .filter((event) => {
+        const matchId = mapping.get(event.id);
+        if (!matchId) {
+          return false;
+        }
+        if (!shortlistOnly) {
+          return true;
+        }
+        return scopedMatchIds.has(matchId);
+      })
+      .map((event) => event.id);
     if (matchedEventIds.length === 0) {
       return {
         recordsRead: events.length,
@@ -493,6 +616,8 @@ export class OddsIngestionService {
       bookmakers,
       eventCount: events.length,
       matchedEventCount: matchedEventIds.length,
+      shortlistOnly,
+      shortlistSize: scopeMatchIds.length,
       snapshotCount: normalizedEntries.length,
       hourlyLimit,
       skippedChunks
@@ -507,6 +632,8 @@ export class OddsIngestionService {
         sport,
         bookmakers,
         matchedEventCount: matchedEventIds.length,
+        shortlistOnly,
+        shortlistSize: scopeMatchIds.length,
         snapshotCount: normalizedEntries.length,
         hourlyLimit,
         skippedChunks

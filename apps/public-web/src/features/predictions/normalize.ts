@@ -2,6 +2,9 @@
   MatchCommentary,
   MatchPredictionGroup,
   MatchPredictionItem,
+  PredictionCoupon,
+  PredictionCouponLeg,
+  PredictionCouponResponse,
   PredictionTabKey,
   PredictionType,
   RiskFlag,
@@ -600,6 +603,18 @@ export function normalizePredictionItem(raw: unknown, fallbackType: PredictionTy
     marketImpliedProbabilities: normalizeProbabilities(record.marketImpliedProbabilities),
     movementSummary: normalizeMovementSummary(record.movementSummary),
     recommendation: normalizeRecommendation(record.recommendation),
+    fairOdds: asNumber(record.fairOdds) ?? null,
+    offeredOdds: asNumber(record.offeredOdds) ?? null,
+    edge: asNumber(record.edge) ?? null,
+    bookmaker: asString(record.bookmaker) ?? null,
+    oddsProvider: asString(record.oddsProvider) ?? null,
+    marketProbability: asNumber(record.marketProbability) ?? null,
+    selectionScore: asNumber(record.selectionScore) ?? null,
+    publishScore: asNumber(record.publishScore) ?? null,
+    volatilityScore: asNumber(record.volatilityScore) ?? null,
+    providerDisagreement: asNumber(record.providerDisagreement) ?? null,
+    strategyProfile: asString(record.strategyProfile) ?? null,
+    riskTier: asString(record.riskTier) ?? null,
     confidenceScore: asNumber(record.confidenceScore),
     summary: asString(record.summary),
     avoidReason: (record.avoidReason as string | null | undefined) ?? null,
@@ -649,6 +664,78 @@ export function normalizePredictionList(raw: unknown, fallbackType: PredictionTy
   }
 
   return Array.from(deduped.values());
+}
+
+function normalizeCouponLeg(raw: unknown): PredictionCouponLeg | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const matchId = asString(record.matchId);
+  if (!matchId) {
+    return null;
+  }
+  return {
+    matchId,
+    leagueName: asString(record.leagueName) ?? null,
+    homeTeam: asString(record.homeTeam) ?? null,
+    awayTeam: asString(record.awayTeam) ?? null,
+    matchDateTimeUTC: asString(record.matchDateTimeUTC) ?? null,
+    predictionType: resolvePredictionType(record, "fullTimeResult"),
+    selectionLabel: asString(record.selectionLabel) ?? null,
+    confidenceScore: asNumber(record.confidenceScore) ?? null,
+    fairOdds: asNumber(record.fairOdds) ?? null,
+    offeredOdds: asNumber(record.offeredOdds) ?? null,
+    edge: asNumber(record.edge) ?? null,
+    bookmaker: asString(record.bookmaker) ?? null,
+    oddsProvider: asString(record.oddsProvider) ?? null,
+    marketProbability: asNumber(record.marketProbability) ?? null,
+    riskTier: asString(record.riskTier) ?? null,
+    qualityScore: asNumber(record.qualityScore) ?? null
+  };
+}
+
+function normalizeCoupon(raw: unknown): PredictionCoupon | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const key = asString(record.key);
+  if (!key) {
+    return null;
+  }
+  const legs = (Array.isArray(record.legs) ? record.legs : [])
+    .map((item) => normalizeCouponLeg(item))
+    .filter((item): item is PredictionCouponLeg => item !== null);
+
+  return {
+    key,
+    label: asString(record.label) ?? key,
+    riskLevel: asString(record.riskLevel) ?? key,
+    riskLabel: asString(record.riskLabel),
+    description: asString(record.description),
+    combinedOdds: asNumber(record.combinedOdds) ?? null,
+    averageConfidence: asNumber(record.averageConfidence) ?? null,
+    averageEdge: asNumber(record.averageEdge) ?? null,
+    legs
+  };
+}
+
+export function normalizeCouponResponse(raw: unknown): PredictionCouponResponse {
+  const record = asRecord(raw);
+  if (!record) {
+    return { coupons: [] };
+  }
+  const coupons = (Array.isArray(record.coupons) ? record.coupons : [])
+    .map((item) => normalizeCoupon(item))
+    .filter((item): item is PredictionCoupon => item !== null);
+
+  return {
+    generatedAt: asString(record.generatedAt),
+    sport: asString(record.sport),
+    candidateCount: asNumber(record.candidateCount),
+    coupons
+  };
 }
 
 export function groupPredictionsByType(items: MatchPredictionItem[]): MatchPredictionGroup {

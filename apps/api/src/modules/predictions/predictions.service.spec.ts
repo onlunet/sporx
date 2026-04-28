@@ -29,6 +29,8 @@ function createPublishedRow(runId: string, summary = "test summary") {
         }
       ],
       probability: 0.62,
+      fairOdds: 1.61,
+      edge: 0.07,
       confidence: 0.58,
       riskFlagsJson: [],
       explanationJson: {
@@ -54,8 +56,26 @@ function createPublishedRow(runId: string, summary = "test summary") {
           away: 1.1
         }
       },
+      oddsSnapshot: {
+        decimalOdds: 1.92,
+        normalizedProb: 0.55,
+        bookmaker: "MockBook",
+        provider: "odds_api_io",
+        selection: "home"
+      },
       createdAt: new Date("2026-04-17T09:59:00.000Z"),
       id: runId
+    },
+    publishDecision: {
+      status: "APPROVED",
+      selectionScore: 0.74,
+      confidence: 0.58,
+      publishScore: 0.7,
+      fairOdds: 1.61,
+      edge: 0.07,
+      volatilityScore: 0.1,
+      providerDisagreement: 0.03,
+      strategyProfile: "BALANCED"
     },
     match: {
       sport: { code: "football" },
@@ -269,7 +289,12 @@ describe("PredictionsService", () => {
         modelVersion: "meta-v1",
         horizon: "pre_match",
         cutoffAt: "2026-04-17T08:30:00.000Z",
-        featureCoverage: { lineup: 0.8, odds: 0.9 }
+        featureCoverage: { lineup: 0.8, odds: 0.9 },
+        offeredOdds: 1.92,
+        fairOdds: 1.61,
+        edge: 0.07,
+        bookmaker: "MockBook",
+        oddsProvider: "odds_api_io"
       })
     );
   });
@@ -309,6 +334,51 @@ describe("PredictionsService", () => {
     expect(prisma.prediction.findMany).not.toHaveBeenCalled();
     expect(rollout.resolveSource).not.toHaveBeenCalled();
     expect(items.length).toBeGreaterThan(0);
+  });
+
+  it("builds five football coupons with five legs each from top prediction pool", async () => {
+    const kickoff = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const service = new PredictionsService({} as any, {} as any, {} as any, strategyRegistry, {} as any);
+    const source = Array.from({ length: 25 }, (_, index) => ({
+      matchId: `match-${index + 1}`,
+      predictionType: "fullTimeResult" as const,
+      selectionLabel: index % 2 === 0 ? "1" : "2",
+      confidenceScore: 0.82 - index * 0.008,
+      selectionScore: 0.8 - index * 0.006,
+      publishScore: 0.78 - index * 0.005,
+      offeredOdds: 1.45 + index * 0.06,
+      fairOdds: 1.38 + index * 0.05,
+      edge: 0.09 - index * 0.001,
+      bookmaker: "MockBook",
+      oddsProvider: "odds_api_io",
+      riskTier: index < 5 ? "elite" : index < 10 ? "low" : index < 15 ? "balanced" : index < 20 ? "assertive" : "high",
+      homeTeam: `Home ${index + 1}`,
+      awayTeam: `Away ${index + 1}`,
+      leagueName: "League 1",
+      matchDateTimeUTC: kickoff,
+      riskFlags: []
+    }));
+
+    jest.spyOn(service, "list").mockResolvedValue(source as any);
+
+    const response = await service.listFootballCoupons();
+
+    expect(response.coupons).toHaveLength(5);
+    expect(response.coupons.map((coupon) => coupon.riskLevel)).toEqual([
+      "elite",
+      "low",
+      "balanced",
+      "assertive",
+      "high"
+    ]);
+    for (const coupon of response.coupons) {
+      expect(coupon.legs).toHaveLength(5);
+      expect(coupon.combinedOdds).not.toBeNull();
+    }
   });
 
   it("list endpoint rewrites synthetic published summary to model-style summary", async () => {

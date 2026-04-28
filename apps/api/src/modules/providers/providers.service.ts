@@ -62,7 +62,15 @@ type ProviderRuntimeSettings = {
   oddsBookmakers?: string;
   oddsLeague?: string;
   oddsLimit?: number;
+  freeTierMode?: boolean;
+  shortlistOnly?: boolean;
+  oddsShortlistLimit?: number;
+  oddsLookaheadHours?: number;
 };
+
+const FREE_TIER_FOOTBALL_DATA_CODES = ["CL", "PL", "SA", "PD", "BL1", "FL1", "DED", "PPL"];
+const FREE_TIER_API_FOOTBALL_LEAGUE_IDS = ["203", "204"];
+const FREE_TIER_THE_SPORTS_DB_SOCCER_LEAGUE_IDS = ["4339", "4960", "4328"];
 
 const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
@@ -186,7 +194,7 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
   {
     key: "odds_api_io",
     name: "Odds-API.io",
-    plan: "paid",
+    plan: "free",
     supportsSports: ["football", "basketball"],
     defaultEnabled: false,
     requiresApiKey: true,
@@ -196,9 +204,12 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     defaultConfigs: {
       oddsSport: "football",
       oddsBookmakers: "Bet365,Unibet,SingBet",
-      oddsLimit: "60",
+      oddsLimit: "20",
       hourlyLimit: "100",
-      dailyLimit: "1000"
+      dailyLimit: "100",
+      shortlistOnly: "true",
+      oddsShortlistLimit: "18",
+      oddsLookaheadHours: "36"
     }
   },
   {
@@ -215,6 +226,8 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
 
 @Injectable()
 export class ProvidersService {
+  private readonly freeTierMode = process.env.FREE_TIER_MODE !== "0";
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly footballDataConnector: FootballDataConnector,
@@ -375,6 +388,83 @@ export class ProvidersService {
     return undefined;
   }
 
+  private intersectWithWhitelist(values: string[] | undefined, whitelist: string[]) {
+    const normalizedWhitelist = new Set(whitelist.map((item) => item.trim().toUpperCase()));
+    const source = values && values.length > 0 ? values : whitelist;
+    const filtered = source.filter((item) => normalizedWhitelist.has(item.trim().toUpperCase()));
+    return filtered.length > 0 ? filtered : [...whitelist];
+  }
+
+  private intersectExactWhitelist(values: string[] | undefined, whitelist: string[]) {
+    const normalizedWhitelist = new Set(whitelist.map((item) => item.trim()));
+    const source = values && values.length > 0 ? values : whitelist;
+    const filtered = source.filter((item) => normalizedWhitelist.has(item.trim()));
+    return filtered.length > 0 ? filtered : [...whitelist];
+  }
+
+  private applyFreeTierDefaults(providerKey: string, settings: ProviderRuntimeSettings): ProviderRuntimeSettings {
+    if (!this.freeTierMode) {
+      return settings;
+    }
+
+    if (providerKey === "football_data") {
+      return {
+        ...settings,
+        freeTierMode: true,
+        competitionCodes: this.intersectWithWhitelist(settings.competitionCodes, FREE_TIER_FOOTBALL_DATA_CODES),
+        priorityCompetitionCodes: this.intersectWithWhitelist(
+          settings.priorityCompetitionCodes,
+          FREE_TIER_FOOTBALL_DATA_CODES.slice(0, 6)
+        ),
+        plannedRequestsPerMinute: Math.min(settings.plannedRequestsPerMinute ?? 6, 6),
+        reserveRequestsPerMinute: Math.min(settings.reserveRequestsPerMinute ?? 2, 2),
+        maxCallsPerRun: Math.min(settings.maxCallsPerRun ?? 8, 8)
+      };
+    }
+
+    if (providerKey === "api_football") {
+      return {
+        ...settings,
+        freeTierMode: true,
+        dailyLimit: Math.min(settings.dailyLimit ?? 100, 100),
+        leagueIds: this.intersectExactWhitelist(settings.leagueIds, FREE_TIER_API_FOOTBALL_LEAGUE_IDS),
+        syncDaysBack: Math.min(settings.syncDaysBack ?? 1, 1),
+        syncDaysAhead: Math.min(settings.syncDaysAhead ?? 2, 2)
+      };
+    }
+
+    if (providerKey === "the_sports_db") {
+      return {
+        ...settings,
+        freeTierMode: true,
+        soccerLeagueIds: this.intersectExactWhitelist(
+          settings.soccerLeagueIds,
+          FREE_TIER_THE_SPORTS_DB_SOCCER_LEAGUE_IDS
+        ),
+        matchDetailsMaxMatches: Math.min(settings.matchDetailsMaxMatches ?? 12, 12),
+        enrichmentEnabled: settings.enrichmentEnabled ?? true
+      };
+    }
+
+    if (providerKey === "odds_api_io") {
+      return {
+        ...settings,
+        freeTierMode: true,
+        hourlyLimit: Math.min(settings.hourlyLimit ?? 100, 100),
+        dailyLimit: Math.min(settings.dailyLimit ?? 100, 100),
+        oddsLimit: Math.min(settings.oddsLimit ?? 20, 20),
+        shortlistOnly: settings.shortlistOnly ?? true,
+        oddsShortlistLimit: Math.min(settings.oddsShortlistLimit ?? 18, 24),
+        oddsLookaheadHours: Math.min(settings.oddsLookaheadHours ?? 36, 48)
+      };
+    }
+
+    return {
+      ...settings,
+      freeTierMode: true
+    };
+  }
+
   async getProviderRuntimeSettings(providerKey: string): Promise<ProviderRuntimeSettings> {
     const buildSettingsFromRaw = (configs: Record<string, string>, baseUrl?: string | null): ProviderRuntimeSettings => {
       const apiKey = (configs.apiKey?.trim() || this.envKeyByProvider(providerKey)?.trim() || undefined) as
@@ -417,7 +507,11 @@ export class ProvidersService {
         oddsSport: configs.oddsSport,
         oddsBookmakers: configs.oddsBookmakers,
         oddsLeague: configs.oddsLeague,
-        oddsLimit: this.toInt(configs.oddsLimit)
+        oddsLimit: this.toInt(configs.oddsLimit),
+        freeTierMode: this.toBool(configs.freeTierMode),
+        shortlistOnly: this.toBool(configs.shortlistOnly),
+        oddsShortlistLimit: this.toInt(configs.oddsShortlistLimit),
+        oddsLookaheadHours: this.toInt(configs.oddsLookaheadHours)
       };
     };
 
@@ -433,7 +527,7 @@ export class ProvidersService {
         throw new NotFoundException(`Provider not found: ${providerKey}`);
       }
 
-      return buildSettingsFromRaw(this.configMap(provider.configs), provider.baseUrl);
+      return this.applyFreeTierDefaults(providerKey, buildSettingsFromRaw(this.configMap(provider.configs), provider.baseUrl));
     } catch (error) {
       if (!this.isSchemaCompatibilityError(error)) {
         throw error;
@@ -444,7 +538,10 @@ export class ProvidersService {
         throw new NotFoundException(`Provider not found: ${providerKey}`);
       }
 
-      return buildSettingsFromRaw({ ...(meta.defaultConfigs ?? {}) }, meta.defaultBaseUrl ?? null);
+      return this.applyFreeTierDefaults(
+        providerKey,
+        buildSettingsFromRaw({ ...(meta.defaultConfigs ?? {}) }, meta.defaultBaseUrl ?? null)
+      );
     }
   }
 

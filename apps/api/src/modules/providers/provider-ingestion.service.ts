@@ -881,7 +881,13 @@ export class ProviderIngestionService {
     const scopedPredictionMatchIds = this.collectPredictionScopeMatchIds(results);
     let predictionSummary: SyncSummary | null = null;
     if (
-      (jobType === "syncFixtures" || jobType === "syncResults") &&
+      (
+        jobType === "syncFixtures" ||
+        jobType === "syncFixturesHotPulse" ||
+        jobType === "syncResults" ||
+        jobType === "syncResultsReconcile" ||
+        jobType === "enrichMatchDetails"
+      ) &&
       summary.recordsWritten > 0 &&
       scopedPredictionMatchIds.length > 0
     ) {

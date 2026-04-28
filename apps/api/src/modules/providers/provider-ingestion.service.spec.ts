@@ -76,6 +76,58 @@ describe("ProviderIngestionService phase triggers", () => {
     jest.clearAllMocks();
   });
 
+  it("regenerates scoped predictions after hot pulse refresh", async () => {
+    const service = new ProviderIngestionService(
+      {} as any,
+      {} as any,
+      {
+        listActiveApiProviders: jest.fn().mockResolvedValue([{ id: "provider-1", key: "football_data", baseUrl: null }])
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {
+        getEmergencyControlStatus: jest.fn().mockResolvedValue({ disabledProviderPath: null })
+      } as any,
+      {
+        emitSecurityEvent: jest.fn().mockResolvedValue(undefined)
+      } as any
+    );
+
+    jest.spyOn(service as any, "normalizeStaleMatchStatuses").mockResolvedValue(undefined);
+    jest.spyOn(service as any, "syncFootballData").mockResolvedValue({
+      providerKey: "football_data",
+      recordsRead: 4,
+      recordsWritten: 2,
+      errors: 0,
+      details: { matchIds: ["match-1", "match-2"] }
+    });
+    const generatePredictions = jest.spyOn(service as any, "generatePredictions").mockResolvedValue({
+      recordsRead: 2,
+      recordsWritten: 2,
+      errors: 0,
+      logs: {}
+    });
+
+    await service.sync("syncFixturesHotPulse", "run-hot");
+
+    expect(generatePredictions).toHaveBeenCalledWith("run-hot", {
+      matchIds: ["match-1", "match-2"],
+      reason: "post_syncFixturesHotPulse_scoped"
+    });
+  });
+
   it("builds halftime trigger only when HT exists and FT is not final", () => {
     const { service } = createService();
     const triggers = (service as any).buildPredictionPhaseTriggers(

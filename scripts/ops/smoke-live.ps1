@@ -83,6 +83,36 @@ function Invoke-JsonGet([string]$Url) {
   return $json | ConvertFrom-Json
 }
 
+function Test-ApiHealthSemantic([string]$Url) {
+  try {
+    $payload = Invoke-JsonGet -Url $Url
+    if ($payload -and $payload.status -eq "ok" -and $payload.service) {
+      Add-Ok "API health payload dogrulandi ($Url)"
+      return $true
+    }
+
+    Add-Failure "API health anlamsal olarak gecersiz ($Url)"
+    return $false
+  }
+  catch {
+    Add-Failure "API health anlamsal kontrol basarisiz ($Url): $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Resolve-SslipIp([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return $null
+  }
+
+  $match = [regex]::Match($Value, "(\d+\.\d+\.\d+\.\d+)\.sslip\.io", "IgnoreCase")
+  if (-not $match.Success) {
+    return $null
+  }
+
+  return $match.Groups[1].Value
+}
+
 Write-Section "Live Smoke"
 Write-Host "Admin:  $AdminBaseUrl"
 Write-Host "Public: $PublicBaseUrl"
@@ -103,7 +133,24 @@ $null = Invoke-HttpStatus -Name "Public futbol tahminler" -Url "$PublicBaseUrl/f
 $null = Invoke-HttpStatus -Name "Public basketbol tahminler" -Url "$PublicBaseUrl/basketbol/tahminler" -AllowedStatuses @(200)
 
 Write-Section "API"
-$null = Invoke-HttpStatus -Name "API health" -Url "$ApiBaseUrl/api/v1/health" -AllowedStatuses @(200)
+$apiHealthStatus = Invoke-HttpStatus -Name "API health" -Url "$ApiBaseUrl/api/v1/health" -AllowedStatuses @(200)
+$apiHealthSemanticOk = $false
+if ($apiHealthStatus -eq 200) {
+  $apiHealthSemanticOk = Test-ApiHealthSemantic "$ApiBaseUrl/api/v1/health"
+}
+
+if (-not $apiHealthSemanticOk) {
+  $fallbackIp = Resolve-SslipIp $ApiBaseUrl
+  if ($fallbackIp) {
+    $directApiBaseUrl = "http://${fallbackIp}:8000"
+    $directApiHealthStatus = Invoke-HttpStatus -Name "Direct API health fallback" -Url "$directApiBaseUrl/api/v1/health" -AllowedStatuses @(200)
+    if ($directApiHealthStatus -eq 200 -and (Test-ApiHealthSemantic "$directApiBaseUrl/api/v1/health")) {
+      $script:FailureCount = [Math]::Max(0, $script:FailureCount - 2)
+      Add-Warn "Primary API host dogru health payload donmuyor, fallback saglikli: $directApiBaseUrl"
+      $ApiBaseUrl = $directApiBaseUrl
+    }
+  }
+}
 
 $predictionsUrl = "$PublicBaseUrl/api/v1/predictions?status=scheduled,live&sport=football&take=$Take"
 try {

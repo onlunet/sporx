@@ -55,9 +55,30 @@ describe("ProvidersService", () => {
     const service = createService(prisma);
     const settings = await service.getProviderRuntimeSettings("football_data");
 
-    expect(settings.maxCallsPerRun).toBe(12);
+    expect(settings.maxCallsPerRun).toBe(8);
     expect(settings.competitionCodes).toEqual(
-      expect.arrayContaining(["WC", "CL", "BL1", "PL"])
+      expect.arrayContaining(["CL", "BL1", "PL"])
     );
+    expect(settings.competitionCodes).not.toEqual(expect.arrayContaining(["WC", "EC"]));
+  });
+
+  it("tightens odds runtime settings for free-tier mode", async () => {
+    const prisma = {
+      provider: {
+        upsert: jest.fn().mockRejectedValue(new Error("relation providers does not exist")),
+        findUnique: jest.fn()
+      },
+      providerConfig: {
+        upsert: jest.fn()
+      }
+    };
+
+    const service = createService(prisma);
+    const settings = await service.getProviderRuntimeSettings("odds_api_io");
+
+    expect(settings.hourlyLimit).toBe(100);
+    expect(settings.oddsLimit).toBe(20);
+    expect(settings.shortlistOnly).toBe(true);
+    expect(settings.oddsShortlistLimit).toBe(18);
   });
 });

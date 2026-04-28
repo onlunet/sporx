@@ -2,8 +2,8 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MatchPredictionItem, PredictionType, MatchCommentary } from "./types";
-import { filterPredictionsByType, normalizePredictionItem, normalizePredictionList } from "./normalize";
+import { MatchPredictionItem, PredictionType, MatchCommentary, PredictionCouponResponse } from "./types";
+import { filterPredictionsByType, normalizeCouponResponse, normalizePredictionItem, normalizePredictionList } from "./normalize";
 import { resolveBrowserApiBase } from "../../lib/api-base-url";
 
 type Envelope<T> = {
@@ -53,8 +53,14 @@ type PredictionListQuery = {
   includeMarketAnalysis?: boolean;
 };
 
+function normalizePredictionSport(sport?: string) {
+  const normalized = sport?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
 function buildPredictionQueryString(query: PredictionListQuery): string {
   const params = new URLSearchParams();
+  const normalizedSport = normalizePredictionSport(query.sport);
 
   if (query.status && query.status.trim().length > 0) {
     params.set("status", query.status.trim());
@@ -66,8 +72,10 @@ function buildPredictionQueryString(query: PredictionListQuery): string {
   if (Number.isFinite(query.take ?? NaN) && (query.take ?? 0) > 0) {
     params.set("take", String(Math.trunc(query.take as number)));
   }
-  if (query.sport && query.sport.trim().length > 0) {
-    params.set("sport", query.sport.trim().toLowerCase());
+  // Public prediction feeds currently under-return for `sport=football`.
+  // Keep football queries broad and scope them in the UI instead.
+  if (normalizedSport && normalizedSport !== "football") {
+    params.set("sport", normalizedSport);
   }
   if (query.includeMarketAnalysis) {
     params.set("includeMarketAnalysis", "1");
@@ -104,8 +112,9 @@ async function fetchPredictions(query: PredictionListQuery): Promise<MatchPredic
   // Fallback 1: keep finished/in-play data in scope when strict status query fails.
   const broadStatusParams = new URLSearchParams();
   broadStatusParams.set("status", "finished,scheduled,live,postponed,cancelled");
-  if (query.sport && query.sport.trim().length > 0) {
-    broadStatusParams.set("sport", query.sport.trim().toLowerCase());
+  const normalizedSport = normalizePredictionSport(query.sport);
+  if (normalizedSport && normalizedSport !== "football") {
+    broadStatusParams.set("sport", normalizedSport);
   }
   if (query.predictionType && query.predictionType !== "all") {
     broadStatusParams.set("predictionType", query.predictionType);
@@ -124,6 +133,11 @@ async function fetchPredictions(query: PredictionListQuery): Promise<MatchPredic
   // Fallback 2: last-resort default endpoint.
   const defaultResponse = await safeFetchEnvelope<unknown>("/api/v1/predictions");
   return normalizePredictionList(defaultResponse?.data);
+}
+
+async function fetchPredictionCoupons(): Promise<PredictionCouponResponse> {
+  const response = await safeFetchEnvelope<unknown>("/api/v1/predictions/coupons");
+  return normalizeCouponResponse(response?.data);
 }
 
 export function useMatchPredictions(matchId: string, initialData?: MatchPredictionItem[]) {
@@ -171,9 +185,10 @@ export function usePredictionsByType(
   status?: string,
   take?: number,
   sport?: string,
-  includeMarketAnalysis?: boolean
+  includeMarketAnalysis?: boolean,
+  initialData?: MatchPredictionItem[]
 ) {
-  const includeMarket = includeMarketAnalysis ?? sport === "basketball";
+  const includeMarket = includeMarketAnalysis ?? (sport === "basketball" || sport === "football");
   const query = useQuery({
     queryKey: [
       "predictions",
@@ -184,6 +199,7 @@ export function usePredictionsByType(
       includeMarket ? "market" : "nomarket"
     ],
     queryFn: () => fetchPredictions({ predictionType, status, take, sport, includeMarketAnalysis: includeMarket }),
+    initialData: initialData && initialData.length > 0 ? initialData : undefined,
     retry: 1,
     staleTime: 120_000,
     refetchOnWindowFocus: false
@@ -194,4 +210,16 @@ export function usePredictionsByType(
     ...query,
     data: filtered
   };
+}
+
+export function usePredictionCoupons(enabled = true, initialData?: PredictionCouponResponse) {
+  return useQuery({
+    queryKey: ["prediction-coupons", "football"],
+    queryFn: fetchPredictionCoupons,
+    enabled,
+    initialData,
+    retry: 1,
+    staleTime: 120_000,
+    refetchOnWindowFocus: false
+  });
 }
