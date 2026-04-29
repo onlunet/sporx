@@ -601,6 +601,92 @@ describe("PredictionsService", () => {
     expect(items.length).toBeGreaterThan(0);
   });
 
+  it("list endpoint supplements missing upcoming matches when real coverage is partial", async () => {
+    const partialPublished = {
+      ...createPublishedRow("run-partial"),
+      matchId: "match-real-1",
+      match: {
+        ...createPublishedRow("run-partial").match,
+        homeTeam: { name: "Real A" },
+        awayTeam: { name: "Real B" },
+        matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z")
+      }
+    };
+
+    const prisma = {
+      match: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "match-real-1",
+            matchDateTimeUTC: new Date("2026-04-21T18:00:00.000Z"),
+            status: MatchStatus.scheduled,
+            homeScore: null,
+            awayScore: null,
+            halfTimeHomeScore: null,
+            halfTimeAwayScore: null,
+            homeElo: null,
+            awayElo: null,
+            form5Home: null,
+            form5Away: null,
+            homeTeam: { name: "Real A" },
+            awayTeam: { name: "Real B" },
+            league: { id: "league-1", name: "League One", code: "L1" },
+            sport: { code: "football" }
+          },
+          {
+            id: "match-missing-2",
+            matchDateTimeUTC: new Date("2026-04-22T18:00:00.000Z"),
+            status: MatchStatus.scheduled,
+            homeScore: null,
+            awayScore: null,
+            halfTimeHomeScore: null,
+            halfTimeAwayScore: null,
+            homeElo: null,
+            awayElo: null,
+            form5Home: null,
+            form5Away: null,
+            homeTeam: { name: "Missing A" },
+            awayTeam: { name: "Missing B" },
+            league: { id: "league-1", name: "League One", code: "L1" },
+            sport: { code: "football" }
+          }
+        ])
+      },
+      publishedPrediction: {
+        findMany: jest.fn().mockResolvedValue([partialPublished])
+      },
+      prediction: {
+        findMany: jest.fn().mockResolvedValue([])
+      },
+      predictionRun: {
+        findMany: jest.fn().mockResolvedValue([])
+      }
+    } as any;
+
+    const cache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue(undefined)
+    } as unknown as CacheService;
+    const oddsService = {
+      attachMarketAnalysis: jest.fn(async (items: unknown[]) => items)
+    } as unknown as OddsService;
+    const strategyRegistry = new PredictionSportStrategyRegistry(
+      new FootballPredictionStrategy(),
+      new BasketballPredictionStrategy()
+    );
+    const rollout = {
+      resolveSource: jest.fn().mockResolvedValue("published")
+    };
+
+    const service = new PredictionsService(prisma, cache, oddsService, strategyRegistry, rollout as any);
+    const items = await service.list({ status: "scheduled", sport: "football", take: 10 });
+
+    const matchIds = Array.from(new Set(items.map((item) => (item as any).matchId))).sort();
+    expect(matchIds).toEqual(["match-missing-2", "match-real-1"]);
+    expect(items.some((item) => (item as any).matchId === "match-missing-2" && (item as any).sourceType === "synthetic")).toBe(true);
+    expect(items.some((item) => (item as any).matchId === "match-real-1" && (item as any).sourceType === "published")).toBe(true);
+  });
+
   it("list endpoint returns empty when all real sources are empty and synthetic fallback is disabled", async () => {
     const prisma = {
       match: {

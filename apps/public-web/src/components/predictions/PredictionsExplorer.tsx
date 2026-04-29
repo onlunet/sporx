@@ -730,6 +730,13 @@ export function PredictionsExplorer({
     return Array.from(map.values());
   }, [filteredItems]);
 
+  const displayItems = useMemo(() => {
+    if (activeFilter === "all") {
+      return matchLevelItems;
+    }
+    return filteredItems;
+  }, [activeFilter, filteredItems, matchLevelItems]);
+
   const basketballTotalStats = useMemo(() => {
     if (sport !== "basketball") {
       return null;
@@ -947,14 +954,14 @@ export function PredictionsExplorer({
       <div className={`grid gap-3 ${sport === "basketball" ? "md:grid-cols-4" : "md:grid-cols-2"} rounded-xl bg-surface/50 border border-white/5 p-4`}>
         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
           <Sparkles className="w-4 h-4 text-neon-cyan" />
-          <span className="text-sm text-slate-400">Toplam Tahmin:</span>
-          <span className="text-sm font-semibold text-white">{filteredItems.length}</span>
+          <span className="text-sm text-slate-400">{activeFilter === "all" ? "Toplam Maç:" : "Toplam Tahmin:"}</span>
+          <span className="text-sm font-semibold text-white">{displayItems.length}</span>
         </div>
 
         <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
           <Zap className="w-4 h-4 text-neon-green" />
           <span className="text-sm text-slate-400">Yüksek Güven:</span>
-          <span className="text-sm font-semibold text-neon-green">{filteredItems.filter((i) => (i.confidenceScore ?? 0) >= 0.7).length}</span>
+          <span className="text-sm font-semibold text-neon-green">{displayItems.filter((i) => (i.confidenceScore ?? 0) >= 0.7).length}</span>
         </div>
 
         {sport === "basketball" ? (
@@ -1007,7 +1014,7 @@ export function PredictionsExplorer({
         </div>
       )}
 
-      {!query.isLoading && !query.isError && filteredItems.length === 0 && (
+      {!query.isLoading && !query.isError && displayItems.length === 0 && (
         <div className="glass-card rounded-2xl p-12 text-center">
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-white/5 flex items-center justify-center">
             <Target className="w-10 h-10 text-slate-500" />
@@ -1025,7 +1032,7 @@ export function PredictionsExplorer({
 
       <AnimatePresence mode="popLayout">
         <motion.div layout className="grid gap-4 md:grid-cols-2">
-          {filteredItems.slice(0, 60).map((item, index) => (
+          {displayItems.slice(0, 60).map((item, index) => (
             <PredictionCard key={predictionListKey(item, index)} item={item} index={index} sport={sport} />
           ))}
         </motion.div>

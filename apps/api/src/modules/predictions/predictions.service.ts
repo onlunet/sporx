@@ -1311,6 +1311,33 @@ export class PredictionsService {
     ).catch(() => []);
   }
 
+  private async fetchLegacyRowsForMatchIds(
+    matchIds: string[],
+    effectiveStatuses: MatchStatus[],
+    sportCode: "football" | "basketball" | undefined,
+    take: number
+  ): Promise<LegacyPredictionRecord[]> {
+    if (matchIds.length === 0) {
+      return [];
+    }
+
+    return queryWithTimeout(
+      this.prisma.prediction.findMany({
+        where: {
+          matchId: { in: matchIds },
+          match: {
+            status: { in: effectiveStatuses },
+            ...(sportCode ? { sport: { code: sportCode } } : {})
+          }
+        },
+        orderBy: { updatedAt: "desc" },
+        include: LEGACY_PREDICTION_INCLUDE,
+        take: Math.max(take * 2, 100)
+      }),
+      12000
+    ).catch(() => []);
+  }
+
   private async fetchLegacyHighConfidenceRows(): Promise<LegacyPredictionRecord[]> {
     return queryWithTimeout(
       this.prisma.prediction.findMany({
@@ -1335,6 +1362,10 @@ export class PredictionsService {
       }
     }
     return Array.from(deduped.values());
+  }
+
+  private coveredMatchIds(rows: Array<{ matchId: string }>) {
+    return new Set(rows.map((row) => row.matchId));
   }
 
   private async fetchPredictionRunRows(
@@ -2056,6 +2087,51 @@ export class PredictionsService {
           this.logger.warn(
             `Public predictions synthetic fallback activated for status=${statusKey}, sport=${sportKey}, take=${take}`
           );
+        }
+      }
+
+      if (normalizedRows.length > 0 && allowLegacyFallbackForRequest) {
+        const coveredMatchIds = this.coveredMatchIds(normalizedRows);
+        let missingMatches = relevantMatches.filter((match) => !coveredMatchIds.has(match.id));
+
+        if (missingMatches.length > 0) {
+          const missingRunRows = await this.fetchPredictionRunRows(
+            queryStatuses,
+            sportCode,
+            Math.max(missingMatches.length, 10),
+            missingMatches.map((match) => match.id)
+          );
+
+          if (missingRunRows.length > 0 && !arePredictionRunRowsSyntheticOnly(missingRunRows)) {
+            const normalizedMissingRunRows = missingRunRows.map((row) => normalizePredictionRunFallbackRow(row));
+            normalizedRows = [...normalizedRows, ...normalizedMissingRunRows];
+            missingMatches = missingMatches.filter((match) => !this.coveredMatchIds(normalizedMissingRunRows).has(match.id));
+          }
+        }
+
+        if (missingMatches.length > 0) {
+          const missingLegacyRows = await this.fetchLegacyRowsForMatchIds(
+            missingMatches.map((match) => match.id),
+            queryStatuses,
+            sportCode,
+            Math.max(missingMatches.length, 10)
+          );
+
+          if (missingLegacyRows.length > 0 && !areLegacyRowsSyntheticOnly(missingLegacyRows)) {
+            const normalizedMissingLegacyRows = missingLegacyRows.map((row) => normalizeLegacyRow(row));
+            normalizedRows = [...normalizedRows, ...normalizedMissingLegacyRows];
+            missingMatches = missingMatches.filter((match) => !this.coveredMatchIds(normalizedMissingLegacyRows).has(match.id));
+          }
+        }
+
+        if (missingMatches.length > 0) {
+          const syntheticSupplement = this.buildSyntheticRowsFromMatches(missingMatches, sportCode);
+          if (syntheticSupplement.length > 0) {
+            normalizedRows = [...normalizedRows, ...syntheticSupplement];
+            this.logger.warn(
+              `Public predictions supplemented ${syntheticSupplement.length} missing match row(s) with synthetic coverage (status=${statusKey}, sport=${sportKey}).`
+            );
+          }
         }
       }
     } catch {
