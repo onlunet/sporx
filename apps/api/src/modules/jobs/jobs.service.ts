@@ -268,7 +268,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       "sync.window.matchDetail.endUtcMinute"
     ] as const;
 
-    const [settings, nextDayMatches, hotFootballMatches] = await Promise.all([
+    const results = await Promise.allSettled([
       this.prisma.systemSetting.findMany({
         where: {
           key: { in: [...intervalKeys] }
@@ -299,6 +299,17 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         }
       })
     ]);
+
+    const settings = results[0].status === "fulfilled" ? results[0].value : [];
+    const nextDayMatches = results[1].status === "fulfilled" ? results[1].value : 0;
+    const hotFootballMatches = results[2].status === "fulfilled" ? results[2].value : 0;
+
+    if (results[0].status === "rejected") {
+      this.logger.warn("Scheduler settings lookup failed; using default intervals for this cycle.");
+    }
+    if (results[1].status === "rejected" || results[2].status === "rejected") {
+      this.logger.warn("Scheduler match cadence probes failed; using conservative default intervals for this cycle.");
+    }
 
     const settingMap = new Map(settings.map((setting) => [setting.key, setting.value] as const));
     const defaultMinutes = this.settingNumber(settingMap.get("sync.interval.defaultMinutes"), 60);
